@@ -768,14 +768,59 @@ def _gemini_normalize_system_instruction(value: Any) -> Any:
     return _gemini_content_from_value(value, default_role="system")
 
 
+_GEMINI_HARM_CATEGORY_ALIASES = {
+    "HARASSMENT": "HARM_CATEGORY_HARASSMENT",
+    "HATE_SPEECH": "HARM_CATEGORY_HATE_SPEECH",
+    "HATE": "HARM_CATEGORY_HATE_SPEECH",
+    "SEXUALLY_EXPLICIT": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+    "SEXUAL": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+    "DANGEROUS_CONTENT": "HARM_CATEGORY_DANGEROUS_CONTENT",
+    "DANGEROUS": "HARM_CATEGORY_DANGEROUS_CONTENT",
+    "CIVIC_INTEGRITY": "HARM_CATEGORY_CIVIC_INTEGRITY",
+    "CIVIC": "HARM_CATEGORY_CIVIC_INTEGRITY",
+}
+
+_GEMINI_HARM_THRESHOLD_ALIASES = {
+    "OFF": "OFF",
+    "NONE": "BLOCK_NONE",
+    "BLOCK_NONE": "BLOCK_NONE",
+    "ONLY_HIGH": "BLOCK_ONLY_HIGH",
+    "BLOCK_ONLY_HIGH": "BLOCK_ONLY_HIGH",
+    "MEDIUM_AND_ABOVE": "BLOCK_MEDIUM_AND_ABOVE",
+    "BLOCK_MEDIUM_AND_ABOVE": "BLOCK_MEDIUM_AND_ABOVE",
+    "LOW_AND_ABOVE": "BLOCK_LOW_AND_ABOVE",
+    "BLOCK_LOW_AND_ABOVE": "BLOCK_LOW_AND_ABOVE",
+}
+
+
+def _gemini_enum_alias(value: Any, aliases: dict[str, str]) -> Any:
+    if not isinstance(value, str):
+        return value
+    key = value.strip().upper().replace("-", "_").replace(" ", "_")
+    return aliases.get(key, value)
+
+
 def _gemini_normalize_safety_settings(value: Any) -> list[dict[str, Any]]:
     if value is None:
         return []
+    if isinstance(value, dict) and not any(key in value for key in ("category", "threshold", "method")):
+        value = [{"category": key, "threshold": threshold} for key, threshold in value.items()]
     items = value if isinstance(value, list) else [value]
     settings: list[dict[str, Any]] = []
     for item in items:
         if isinstance(item, dict):
-            settings.append(item)
+            out = dict(item)
+            if "category" in out:
+                out["category"] = _gemini_enum_alias(out["category"], _GEMINI_HARM_CATEGORY_ALIASES)
+            if "threshold" in out:
+                out["threshold"] = _gemini_enum_alias(out["threshold"], _GEMINI_HARM_THRESHOLD_ALIASES)
+            method = out.get("method") or out.pop("harmBlockMethod", None) or out.pop("harm_block_method", None)
+            if method is not None:
+                out["method"] = _gemini_enum_alias(method, {
+                    "SEVERITY": "SEVERITY",
+                    "PROBABILITY": "PROBABILITY",
+                })
+            settings.append(out)
     return settings
 
 

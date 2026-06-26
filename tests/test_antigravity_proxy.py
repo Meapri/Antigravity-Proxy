@@ -824,6 +824,34 @@ def test_gemini_generate_content_normalizes_safety_and_tool_config_shortcuts(mon
         }
     }
 
+    shortcut = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "hi",
+        "safety_settings": {
+            "harassment": "only_high",
+            "dangerous": "none",
+        },
+    })
+    assert shortcut.status_code == 200
+    assert seen["request"]["safetySettings"] == [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ]
+
+    with_method = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "hi",
+        "safety_settings": {
+            "harm_category": "hate",
+            "harm_block_threshold": "medium_and_above",
+            "harm_block_method": "severity",
+        },
+    })
+    assert with_method.status_code == 200
+    assert seen["request"]["safetySettings"] == [{
+        "category": "HARM_CATEGORY_HATE_SPEECH",
+        "threshold": "BLOCK_MEDIUM_AND_ABOVE",
+        "method": "SEVERITY",
+    }]
+
 
 def test_gemini_generate_content_rejects_unsupported_builtin_tools():
     client = TestClient(proxy.app)

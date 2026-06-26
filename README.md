@@ -653,7 +653,9 @@ objects before forwarding. Function declaration schema aliases such as
 `response_json_schema` are normalized to Gemini `parameters` and `response`.
 `safetySettings` may be supplied as a single object, and shortcut
 `toolConfig` forms such as `{mode, allowedFunctionNames}` are expanded into
-`functionCallingConfig`.
+`functionCallingConfig`. Safety settings accept common short category and
+threshold aliases such as `harassment`, `dangerous`, `only_high`,
+`medium_and_above`, and `none`, plus `harm_block_method`.
 `generateContent`, `streamGenerateContent`, `batchGenerateContent`, and
 `countTokens` also normalize SDK content-union inputs such as string
 `contents`, part dictionaries, part arrays, and string `systemInstruction`
