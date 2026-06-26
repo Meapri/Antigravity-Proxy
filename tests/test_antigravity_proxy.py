@@ -632,6 +632,41 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
     assert seen["request"]["generationConfig"]["responseSchema"]["type"] == "object"
 
 
+def test_gemini_generate_content_normalizes_tools_unions(monkeypatch):
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    single_tool = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "hi",
+        "tools": {"googleSearch": {}},
+    })
+    assert single_tool.status_code == 200
+    assert seen["request"]["tools"] == [{"google_search": {}}]
+
+    function_declarations = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "hi",
+        "function_declarations": {
+            "name": "lookup",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+        },
+    })
+
+    assert function_declarations.status_code == 200
+    assert seen["request"]["tools"] == [{
+        "functionDeclarations": [{
+            "name": "lookup",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+        }]
+    }]
+
+
 def test_gemini_generate_content_rejects_unsupported_builtin_tools():
     client = TestClient(proxy.app)
 
@@ -655,6 +690,13 @@ def test_gemini_generate_content_rejects_unsupported_builtin_tools():
     assert code_execution.status_code == 501
     assert code_execution.json()["error"]["status"] == "UNIMPLEMENTED"
     assert "code_execution" in code_execution.json()["error"]["message"]
+
+    single_url_context = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "read url",
+        "tools": {"urlContext": {}},
+    })
+    assert single_url_context.status_code == 501
+    assert single_url_context.json()["error"]["status"] == "UNIMPLEMENTED"
 
 
 def test_gemini_generate_content_alt_sse(monkeypatch):

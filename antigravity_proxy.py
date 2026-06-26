@@ -707,8 +707,58 @@ def _gemini_normalize_system_instruction(value: Any) -> Any:
     return _gemini_content_from_value(value, default_role="system")
 
 
+def _gemini_normalize_tools_value(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    items = value if isinstance(value, list) else [value]
+    tools: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if "functionDeclarations" in item:
+            decls = item.get("functionDeclarations")
+            if isinstance(decls, dict):
+                item = dict(item)
+                item["functionDeclarations"] = [decls]
+            tools.append(item)
+            continue
+        if any(key in item for key in ("google_search", "codeExecution", "url_context", "file_search", "fileSearchRetrieval")):
+            tools.append(item)
+            continue
+        if item.get("name") or item.get("function") or item.get("declaration"):
+            fn = item.get("function") if isinstance(item.get("function"), dict) else item.get("declaration")
+            if not isinstance(fn, dict):
+                fn = item
+            if isinstance(fn, dict) and fn.get("name"):
+                decl: dict[str, Any] = {"name": fn["name"]}
+                if fn.get("description"):
+                    decl["description"] = fn["description"]
+                params = fn.get("parameters")
+                if isinstance(params, dict):
+                    decl["parameters"] = _sanitize_schema(params)
+                tools.append({"functionDeclarations": [decl]})
+                continue
+        tools.append(item)
+    return tools
+
+
 def _gemini_normalize_generate_body(body: dict[str, Any]) -> dict[str, Any]:
     out = dict(body)
+    function_declarations = out.pop("functionDeclarations", None)
+    if function_declarations is not None:
+        existing = _gemini_normalize_tools_value(out.get("tools"))
+        if isinstance(function_declarations, dict):
+            function_declarations = [function_declarations]
+        if isinstance(function_declarations, list):
+            existing.append({"functionDeclarations": function_declarations})
+        if existing:
+            out["tools"] = existing
+    elif "tools" in out:
+        tools = _gemini_normalize_tools_value(out.get("tools"))
+        if tools:
+            out["tools"] = tools
+        else:
+            out.pop("tools", None)
     if "contents" in out:
         out["contents"] = _gemini_normalize_contents(out.get("contents"))
     if "systemInstruction" in out:
