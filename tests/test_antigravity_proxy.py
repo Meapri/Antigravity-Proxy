@@ -1763,6 +1763,36 @@ def test_gemini_files_upload_and_file_data_inline_conversion(tmp_path, monkeypat
     assert missing.status_code == 404
 
 
+def test_gemini_upload_query_snake_case_aliases(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "gemini_files"))
+    client = TestClient(proxy.app)
+
+    uploaded = client.post(
+        "/upload/v1beta/files?upload_type=media&display_name=snake-note.txt",
+        content=b"snake upload",
+        headers={"Content-Type": "text/plain"},
+    )
+    assert uploaded.status_code == 200
+    assert uploaded.json()["file"]["displayName"] == "snake-note.txt"
+
+    started = client.post(
+        "/upload/v1beta/files?upload_type=resumable&display_name=snake-resumable.txt",
+        json={"config": {"mime_type": "text/plain"}},
+        headers={"X-Goog-Upload-Command": "start"},
+    )
+    assert started.status_code == 200
+    session_path = "/" + started.headers["x-goog-upload-url"].split("/", 3)[3]
+
+    finished = client.post(
+        session_path,
+        content=b"snake resumable",
+        headers={"X-Goog-Upload-Command": "upload, finalize"},
+    )
+    assert finished.status_code == 200
+    assert finished.json()["file"]["displayName"] == "snake-resumable.txt"
+    assert finished.json()["file"]["mimeType"] == "text/plain"
+
+
 def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "gemini_files"))
     client = TestClient(proxy.app)

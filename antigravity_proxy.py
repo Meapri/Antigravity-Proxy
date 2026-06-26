@@ -3636,6 +3636,8 @@ def _gemini_alias_query_string(query_string: bytes) -> bytes:
             "page_size": "pageSize",
             "page_token": "pageToken",
             "update_mask": "updateMask",
+            "upload_type": "uploadType",
+            "display_name": "displayName",
         }.get(key, key)
         out.append((mapped, value))
     return urlencode(out, doseq=True).encode("ascii")

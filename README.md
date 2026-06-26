@@ -343,11 +343,11 @@ that already live under `/v1` keep their OpenAI behavior, so `/v1/models`,
 rewritten.
 
 Common SDK spelling variants are accepted for query parameters: `page_size`,
-`page_token`, and `update_mask` are normalized to the Gemini REST camelCase
-forms. `generateContent?alt=sse` and `generateContent?stream=true` are treated
-as streaming Gemini SSE responses. Streaming fallback errors use the same
-Gemini `error` payload and `google.rpc.ErrorInfo` details as non-streaming
-Gemini errors.
+`page_token`, `update_mask`, `upload_type`, and `display_name` are normalized
+to the Gemini REST camelCase forms. `generateContent?alt=sse` and
+`generateContent?stream=true` are treated as streaming Gemini SSE responses.
+Streaming fallback errors use the same Gemini `error` payload and
+`google.rpc.ErrorInfo` details as non-streaming Gemini errors.
 
 Implemented Gemini-compatible routes:
 
