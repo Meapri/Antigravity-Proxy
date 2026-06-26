@@ -1051,6 +1051,17 @@ def _gemini_batch_name(name: str) -> str:
     return "batches/" + key
 
 
+def _gemini_batch_body(body: dict[str, Any]) -> dict[str, Any]:
+    for key in ("batch", "generateContentBatch", "embedContentBatch"):
+        if isinstance(body.get(key), dict):
+            merged = dict(body[key])
+            for outer_key in ("model", "displayName", "inputConfig", "outputConfig", "requests"):
+                if outer_key in body and outer_key not in merged:
+                    merged[outer_key] = body[outer_key]
+            return merged
+    return body
+
+
 def _gemini_store_batch(batch: dict[str, Any]) -> dict[str, Any]:
     index = _gemini_load_batches_index()
     index[batch["name"]] = batch
@@ -5664,7 +5675,7 @@ def _gemini_streaming_response(*, body: dict[str, Any], antigravity_model: str) 
 async def gemini_batch_generate_content(model_name: str, request: Request):
     """Gemini-compatible batchGenerateContent as an immediately completed operation."""
     try:
-        body = _gemini_normalize_request(await request.json())
+        body = _gemini_batch_body(_gemini_normalize_request(await request.json()))
         operation, _batch = await _gemini_create_completed_batch(model_name, body)
         return operation
     except HTTPException as exc:
@@ -5745,7 +5756,7 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
 async def gemini_create_batch(request: Request):
     """Gemini-compatible batches.create using immediate local execution."""
     try:
-        body = _gemini_normalize_request(await request.json())
+        body = _gemini_batch_body(_gemini_normalize_request(await request.json()))
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
         model_name = body.get("model") or body.get("modelName") or body.get("model_name")

@@ -572,7 +572,9 @@ Embeddings and batch operations:
 - `batchGenerateContent` runs requests synchronously through Antigravity and
   stores immediately completed `operations/*` and `batches/*` results.
 - `batches.create` accepts inline `requests` plus `model` and returns a
-  completed local batch resource. It is intended for Gemini SDK/REST management
+  completed local batch resource. It also accepts common SDK wrapper bodies
+  such as `{"batch": {...}}`, `{"generateContentBatch": {...}}`, and
+  `{"embedContentBatch": {...}}`. It is intended for Gemini SDK/REST management
   compatibility; it does not run true asynchronous Batch Mode jobs.
 - `predict` and `predictLongRunning` are mapped to Gemini `generateContent`
   requests and return prediction/operation-shaped compatibility responses.

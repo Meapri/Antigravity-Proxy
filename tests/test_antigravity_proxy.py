@@ -637,6 +637,39 @@ def test_gemini_batch_generate_content_operation(tmp_path, monkeypatch):
     assert deleted.status_code == 200
 
 
+def test_gemini_batch_wrapped_request_bodies(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            return {"response": {"candidates": [{"content": {"parts": [{"text": request["contents"][0]["parts"][0]["text"]}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    created = client.post("/v1beta/batches", json={
+        "batch": {
+            "model": "models/gemini-3-flash-agent",
+            "displayName": "wrapped batch",
+            "requests": [{"contents": [{"role": "user", "parts": [{"text": "wrapped"}]}]}],
+        }
+    })
+    generated = client.post("/v1beta/models/gemini-3-flash-agent:batchGenerateContent", json={
+        "generateContentBatch": {
+            "displayName": "wrapped method",
+            "requests": [{"contents": [{"role": "user", "parts": [{"text": "method"}]}]}],
+        }
+    })
+
+    assert created.status_code == 200
+    assert created.json()["displayName"] == "wrapped batch"
+    assert created.json()["requestCount"] == 1
+    assert generated.status_code == 200
+    assert generated.json()["metadata"]["requestCount"] == 1
+    assert generated.json()["response"]["responses"][0]["candidates"][0]["content"]["parts"][0]["text"] == "method"
+
+
 def test_gemini_batches_create_get_cancel_delete(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
