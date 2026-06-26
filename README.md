@@ -820,8 +820,11 @@ File search stores:
 - `fileSearchStores.create`, `importFile`, and `uploadToFileSearchStore` accept
   current SDK-style `config` wrappers as well as direct REST fields.
 - `importFile` imports files previously uploaded through the local Files API and
-  preserves document display names and custom metadata when supplied.
-- `uploadToFileSearchStore` accepts direct uploads and stores documents locally.
+  preserves document display names, custom metadata, and document
+  `chunkingConfig` when supplied.
+- `uploadToFileSearchStore` accepts raw, multipart, or JSON direct uploads and
+  stores documents locally while preserving custom metadata and
+  `chunkingConfig`.
 - `tools.file_search` / `tools.fileSearch` performs local lexical retrieval
   against these stores and injects the best matching document snippets into the
   outgoing Gemini request context.

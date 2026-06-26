@@ -2510,19 +2510,31 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
             "fileName": uploaded_file["name"],
             "displayName": "source import",
             "customMetadata": [{"key": "source", "stringValue": "files-api"}],
+            "chunking_config": {"white_space_config": {}},
         }
     })
     assert imported.status_code == 200
     imported_doc = imported.json()["response"]["document"]
     assert imported_doc["displayName"] == "source import"
     assert imported_doc["customMetadata"][0]["stringValue"] == "files-api"
+    assert imported_doc["chunkingConfig"] == {"whiteSpaceConfig": {}}
 
     uploaded_doc = client.post(
         f"/upload/v1/fileSearchStores/{store_id}:uploadToFileSearchStore?displayName=direct.txt",
-        content=b"direct document",
-        headers={"Content-Type": "text/plain"},
+        json={
+            "file": {
+                "displayName": "direct.txt",
+                "mimeType": "text/plain",
+                "custom_metadata": [{"key": "source", "stringValue": "direct"}],
+                "chunking_config": {"white_space_config": {}},
+            },
+            "content": "direct document",
+        },
     )
     assert uploaded_doc.status_code == 200
+    uploaded_doc_resource = uploaded_doc.json()["response"]["document"]
+    assert uploaded_doc_resource["customMetadata"][0]["stringValue"] == "direct"
+    assert uploaded_doc_resource["chunkingConfig"] == {"whiteSpaceConfig": {}}
 
     listed_stores = client.get("/v1/fileSearchStores")
     fetched_store = client.get(f"/v1/{store_name}")
@@ -2538,6 +2550,7 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     assert fetched.status_code == 200
     assert fetched.json()["displayName"] == "source import"
     assert fetched.json()["customMetadata"][0]["key"] == "source"
+    assert fetched.json()["chunkingConfig"] == {"whiteSpaceConfig": {}}
 
     operation = client.get(f"/v1/{imported.json()['name']}")
     assert operation.status_code == 200

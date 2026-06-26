@@ -428,6 +428,9 @@ _GEMINI_KEY_ALIASES = {
     "update_mask": "updateMask",
     "event_types": "eventTypes",
     "subscribed_events": "subscribedEvents",
+    "chunking_config": "chunkingConfig",
+    "white_space_config": "whiteSpaceConfig",
+    "custom_metadata": "customMetadata",
     "webhook_secret": "webhookSecret",
     "signing_secrets": "signingSecrets",
     "new_signing_secret": "newSigningSecret",
@@ -3142,7 +3145,15 @@ def _gemini_get_fss_meta(store_name: str) -> dict[str, Any] | None:
     return _gemini_load_fss_index().get(_gemini_fss_name(store_name))
 
 
-def _gemini_store_document(store_name: str, *, display_name: str | None, mime_type: str | None, content: bytes) -> dict[str, Any]:
+def _gemini_store_document(
+    store_name: str,
+    *,
+    display_name: str | None,
+    mime_type: str | None,
+    content: bytes,
+    custom_metadata: Any | None = None,
+    chunking_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     index = _gemini_load_fss_index()
     store_key = _gemini_fss_name(store_name)
     store = index.get(store_key)
@@ -3163,6 +3174,10 @@ def _gemini_store_document(store_name: str, *, display_name: str | None, mime_ty
         "content": base64.b64encode(content).decode("ascii"),
         "textPreview": text_preview,
     }
+    if custom_metadata is not None:
+        doc["customMetadata"] = custom_metadata
+    if chunking_config is not None:
+        doc["chunkingConfig"] = chunking_config
     store.setdefault("documents", {})[doc["name"]] = doc
     store["updateTime"] = now
     index[store_key] = store
@@ -3184,18 +3199,9 @@ def _gemini_import_file_to_fss(store_name: str, body: dict[str, Any]) -> dict[st
         display_name=body.get("displayName") or body.get("display_name") or meta.get("displayName"),
         mime_type=meta.get("mimeType"),
         content=path.read_bytes(),
+        custom_metadata=body.get("customMetadata") or body.get("metadata"),
+        chunking_config=body.get("chunkingConfig") if isinstance(body.get("chunkingConfig"), dict) else None,
     )
-    if body.get("customMetadata") is not None or body.get("metadata") is not None:
-        index = _gemini_load_fss_index()
-        store_key = _gemini_fss_name(store_name)
-        doc_key = document["name"]
-        stored = index.get(store_key, {}).get("documents", {}).get(doc_key)
-        if stored is not None:
-            stored["customMetadata"] = body.get("customMetadata") or body.get("metadata")
-            stored["updateTime"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            index[store_key]["documents"][doc_key] = stored
-            _gemini_save_fss_index(index)
-            document = _gemini_document_resource(stored)
     return document
 
 
@@ -6096,30 +6102,50 @@ async def gemini_upload_to_file_search_store(store_id: str, request: Request):
         if "multipart/" in content_type:
             metadata, media, parsed_type = _parse_gemini_multipart_upload(content_type, body)
             media_type = parsed_type or content_type
+        elif content_type.split(";", 1)[0].strip().lower() == "application/json":
+            try:
+                decoded = json.loads(body.decode("utf-8")) if body else {}
+            except Exception:
+                decoded = {}
+            if isinstance(decoded, dict):
+                metadata = decoded
+                raw_content = decoded.get("content", decoded.get("text", decoded.get("data", "")))
+                if isinstance(raw_content, str):
+                    media = raw_content.encode("utf-8")
+                elif isinstance(raw_content, (bytes, bytearray)):
+                    media = bytes(raw_content)
+                else:
+                    media = json.dumps(raw_content, ensure_ascii=False).encode("utf-8")
+                media_type = (
+                    decoded.get("mimeType")
+                    or decoded.get("mime_type")
+                    or (decoded.get("file", {}) if isinstance(decoded.get("file"), dict) else {}).get("mimeType")
+                    or "text/plain"
+                )
         metadata = _gemini_config_body(metadata) if isinstance(metadata, dict) else {}
         file_meta = metadata.get("file") if isinstance(metadata.get("file"), dict) else metadata
         display_name = request.query_params.get("displayName")
         if isinstance(file_meta, dict):
             display_name = file_meta.get("displayName") or file_meta.get("display_name") or display_name
             media_type = file_meta.get("mimeType") or file_meta.get("mime_type") or media_type
-        document = _gemini_store_document(store_id, display_name=display_name, mime_type=media_type, content=media)
         custom_metadata = metadata.get("customMetadata") or metadata.get("metadata")
+        chunking_config = metadata.get("chunkingConfig") if isinstance(metadata.get("chunkingConfig"), dict) else None
         if isinstance(file_meta, dict):
             custom_metadata = (
                 file_meta.get("customMetadata")
                 or file_meta.get("metadata")
                 or custom_metadata
             )
-        if custom_metadata is not None:
-            index = _gemini_load_fss_index()
-            store_key = _gemini_fss_name(store_id)
-            stored = index.get(store_key, {}).get("documents", {}).get(document["name"])
-            if stored is not None:
-                stored["customMetadata"] = custom_metadata
-                stored["updateTime"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                index[store_key]["documents"][document["name"]] = stored
-                _gemini_save_fss_index(index)
-                document = _gemini_document_resource(stored)
+            if isinstance(file_meta.get("chunkingConfig"), dict):
+                chunking_config = file_meta["chunkingConfig"]
+        document = _gemini_store_document(
+            store_id,
+            display_name=display_name,
+            mime_type=media_type,
+            content=media,
+            custom_metadata=custom_metadata,
+            chunking_config=chunking_config,
+        )
         operation = {
             "name": "operations/uploadToFileSearchStore-" + uuid.uuid4().hex,
             "metadata": {
