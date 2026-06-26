@@ -1660,6 +1660,24 @@ def _gemini_register_file(body: dict[str, Any]) -> dict[str, Any]:
     return _gemini_file_resource(meta)
 
 
+def _gemini_register_files_from_uris(body: dict[str, Any]) -> list[dict[str, Any]]:
+    uris = body.get("uris")
+    if not isinstance(uris, list) or not uris:
+        raise HTTPException(status_code=400, detail="files.register requires a non-empty uris array.")
+    files = []
+    for uri in uris:
+        if not isinstance(uri, str) or not uri.strip():
+            raise HTTPException(status_code=400, detail="files.register uris must be non-empty strings.")
+        file_name = Path(urlparse(uri).path).name or "registered-file"
+        files.append(_gemini_register_file({
+            "displayName": file_name,
+            "uri": uri,
+            "downloadUri": uri,
+            "source": "REGISTERED",
+        }))
+    return files
+
+
 def _gemini_get_file_meta(file_name: str) -> dict[str, Any] | None:
     key = file_name.strip().strip("/")
     if key.startswith("v1beta/"):
@@ -1773,6 +1791,17 @@ async def _gemini_upload_file_from_request(request: Request) -> dict[str, Any]:
         display_name = file_meta.get("displayName") or file_meta.get("display_name") or display_name
         mime_type = file_meta.get("mimeType") or file_meta.get("mime_type") or mime_type
     return _gemini_store_file(media, mime_type=mime_type or content_type, display_name=display_name)
+
+
+def _is_gemini_metadata_file_create(request: Request) -> bool:
+    path = request.url.path.rstrip("/")
+    if not path.endswith("/v1beta/files") or path.endswith("/upload/v1beta/files"):
+        return False
+    if request.query_params.get("uploadType"):
+        return False
+    if request.headers.get("x-goog-upload-protocol", "").lower() == "resumable":
+        return False
+    return "application/json" in request.headers.get("content-type", "").lower()
 
 
 async def _gemini_start_resumable_upload(request: Request) -> JSONResponse:
@@ -4297,6 +4326,8 @@ async def gemini_register_file(request: Request):
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        if "uris" in body:
+            return {"files": _gemini_register_files_from_uris(body)}
         return {"file": _gemini_register_file(body)}
     except HTTPException as exc:
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT")
@@ -4346,6 +4377,11 @@ async def gemini_delete_file(file_id: str):
 async def gemini_upload_file(request: Request):
     """Gemini-compatible simple media/multipart file upload."""
     try:
+        if _is_gemini_metadata_file_create(request):
+            body = _gemini_normalize_request(await request.json())
+            if not isinstance(body, dict):
+                raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+            return {"file": _gemini_register_file(body)}
         if request.headers.get("x-goog-upload-protocol", "").lower() == "resumable":
             return await _gemini_start_resumable_upload(request)
         file_resource = await _gemini_upload_file_from_request(request)

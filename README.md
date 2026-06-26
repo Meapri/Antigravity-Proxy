@@ -523,6 +523,19 @@ The upload endpoint also supports the Gemini resumable upload headers
 (`X-Goog-Upload-Protocol: resumable`, `X-Goog-Upload-Command: start`, then
 `upload, finalize`) used by SDK-style file uploads.
 
+Metadata-only File creation is also available through the official metadata
+URI:
+
+```bash
+curl http://127.0.0.1:8765/v1beta/files \
+  -H "Content-Type: application/json" \
+  -d '{"file":{"displayName":"external.txt","mimeType":"text/plain","uri":"gs://bucket/external.txt"}}'
+```
+
+`files:register` accepts Gemini's current `uris` array form and returns
+`files`; the older proxy `{"file": ...}` form remains available as a
+compatibility alias.
+
 Then pass the returned `file.uri` in `fileData.fileUri`:
 
 ```json
@@ -666,8 +679,10 @@ Notes:
 - Files are stored locally under `data/gemini_files` by default; override with
   `ANTIGRAVITY_GEMINI_FILES_DIR`. File resources include Gemini-style
   `downloadUri`, `source`, base64 `sha256Hash`, and video metadata fields when
-  available. `files.list` uses Gemini's default page size of 10 and maximum
-  page size of 100.
+  available. `POST /v1beta/files` supports official metadata-only File
+  creation, and `files:register` supports Gemini's `uris` array shape.
+  `files.list` uses Gemini's default page size of 10 and maximum page size of
+  100.
 - Cached contents are stored locally under `data/gemini_cached_contents` by
   default; override with `ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR`.
   `cachedContents.list` supports Gemini `pageSize` / `pageToken` pagination and

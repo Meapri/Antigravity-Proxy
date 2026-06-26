@@ -1218,6 +1218,33 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     assert file_resource["downloadUri"] == "https://storage.example/external.txt"
     assert file_resource["source"] == "REGISTERED"
 
+    official_created = client.post("/v1beta/files", json={
+        "file": {
+            "displayName": "official.txt",
+            "mimeType": "text/plain",
+            "uri": "gs://bucket/official.txt",
+            "sizeBytes": "5",
+        }
+    })
+    assert official_created.status_code == 200
+    official_file = official_created.json()["file"]
+    assert official_file["displayName"] == "official.txt"
+    assert official_file["uri"] == "gs://bucket/official.txt"
+    assert official_file["source"] == "REGISTERED"
+    official_download = client.get(f"/v1beta/{official_file['name']}:download")
+    assert official_download.status_code == 404
+
+    official_registered = client.post("/v1beta/files:register", json={
+        "uris": ["gs://bucket/one.txt", "gs://bucket/two.txt"]
+    })
+    assert official_registered.status_code == 200
+    official_registered_files = official_registered.json()["files"]
+    assert [item["uri"] for item in official_registered_files] == [
+        "gs://bucket/one.txt",
+        "gs://bucket/two.txt",
+    ]
+    assert all(item["source"] == "REGISTERED" for item in official_registered_files)
+
     video = client.post("/v1beta/files:register", json={
         "file": {
             "displayName": "clip.mp4",
