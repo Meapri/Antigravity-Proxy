@@ -2355,6 +2355,15 @@ def _is_gemini_metadata_file_create(request: Request) -> bool:
     return "application/json" in request.headers.get("content-type", "").lower()
 
 
+def _is_gemini_resumable_upload_start(request: Request) -> bool:
+    upload_type = request.query_params.get("uploadType", "").lower()
+    protocol = request.headers.get("x-goog-upload-protocol", "").lower()
+    command = request.headers.get("x-goog-upload-command", "").lower()
+    return upload_type == "resumable" or protocol == "resumable" or "start" in {
+        part.strip() for part in command.split(",") if part.strip()
+    }
+
+
 async def _gemini_start_resumable_upload(request: Request, upload_version: str | None = None) -> JSONResponse:
     body = await request.body()
     metadata: dict[str, Any] = {}
@@ -5109,7 +5118,7 @@ async def _gemini_upload_file_response(request: Request, upload_version: str) ->
             if not isinstance(body, dict):
                 raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
             return {"file": _gemini_register_file(body)}
-        if request.headers.get("x-goog-upload-protocol", "").lower() == "resumable":
+        if _is_gemini_resumable_upload_start(request):
             return await _gemini_start_resumable_upload(request, upload_version=upload_version)
         file_resource = await _gemini_upload_file_from_request(request)
         return {"file": file_resource}

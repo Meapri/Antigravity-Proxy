@@ -1889,6 +1889,26 @@ def test_gemini_resumable_file_upload(tmp_path, monkeypatch):
     assert config_finished.json()["file"]["displayName"] == "sdk-config.txt"
     assert config_finished.json()["file"]["mimeType"] == "text/markdown"
 
+    started_by_query = client.post(
+        "/upload/v1beta/files?uploadType=resumable",
+        json={
+            "file": {"displayName": "query-resumable.txt"},
+            "config": {"mime_type": "text/plain"},
+        },
+        headers={"X-Goog-Upload-Command": "start"},
+    )
+    assert started_by_query.status_code == 200
+    query_session_path = "/" + started_by_query.headers["x-goog-upload-url"].split("/", 3)[3]
+
+    query_finished = client.post(
+        query_session_path,
+        content=b"query resumable",
+        headers={"X-Goog-Upload-Command": "upload, finalize"},
+    )
+    assert query_finished.status_code == 200
+    assert query_finished.json()["file"]["displayName"] == "query-resumable.txt"
+    assert query_finished.json()["file"]["mimeType"] == "text/plain"
+
 
 def test_gemini_resumable_file_upload_query_offset_and_finalize(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "gemini_files"))
