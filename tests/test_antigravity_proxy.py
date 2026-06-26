@@ -254,6 +254,7 @@ def test_gemini_stream_generate_content_sse(monkeypatch):
 
 def test_gemini_batch_generate_content_operation(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
 
     class FakeClient:
         def generate_raw(self, *, request, model=""):
@@ -276,13 +277,62 @@ def test_gemini_batch_generate_content_operation(tmp_path, monkeypatch):
 
     fetched = client.get(f"/v1beta/{operation['name']}")
     listed = client.get("/v1beta/operations")
+    batch_name = operation["metadata"]["batch"]
+    batch = client.get(f"/v1beta/{batch_name}")
+    batches = client.get("/v1beta/batches")
     deleted = client.delete(f"/v1beta/{operation['name']}")
 
     assert fetched.status_code == 200
     assert fetched.json()["name"] == operation["name"]
     assert listed.status_code == 200
     assert listed.json()["operations"][0]["name"] == operation["name"]
+    assert batch.status_code == 200
+    assert batch.json()["name"] == batch_name
+    assert batch.json()["state"] == "JOB_STATE_SUCCEEDED"
+    assert batches.status_code == 200
+    assert batches.json()["batches"][0]["operation"] == operation["name"]
     assert deleted.status_code == 200
+
+
+def test_gemini_batches_create_get_cancel_delete(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "batch ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    created = client.post("/v1beta/batches", json={
+        "model": "models/gemini-3-flash-agent",
+        "displayName": "docs batch",
+        "requests": [
+            {"contents": [{"role": "user", "parts": [{"text": "hello"}]}]},
+        ],
+    })
+
+    assert created.status_code == 200
+    batch = created.json()
+    assert batch["name"].startswith("batches/")
+    assert batch["displayName"] == "docs batch"
+    assert batch["state"] == "JOB_STATE_SUCCEEDED"
+    assert batch["requestCount"] == 1
+
+    fetched = client.get(f"/v1beta/{batch['name']}")
+    operation = client.get(f"/v1beta/{batch['operation']}")
+    cancelled = client.post(f"/v1beta/{batch['name']}:cancel")
+    deleted = client.delete(f"/v1beta/{batch['name']}")
+    missing = client.get(f"/v1beta/{batch['name']}")
+
+    assert fetched.status_code == 200
+    assert fetched.json()["name"] == batch["name"]
+    assert operation.status_code == 200
+    assert operation.json()["metadata"]["batch"] == batch["name"]
+    assert cancelled.status_code == 200
+    assert deleted.status_code == 200
+    assert missing.status_code == 404
 
 
 def test_gemini_files_upload_and_file_data_inline_conversion(tmp_path, monkeypatch):

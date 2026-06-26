@@ -501,6 +501,61 @@ def _gemini_get_operation(name: str) -> dict[str, Any] | None:
     return _gemini_load_operations_index().get(_gemini_operation_name(name))
 
 
+def _gemini_now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _gemini_batches_root() -> Path:
+    return Path(os.getenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", "data/gemini_batches")).expanduser()
+
+
+def _gemini_batches_index_path() -> Path:
+    return _gemini_batches_root() / "index.json"
+
+
+def _gemini_load_batches_index() -> dict[str, dict[str, Any]]:
+    path = _gemini_batches_index_path()
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        log.warning("Failed to read Gemini batches index; starting empty.")
+        return {}
+
+
+def _gemini_save_batches_index(index: dict[str, dict[str, Any]]) -> None:
+    root = _gemini_batches_root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = _gemini_batches_index_path()
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _gemini_batch_name(name: str) -> str:
+    key = name.strip().strip("/")
+    if key.startswith("v1beta/"):
+        key = key[len("v1beta/"):]
+    if key.startswith("batches/"):
+        return key
+    return "batches/" + key
+
+
+def _gemini_store_batch(batch: dict[str, Any]) -> dict[str, Any]:
+    index = _gemini_load_batches_index()
+    index[batch["name"]] = batch
+    _gemini_save_batches_index(index)
+    return batch
+
+
+def _gemini_get_batch(name: str) -> dict[str, Any] | None:
+    return _gemini_load_batches_index().get(_gemini_batch_name(name))
+
+
 def _gemini_files_root() -> Path:
     return Path(os.getenv("ANTIGRAVITY_GEMINI_FILES_DIR", "data/gemini_files")).expanduser()
 
@@ -3358,48 +3413,141 @@ async def gemini_generate_content(model_name: str, request: Request):
 async def gemini_batch_generate_content(model_name: str, request: Request):
     """Gemini-compatible batchGenerateContent as an immediately completed operation."""
     try:
-        model = _resolve_gemini_model(model_name)
         body = _gemini_normalize_request(await request.json())
-        if not isinstance(body, dict):
-            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
-        requests = body.get("requests")
-        if not isinstance(requests, list):
-            raise HTTPException(status_code=400, detail="batchGenerateContent requires a requests array.")
-        responses: list[dict[str, Any]] = []
-        for item in requests:
-            if not isinstance(item, dict):
-                raise HTTPException(status_code=400, detail="batchGenerateContent request items must be objects.")
-            req_body = _gemini_normalize_request(dict(item))
-            req_body = _gemini_apply_cached_content(req_body)
-            req_body = _gemini_apply_file_search(req_body)
-            req_body = _gemini_inline_local_files(req_body)
-            req_body.pop("model", None)
-            data = await asyncio.to_thread(
-                _get_client().generate_raw,
-                request=req_body,
-                model=str(model["antigravity_model"]),
-            )
-            responses.append(_gemini_unwrap_response(data))
-        operation = {
-            "name": "operations/batchGenerateContent-" + uuid.uuid4().hex,
-            "metadata": {
-                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.BatchGenerateContentMetadata",
-                "model": _gemini_model_name(model),
-                "requestCount": len(requests),
-            },
-            "done": True,
-            "response": {
-                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.BatchGenerateContentResponse",
-                "responses": responses,
-            },
-        }
-        return _gemini_store_operation(operation)
+        operation, _batch = await _gemini_create_completed_batch(model_name, body)
+        return operation
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
     except Exception as exc:
         log.exception("Gemini batchGenerateContent failed")
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
+
+
+async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    model = _resolve_gemini_model(model_name)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+    requests = body.get("requests")
+    if not isinstance(requests, list):
+        raise HTTPException(status_code=400, detail="batchGenerateContent requires a requests array.")
+
+    responses: list[dict[str, Any]] = []
+    for item in requests:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=400, detail="batchGenerateContent request items must be objects.")
+        req_body = _gemini_normalize_request(dict(item))
+        req_body = _gemini_apply_cached_content(req_body)
+        req_body = _gemini_apply_file_search(req_body)
+        req_body = _gemini_inline_local_files(req_body)
+        req_body.pop("model", None)
+        data = await asyncio.to_thread(
+            _get_client().generate_raw,
+            request=req_body,
+            model=str(model["antigravity_model"]),
+        )
+        responses.append(_gemini_unwrap_response(data))
+
+    now = _gemini_now_iso()
+    model_resource = _gemini_model_name(model)
+    batch_name = "batches/batch_" + uuid.uuid4().hex
+    operation_name = "operations/batchGenerateContent-" + uuid.uuid4().hex
+    response_payload = {
+        "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.BatchGenerateContentResponse",
+        "responses": responses,
+    }
+    batch = {
+        "name": batch_name,
+        "displayName": body.get("displayName") or body.get("display_name") or batch_name.rsplit("/", 1)[-1],
+        "model": model_resource,
+        "state": "JOB_STATE_SUCCEEDED",
+        "createTime": now,
+        "updateTime": now,
+        "endTime": now,
+        "requestCount": len(requests),
+        "operation": operation_name,
+        "response": response_payload,
+        "metadata": {
+            "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.BatchGenerateContentMetadata",
+            "model": model_resource,
+            "requestCount": len(requests),
+        },
+    }
+    operation = {
+        "name": operation_name,
+        "metadata": {
+            "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.BatchGenerateContentMetadata",
+            "model": model_resource,
+            "requestCount": len(requests),
+            "batch": batch_name,
+        },
+        "done": True,
+        "response": response_payload,
+    }
+    return _gemini_store_operation(operation), _gemini_store_batch(batch)
+
+
+@app.post("/v1beta/batches")
+async def gemini_create_batch(request: Request):
+    """Gemini-compatible batches.create using immediate local execution."""
+    try:
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        model_name = body.get("model") or body.get("modelName") or body.get("model_name")
+        if not isinstance(model_name, str) or not model_name.strip():
+            raise HTTPException(status_code=400, detail="batches.create requires a model.")
+        _operation, batch = await _gemini_create_completed_batch(model_name, body)
+        return batch
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini batches create failed")
+        return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
+
+
+@app.get("/v1beta/batches")
+async def gemini_list_batches(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+    index = _gemini_load_batches_index()
+    batches = list(index.values())
+    batches.sort(key=lambda item: item.get("name") or "")
+    start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
+    end = start + pageSize
+    return {"batches": batches[start:end], "nextPageToken": str(end) if end < len(batches) else ""}
+
+
+@app.get("/v1beta/batches/{batch_id:path}")
+async def gemini_get_batch(batch_id: str):
+    batch = _gemini_get_batch(batch_id)
+    if not batch:
+        return _gemini_error_response(f"Batch '{batch_id}' not found.", status_code=404, status="NOT_FOUND")
+    return batch
+
+
+@app.post("/v1beta/batches/{batch_id:path}:cancel")
+async def gemini_cancel_batch(batch_id: str):
+    batch = _gemini_get_batch(batch_id)
+    if not batch:
+        return _gemini_error_response(f"Batch '{batch_id}' not found.", status_code=404, status="NOT_FOUND")
+    if batch.get("state") not in {"JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED", "JOB_STATE_CANCELLED"}:
+        now = _gemini_now_iso()
+        batch["state"] = "JOB_STATE_CANCELLED"
+        batch["updateTime"] = now
+        batch["endTime"] = now
+        _gemini_store_batch(batch)
+    return JSONResponse({})
+
+
+@app.delete("/v1beta/batches/{batch_id:path}")
+async def gemini_delete_batch(batch_id: str):
+    name = _gemini_batch_name(batch_id)
+    index = _gemini_load_batches_index()
+    if name not in index:
+        return _gemini_error_response(f"Batch '{batch_id}' not found.", status_code=404, status="NOT_FOUND")
+    index.pop(name, None)
+    _gemini_save_batches_index(index)
+    return JSONResponse({})
 
 
 @app.post("/v1beta/models/{model_name:path}:streamGenerateContent")

@@ -340,6 +340,11 @@ Implemented Gemini-compatible routes:
 - `POST /v1beta/models/{model}:embedContent`
 - `POST /v1beta/models/{model}:batchEmbedContents`
 - `POST /v1beta/models/{model}:batchGenerateContent`
+- `POST /v1beta/batches`
+- `GET /v1beta/batches`
+- `GET /v1beta/batches/{batch}`
+- `POST /v1beta/batches/{batch}:cancel`
+- `DELETE /v1beta/batches/{batch}`
 - `POST /upload/v1beta/files`
 - `POST /v1beta/files`
 - `GET /v1beta/files`
@@ -457,7 +462,10 @@ Embeddings and batch operations:
   embeddings, but they are not semantic Google embedding model outputs because
   Antigravity does not expose a public embedding RPC.
 - `batchGenerateContent` runs requests synchronously through Antigravity and
-  stores an immediately completed `operations/*` result.
+  stores immediately completed `operations/*` and `batches/*` results.
+- `batches.create` accepts inline `requests` plus `model` and returns a
+  completed local batch resource. It is intended for Gemini SDK/REST management
+  compatibility; it does not run true asynchronous Batch Mode jobs.
 
 File search stores:
 
@@ -489,6 +497,8 @@ Notes:
   default; override with `ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR`.
 - Batch operations are stored locally under `data/gemini_operations` by default;
   override with `ANTIGRAVITY_GEMINI_OPERATIONS_DIR`.
+- Batch resources are stored locally under `data/gemini_batches` by default;
+  override with `ANTIGRAVITY_GEMINI_BATCHES_DIR`.
 - File search stores are stored locally under `data/gemini_file_search_stores`;
   override with `ANTIGRAVITY_GEMINI_FILE_SEARCH_STORES_DIR`.
 - Tuned model metadata and permissions are stored locally under
