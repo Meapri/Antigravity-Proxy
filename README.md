@@ -670,6 +670,8 @@ Notes:
   page size of 100.
 - Cached contents are stored locally under `data/gemini_cached_contents` by
   default; override with `ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR`.
+  `cachedContents.list` supports Gemini `pageSize` / `pageToken` pagination and
+  coerces page sizes above 1000 down to 1000.
 - Corpora are stored locally under `data/gemini_corpora` by default; override
   with `ANTIGRAVITY_GEMINI_CORPORA_DIR`.
 - Batch operations are stored locally under `data/gemini_operations` by default;

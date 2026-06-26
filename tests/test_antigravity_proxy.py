@@ -1316,6 +1316,17 @@ def test_gemini_cached_contents_merge_into_generate_request(tmp_path, monkeypatc
     assert wrapped_created.json()["model"] == "models/gemini-3-flash-agent"
     assert wrapped_created.json()["expireTime"]
 
+    paged = client.get("/v1beta/cachedContents?pageSize=1")
+    next_page = client.get(f"/v1beta/cachedContents?pageSize=1&pageToken={paged.json()['nextPageToken']}")
+    coerced = client.get("/v1beta/cachedContents?pageSize=1001")
+
+    assert paged.status_code == 200
+    assert len(paged.json()["cachedContents"]) == 1
+    assert paged.json()["nextPageToken"] == "1"
+    assert next_page.status_code == 200
+    assert next_page.json()["cachedContents"]
+    assert coerced.status_code == 200
+
     patched = client.patch(f"/v1beta/{cache_name}?update_mask=ttl", json={
         "cachedContent": {"ttl": "120s"}
     })

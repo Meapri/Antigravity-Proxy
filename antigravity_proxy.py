@@ -4478,10 +4478,11 @@ async def gemini_create_cached_content(request: Request):
 
 
 @app.get("/v1beta/cachedContents")
-async def gemini_list_cached_contents(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+async def gemini_list_cached_contents(pageSize: int = Query(default=100, ge=1), pageToken: str | None = None):
     index = _gemini_load_cached_index()
     items = [_gemini_cached_resource(meta) for meta in index.values()]
     items.sort(key=lambda item: item.get("createTime") or "")
+    pageSize = min(pageSize, 1000)
     start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
     end = start + pageSize
     return {"cachedContents": items[start:end], "nextPageToken": str(end) if end < len(items) else ""}
