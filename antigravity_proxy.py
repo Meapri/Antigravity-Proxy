@@ -605,6 +605,33 @@ def _gemini_response_text(response: dict[str, Any]) -> str:
     return "".join(texts)
 
 
+def _gemini_finalize_generate_response(response: dict[str, Any], *, model_name: str, request_body: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not isinstance(response, dict):
+        return response
+    out = dict(response)
+    out.setdefault("modelVersion", _gemini_resource_model_id(model_name))
+    out.setdefault("responseId", "resp_" + uuid.uuid4().hex)
+    candidates = out.get("candidates")
+    if isinstance(candidates, list):
+        finalized_candidates: list[Any] = []
+        for idx, candidate in enumerate(candidates):
+            if isinstance(candidate, dict):
+                candidate = dict(candidate)
+                candidate.setdefault("index", idx)
+                candidate.setdefault("finishReason", "STOP")
+            finalized_candidates.append(candidate)
+        out["candidates"] = finalized_candidates
+    if not isinstance(out.get("usageMetadata"), dict):
+        prompt_tokens = _estimate_tokens(request_body or {})
+        output_tokens = _estimate_tokens(_gemini_response_text(out))
+        out["usageMetadata"] = {
+            "promptTokenCount": prompt_tokens,
+            "candidatesTokenCount": output_tokens,
+            "totalTokenCount": prompt_tokens + output_tokens,
+        }
+    return out
+
+
 def _gemini_image_prompt_from_body(body: dict[str, Any]) -> str:
     contents = body.get("contents")
     if isinstance(contents, list):
@@ -5545,7 +5572,11 @@ async def gemini_tuned_generate_content(tuned_model_id: str, request: Request):
         body = _gemini_inline_local_files(_gemini_apply_file_search(_gemini_apply_cached_content(body)))
         body.pop("model", None)
         data = await asyncio.to_thread(_get_client().generate_raw, request=body, model=str(model["antigravity_model"]))
-        return JSONResponse(_gemini_unwrap_response(data))
+        return JSONResponse(_gemini_finalize_generate_response(
+            _gemini_unwrap_response(data),
+            model_name=str(model.get("name") or tuned_model_id),
+            request_body=body,
+        ))
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
@@ -5877,7 +5908,11 @@ async def gemini_predict(model_name: str, request: Request):
             request=request_body,
             model=str(model["antigravity_model"]),
         )
-        response = _gemini_unwrap_response(data)
+        response = _gemini_finalize_generate_response(
+            _gemini_unwrap_response(data),
+            model_name=model_name,
+            request_body=request_body,
+        )
         return {"predictions": [response], "deployedModelId": _gemini_model_name(model)}
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
@@ -6095,7 +6130,7 @@ async def gemini_generate_content(model_name: str, request: Request):
         body = _gemini_apply_response_format(body)
         if _model_capabilities(model)["image_generation"]:
             image = await _gemini_generate_image_payload(model_name, body)
-            return JSONResponse({
+            return JSONResponse(_gemini_finalize_generate_response({
                 "candidates": [{
                     "content": {
                         "role": "model",
@@ -6109,7 +6144,7 @@ async def gemini_generate_content(model_name: str, request: Request):
                     "finishReason": "STOP",
                 }],
                 "generatedFile": image["generatedFile"]["name"],
-            })
+            }, model_name=model_name, request_body=body))
         body = _gemini_apply_cached_content(body)
         body = _gemini_apply_file_search(body)
         _gemini_reject_unsupported_builtin_tools(body)
@@ -6122,7 +6157,11 @@ async def gemini_generate_content(model_name: str, request: Request):
             request=body,
             model=str(model["antigravity_model"]),
         )
-        return JSONResponse(_gemini_unwrap_response(data))
+        return JSONResponse(_gemini_finalize_generate_response(
+            _gemini_unwrap_response(data),
+            model_name=model_name,
+            request_body=body,
+        ))
     except HTTPException as exc:
         status = _gemini_status_for_http(exc.status_code)
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
@@ -6148,6 +6187,7 @@ def _gemini_streaming_response(*, body: dict[str, Any], antigravity_model: str) 
                 model=antigravity_model,
             ):
                 payload = _gemini_unwrap_response(chunk)
+                payload = _gemini_finalize_generate_response(payload, model_name=antigravity_model, request_body=body)
                 got_any = True
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
         except Exception as exc:
@@ -6159,7 +6199,12 @@ def _gemini_streaming_response(*, body: dict[str, Any], antigravity_model: str) 
                     request=body,
                     model=antigravity_model,
                 )
-                yield f"data: {json.dumps(_gemini_unwrap_response(data), ensure_ascii=False)}\n\n"
+                payload = _gemini_finalize_generate_response(
+                    _gemini_unwrap_response(data),
+                    model_name=antigravity_model,
+                    request_body=body,
+                )
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
             except Exception as inner:
                 payload = {"error": {"code": 502, "message": f"Antigravity upstream error: {inner}", "status": "UNAVAILABLE"}}
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -6209,7 +6254,11 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
             request=req_body,
             model=str(model["antigravity_model"]),
         )
-        responses.append(_gemini_unwrap_response(data))
+        responses.append(_gemini_finalize_generate_response(
+            _gemini_unwrap_response(data),
+            model_name=model_name,
+            request_body=req_body,
+        ))
 
     now = _gemini_now_iso()
     model_resource = _gemini_model_name(model)
@@ -6603,9 +6652,10 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
     ):
         if key in body:
             request_body[key] = body[key]
+
     if _model_capabilities(model)["image_generation"]:
         image = await _gemini_generate_image_payload(str(model_name), request_body)
-        response = {
+        response = _gemini_finalize_generate_response({
             "candidates": [{
                 "content": {
                     "role": "model",
@@ -6619,7 +6669,7 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
                 "finishReason": "STOP",
             }],
             "generatedFile": image["generatedFile"]["name"],
-        }
+        }, model_name=str(model_name), request_body=request_body)
         now = _gemini_now_iso()
         interaction_name = "interactions/int_" + uuid.uuid4().hex
         model_content = response["candidates"][0]["content"]
@@ -6659,7 +6709,11 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
         request=request_body,
         model=str(model["antigravity_model"]),
     )
-    response = _gemini_unwrap_response(data)
+    response = _gemini_finalize_generate_response(
+        _gemini_unwrap_response(data),
+        model_name=str(model_name),
+        request_body=request_body,
+    )
     text = _gemini_response_text(response)
     now = _gemini_now_iso()
     interaction_name = "interactions/int_" + uuid.uuid4().hex

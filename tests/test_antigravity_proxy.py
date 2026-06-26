@@ -500,6 +500,10 @@ def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["candidates"][0]["content"]["parts"][0]["text"] == "hello"
+    assert response.json()["candidates"][0]["index"] == 0
+    assert response.json()["candidates"][0]["finishReason"] == "STOP"
+    assert response.json()["modelVersion"] == "gemini-3-flash-agent"
+    assert response.json()["responseId"].startswith("resp_")
     assert seen["model"] == "gemini-3-flash-agent"
     assert seen["request"]["generationConfig"]["responseMimeType"] == "application/json"
     assert seen["request"]["generationConfig"]["responseSchema"] == {
@@ -953,6 +957,9 @@ def test_gemini_interactions_create_previous_store_and_stream(tmp_path, monkeypa
     first_body = first.json()
     assert first_body["name"].startswith("interactions/")
     assert first_body["outputText"] == "echo:first"
+    assert first_body["output"]["modelVersion"] == "gemini-3-flash-agent"
+    assert first_body["output"]["responseId"].startswith("resp_")
+    assert first_body["usageMetadata"]["totalTokenCount"] > 0
     assert first_body["steps"][0]["type"] == "model_output"
     assert first_body["steps"][0]["content"][0]["type"] == "text"
     assert first_body["steps"][0]["content"][0]["text"] == "echo:first"

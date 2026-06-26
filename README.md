@@ -644,6 +644,9 @@ hosted tools. `toolConfig.functionCallingConfig.mode` and
 `allowedFunctionNames` are normalized from common SDK spellings.
 `response_format` / `responseFormat` wrappers are mapped into
 `generationConfig.responseMimeType` and `generationConfig.responseSchema`.
+Generate responses are normalized with Gemini-style `modelVersion`,
+`responseId`, candidate `index`, `finishReason`, and `usageMetadata` when the
+upstream response omits them.
 
 Files API example:
 
