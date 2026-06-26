@@ -501,6 +501,24 @@ _GEMINI_SDK_TRANSPORT_KEYS = {
 }
 
 
+def _gemini_string_list(value: Any) -> Any:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, tuple):
+        return list(value)
+    return value
+
+
+def _gemini_normalize_generation_config(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    out = _gemini_normalize_request(value)
+    for key in ("stopSequences", "responseModalities"):
+        if key in out:
+            out[key] = _gemini_string_list(out[key])
+    return out
+
+
 def _gemini_normalize_function_calling_config(value: Any) -> Any:
     if not isinstance(value, dict):
         return value
@@ -546,7 +564,7 @@ def _gemini_apply_generate_config(body: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(config, dict):
         return out
     config = _gemini_normalize_request(config)
-    gen = dict(out.get("generationConfig") or {}) if isinstance(out.get("generationConfig"), dict) else {}
+    gen = _gemini_normalize_generation_config(out.get("generationConfig") or {}) if isinstance(out.get("generationConfig"), dict) else {}
     for key, value in config.items():
         if value is None:
             continue
@@ -561,7 +579,7 @@ def _gemini_apply_generate_config(body: dict[str, Any]) -> dict[str, Any]:
         else:
             out.setdefault(key, value)
     if gen:
-        out["generationConfig"] = gen
+        out["generationConfig"] = _gemini_normalize_generation_config(gen)
     return out
 
 
@@ -569,7 +587,7 @@ def _gemini_apply_response_format(body: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(body, dict):
         return body
     out = dict(body)
-    gen = dict(out.get("generationConfig") or {}) if isinstance(out.get("generationConfig"), dict) else {}
+    gen = _gemini_normalize_generation_config(out.get("generationConfig") or {}) if isinstance(out.get("generationConfig"), dict) else {}
     fmt = out.pop("responseFormat", None)
 
     if out.get("responseMimeType") is not None:
@@ -608,7 +626,7 @@ def _gemini_apply_response_format(body: dict[str, Any]) -> dict[str, Any]:
             gen["responseMimeType"] = "application/json"
 
     if gen:
-        out["generationConfig"] = gen
+        out["generationConfig"] = _gemini_normalize_generation_config(gen)
     return out
 
 

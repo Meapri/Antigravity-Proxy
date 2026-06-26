@@ -705,6 +705,8 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
             "max_output_tokens": 17,
             "temperature": 0.2,
             "top_p": 0.9,
+            "stop_sequences": "END",
+            "response_modalities": "TEXT",
             "response_mime_type": "application/json",
             "response_schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}},
             "tool_config": {"function_calling_config": {"mode": "none"}},
@@ -725,6 +727,8 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
     assert seen["request"]["generationConfig"]["maxOutputTokens"] == 17
     assert seen["request"]["generationConfig"]["temperature"] == 0.2
     assert seen["request"]["generationConfig"]["topP"] == 0.9
+    assert seen["request"]["generationConfig"]["stopSequences"] == ["END"]
+    assert seen["request"]["generationConfig"]["responseModalities"] == ["TEXT"]
     assert seen["request"]["generationConfig"]["responseMimeType"] == "application/json"
     assert seen["request"]["generationConfig"]["responseSchema"]["type"] == "object"
 
