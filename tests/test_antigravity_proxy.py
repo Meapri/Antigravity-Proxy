@@ -655,11 +655,18 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
         def generate_raw(self, *, request, model=""):
             return {
                 "response": {
+                    "model_version": "gemini-upstream-version",
+                    "response_id": "upstream-response-id",
+                    "prompt_feedback": {
+                        "block_reason": "SAFETY",
+                        "block_reason_message": "blocked by policy",
+                        "safety_ratings": [{"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "probability": "MEDIUM"}],
+                    },
                     "candidates": [{
                         "content": {"parts": "hello"},
                         "finish_reason": "MAX_TOKENS",
                         "safety_ratings": [{"category": "HARM_CATEGORY_HARASSMENT", "probability": "LOW"}],
-                        "grounding_metadata": {"searchEntryPoint": {"renderedContent": "x"}},
+                        "grounding_metadata": {"search_entry_point": {"rendered_content": "x"}},
                         "avg_logprobs": -0.2,
                     }],
                     "usage_metadata": {
@@ -682,6 +689,12 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
 
     assert response.status_code == 200
     body = response.json()
+    assert body["modelVersion"] == "gemini-upstream-version"
+    assert body["responseId"] == "upstream-response-id"
+    assert body["promptFeedback"]["blockReason"] == "SAFETY"
+    assert body["promptFeedback"]["blockReasonMessage"] == "blocked by policy"
+    assert body["promptFeedback"]["safetyRatings"][0]["probability"] == "MEDIUM"
+    assert "prompt_feedback" not in body
     assert body["candidates"][0]["content"] == {"role": "model", "parts": [{"text": "hello"}]}
     assert body["candidates"][0]["finishReason"] == "MAX_TOKENS"
     assert "finish_reason" not in body["candidates"][0]

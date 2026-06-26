@@ -1374,6 +1374,37 @@ def _gemini_normalize_candidate(candidate: dict[str, Any], index: int) -> dict[s
         else:
             content["parts"] = [_gemini_content_part(part) for part in parts]
         out["content"] = content
+    for key in ("safetyRatings", "citationMetadata", "groundingMetadata", "logprobsResult"):
+        if key in out:
+            out[key] = _gemini_normalize_response_object(out[key])
+    return out
+
+
+def _gemini_normalize_response_object(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_gemini_normalize_response_object(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    aliases = {
+        "safety_ratings": "safetyRatings",
+        "block_reason": "blockReason",
+        "block_reason_message": "blockReasonMessage",
+        "citation_metadata": "citationMetadata",
+        "grounding_metadata": "groundingMetadata",
+        "url_context_metadata": "urlContextMetadata",
+        "search_entry_point": "searchEntryPoint",
+        "rendered_content": "renderedContent",
+        "grounding_chunks": "groundingChunks",
+        "grounding_supports": "groundingSupports",
+        "web_search_queries": "webSearchQueries",
+        "retrieval_metadata": "retrievalMetadata",
+        "google_search_dynamic_retrieval_score": "googleSearchDynamicRetrievalScore",
+        "token_count": "tokenCount",
+    }
+    out: dict[str, Any] = {}
+    for key, child in value.items():
+        mapped = aliases.get(str(key), key)
+        out[mapped] = _gemini_normalize_response_object(child)
     return out
 
 
@@ -1381,8 +1412,21 @@ def _gemini_finalize_generate_response(response: dict[str, Any], *, model_name: 
     if not isinstance(response, dict):
         return response
     out = dict(response)
+    for old, new in {
+        "model_version": "modelVersion",
+        "response_id": "responseId",
+        "prompt_feedback": "promptFeedback",
+        "automatic_function_calling_history": "automaticFunctionCallingHistory",
+    }.items():
+        if out.get(new) is None and out.get(old) is not None:
+            out[new] = out[old]
+        out.pop(old, None)
     out.setdefault("modelVersion", _gemini_resource_model_id(model_name))
     out.setdefault("responseId", "resp_" + uuid.uuid4().hex)
+    if isinstance(out.get("promptFeedback"), dict):
+        out["promptFeedback"] = _gemini_normalize_response_object(out["promptFeedback"])
+    if isinstance(out.get("automaticFunctionCallingHistory"), list):
+        out["automaticFunctionCallingHistory"] = _gemini_normalize_contents(out["automaticFunctionCallingHistory"])
     candidates = out.get("candidates")
     if isinstance(candidates, list):
         finalized_candidates: list[Any] = []
