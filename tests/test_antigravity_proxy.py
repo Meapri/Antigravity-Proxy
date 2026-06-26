@@ -1150,6 +1150,9 @@ def test_gemini_files_upload_and_file_data_inline_conversion(tmp_path, monkeypat
     file_resource = uploaded.json()["file"]
     assert file_resource["name"].startswith("files/file_")
     assert file_resource["mimeType"] == "text/plain"
+    assert file_resource["sha256Hash"] == "84d+ij2Y+AnZ+EQGD76ihkpLZpgKIv8iKXAU0MFo2y4="
+    assert file_resource["downloadUri"].endswith(":download")
+    assert file_resource["source"] == "UPLOADED"
 
     listed = client.get("/v1beta/files")
     assert listed.status_code == 200
@@ -1193,6 +1196,7 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
             "displayName": "external.txt",
             "mimeType": "text/plain",
             "uri": "gs://bucket/external.txt",
+            "downloadUri": "https://storage.example/external.txt",
             "sizeBytes": "12",
         }
     })
@@ -1201,6 +1205,19 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     file_resource = registered.json()["file"]
     assert file_resource["displayName"] == "external.txt"
     assert file_resource["uri"] == "gs://bucket/external.txt"
+    assert file_resource["downloadUri"] == "https://storage.example/external.txt"
+    assert file_resource["source"] == "REGISTERED"
+
+    video = client.post("/v1beta/files:register", json={
+        "file": {
+            "displayName": "clip.mp4",
+            "mimeType": "video/mp4",
+            "uri": "gs://bucket/clip.mp4",
+            "videoMetadata": {"videoDuration": "3s"},
+        }
+    })
+    assert video.status_code == 200
+    assert video.json()["file"]["videoMetadata"]["videoDuration"] == "3s"
 
     fetched = client.get(f"/v1beta/{file_resource['name']}")
     downloaded = client.get(f"/v1beta/{file_resource['name']}:download")

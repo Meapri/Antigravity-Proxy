@@ -1558,7 +1558,13 @@ def _gemini_save_files_index(index: dict[str, dict[str, Any]]) -> None:
 
 def _gemini_file_resource(meta: dict[str, Any]) -> dict[str, Any]:
     now = int(meta.get("createTime") or time.time())
-    return {
+    sha256_hash = str(meta.get("sha256Hash") or "")
+    if len(sha256_hash) == 64 and all(ch in "0123456789abcdefABCDEF" for ch in sha256_hash):
+        try:
+            sha256_hash = base64.b64encode(bytes.fromhex(sha256_hash)).decode("ascii")
+        except ValueError:
+            pass
+    resource = {
         "name": meta["name"],
         "displayName": meta.get("displayName") or meta["name"].split("/", 1)[-1],
         "mimeType": meta.get("mimeType") or "application/octet-stream",
@@ -1566,10 +1572,19 @@ def _gemini_file_resource(meta: dict[str, Any]) -> dict[str, Any]:
         "createTime": meta.get("createTimeIso") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
         "updateTime": meta.get("updateTimeIso") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
         "expirationTime": meta.get("expirationTimeIso"),
-        "sha256Hash": meta.get("sha256Hash") or "",
+        "sha256Hash": sha256_hash,
         "uri": meta.get("uri") or meta["name"],
+        "downloadUri": meta.get("downloadUri") or (meta.get("uri") or meta["name"]),
         "state": meta.get("state") or "ACTIVE",
+        "source": meta.get("source") or ("REGISTERED" if meta.get("registered") else "UPLOADED"),
     }
+    if isinstance(meta.get("error"), dict):
+        resource["error"] = meta["error"]
+    if isinstance(meta.get("videoMetadata"), dict):
+        resource["videoMetadata"] = meta["videoMetadata"]
+    elif str(resource["mimeType"]).startswith("video/"):
+        resource["videoMetadata"] = {}
+    return resource
 
 
 def _gemini_store_file(data: bytes, *, mime_type: str | None = None, display_name: str | None = None) -> dict[str, Any]:
@@ -1582,7 +1597,7 @@ def _gemini_store_file(data: bytes, *, mime_type: str | None = None, display_nam
     mime = (mime_type or inferred or "application/octet-stream").split(";", 1)[0].strip()
     blob_path = root / f"{file_id}.bin"
     blob_path.write_bytes(data)
-    digest = hashlib.sha256(data).hexdigest()
+    digest = base64.b64encode(hashlib.sha256(data).digest()).decode("ascii")
     now = int(time.time())
     iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
     meta = {
@@ -1596,7 +1611,9 @@ def _gemini_store_file(data: bytes, *, mime_type: str | None = None, display_nam
         "updateTimeIso": iso,
         "sha256Hash": digest,
         "uri": f"files/{file_id}",
+        "downloadUri": f"files/{file_id}:download",
         "state": "ACTIVE",
+        "source": "UPLOADED",
         "path": str(blob_path),
     }
     index = _gemini_load_files_index()
@@ -1631,7 +1648,10 @@ def _gemini_register_file(body: dict[str, Any]) -> dict[str, Any]:
         "expirationTimeIso": file_meta.get("expirationTime") or file_meta.get("expiration_time"),
         "sha256Hash": file_meta.get("sha256Hash") or file_meta.get("sha256_hash") or "",
         "uri": uri,
+        "downloadUri": file_meta.get("downloadUri") or file_meta.get("download_uri") or uri,
         "state": file_meta.get("state") or "ACTIVE",
+        "source": file_meta.get("source") or "REGISTERED",
+        "videoMetadata": file_meta.get("videoMetadata") or file_meta.get("video_metadata"),
         "registered": True,
     }
     index = _gemini_load_files_index()

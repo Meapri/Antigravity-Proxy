@@ -662,7 +662,9 @@ Notes:
   compatibility. `generateContentRequest` wrappers are accepted, and local
   `cachedContent` / `file_search` context is expanded before counting.
 - Files are stored locally under `data/gemini_files` by default; override with
-  `ANTIGRAVITY_GEMINI_FILES_DIR`.
+  `ANTIGRAVITY_GEMINI_FILES_DIR`. File resources include Gemini-style
+  `downloadUri`, `source`, base64 `sha256Hash`, and video metadata fields when
+  available.
 - Cached contents are stored locally under `data/gemini_cached_contents` by
   default; override with `ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR`.
 - Corpora are stored locally under `data/gemini_corpora` by default; override
