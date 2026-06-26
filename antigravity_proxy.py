@@ -2776,9 +2776,9 @@ def _gemini_cached_body(body: Any) -> dict[str, Any]:
     wrapped = normalized.get("cachedContent")
     if isinstance(wrapped, dict):
         merged = dict(wrapped)
-        for key in ("ttl", "expireTime", "updateMask"):
-            if key in normalized and key not in merged:
-                merged[key] = normalized[key]
+        for key, value in normalized.items():
+            if key != "cachedContent" and key not in merged:
+                merged[key] = value
         normalized = merged
     normalized = _gemini_apply_generate_config(normalized)
     normalized = _gemini_apply_response_format(normalized)
@@ -2826,6 +2826,7 @@ def _gemini_create_cached_content(body: dict[str, Any]) -> dict[str, Any]:
         "displayName": body.get("displayName") or body.get("display_name"),
         "createTime": iso,
         "updateTime": iso,
+        "ttl": body.get("ttl") if not body.get("expireTime") else None,
         "expireTime": body.get("expireTime") or expire_iso,
         "usageMetadata": {"totalTokenCount": _estimate_tokens(body)},
         "payload": body,

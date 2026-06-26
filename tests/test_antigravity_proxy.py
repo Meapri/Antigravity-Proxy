@@ -2257,22 +2257,25 @@ def test_gemini_cached_contents_merge_into_generate_request(tmp_path, monkeypatc
     assert listed.json()["cachedContents"][0]["name"] == cache_name
 
     wrapped_created = client.post("/v1beta/cachedContents", json={
-        "cachedContent": {
-            "model": "models/gemini-3-flash-agent",
+        "model": "models/gemini-3-flash-agent",
+        "display_name": "Wrapped cache",
+        "config": {
             "contents": "wrapped cached context",
-            "config": {
-                "system_instruction": "wrapped cached system",
-                "tool_config": {"mode": "none"},
-                "safety_settings": {
-                    "harm_category": "HARM_CATEGORY_HARASSMENT",
-                    "harm_block_threshold": "BLOCK_ONLY_HIGH",
-                },
+            "system_instruction": "wrapped cached system",
+            "tool_config": {"mode": "none"},
+            "safety_settings": {
+                "harm_category": "HARM_CATEGORY_HARASSMENT",
+                "harm_block_threshold": "BLOCK_ONLY_HIGH",
             },
+        },
+        "cachedContent": {
             "ttl": "60s",
         }
     })
     assert wrapped_created.status_code == 200
     assert wrapped_created.json()["model"] == "models/gemini-3-flash-agent"
+    assert wrapped_created.json()["displayName"] == "Wrapped cache"
+    assert wrapped_created.json()["ttl"] == "60s"
     assert wrapped_created.json()["contents"] == [{"role": "user", "parts": [{"text": "wrapped cached context"}]}]
     assert wrapped_created.json()["systemInstruction"] == {
         "role": "system",

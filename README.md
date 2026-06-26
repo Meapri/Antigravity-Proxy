@@ -768,7 +768,10 @@ Create and patch calls also accept SDK wrapper bodies like
 `updateMask` / `update_mask` inside the SDK wrapper body.
 Cached content creation uses the same SDK-friendly normalization as
 `generateContent`, including string `contents`, `config`, single
-`safetySettings`, and shortcut `toolConfig` forms.
+`safetySettings`, and shortcut `toolConfig` forms. When a `cachedContent`
+wrapper is present, sibling fields such as `model`, `displayName`, `ttl`,
+`expireTime`, and `config` are merged into the wrapped cache resource if the
+wrapped object did not already provide them.
 
 Embeddings and batch operations:
 
