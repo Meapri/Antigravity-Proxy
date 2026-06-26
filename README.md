@@ -315,6 +315,62 @@ response = client.responses.create(
 print(response.output_text)
 ```
 
+## Gemini API Compatibility
+
+The proxy also exposes a Gemini REST-compatible surface for clients that can
+use a custom Gemini base URL, such as a Hermes Gemini provider:
+
+```text
+http://127.0.0.1:8765/v1beta
+```
+
+Remote Tailscale example:
+
+```text
+http://your-host.ts.net:8765/v1beta
+```
+
+Implemented Gemini-compatible routes:
+
+- `GET /v1beta/models`
+- `GET /v1beta/models/{model}`
+- `POST /v1beta/models/{model}:generateContent`
+- `POST /v1beta/models/{model}:streamGenerateContent`
+- `POST /v1beta/models/{model}:countTokens`
+
+Example:
+
+```bash
+curl http://127.0.0.1:8765/v1beta/models/gemini-3-flash-agent:generateContent \
+  -H "Content-Type: application/json" \
+  -d '{
+    "contents": [{
+      "role": "user",
+      "parts": [{"text": "Say hello in one short sentence."}]
+    }],
+    "generationConfig": {
+      "temperature": 0.3,
+      "maxOutputTokens": 128
+    }
+  }'
+```
+
+The Gemini compatibility layer forwards native Gemini request fields such as
+`contents`, `systemInstruction`, `generationConfig`, `safetySettings`,
+`tools`, and `toolConfig` to Antigravity. It accepts both common camelCase and
+snake_case SDK spellings for fields such as `generation_config`,
+`response_mime_type`, `inline_data`, `file_data`, `googleSearch`,
+`urlContext`, and `codeExecution`.
+
+Notes:
+
+- Model names are exposed as Gemini resources like
+  `models/gemini-3-flash-agent`; pass `gemini-3-flash-agent` in the path.
+- `countTokens` is approximate because Antigravity's internal endpoint does not
+  expose a separate Gemini token-count RPC.
+- Files API, embeddings, tuned models, cached content management, and file
+  search store management are not implemented yet.
+
 ## Responses API Compatibility
 
 Implemented:
@@ -354,6 +410,18 @@ providers:
 ```
 
 If `ANTIGRAVITY_PROXY_API_KEY` is set, use that value as `api_key`.
+
+For a Hermes Gemini provider with a custom Base URL field, use:
+
+```text
+http://127.0.0.1:8765/v1beta
+```
+
+or your remote proxy host:
+
+```text
+http://your-host.ts.net:8765/v1beta
+```
 
 For Hermes web search, point the SearXNG backend at:
 

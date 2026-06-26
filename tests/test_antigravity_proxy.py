@@ -154,6 +154,78 @@ def test_chat_rejects_unsupported_hosted_tool():
     assert response.json()["error"]["message"] == "Unsupported tool type: file_search"
 
 
+def test_gemini_models_and_count_tokens():
+    client = TestClient(proxy.app)
+
+    models = client.get("/v1beta/models")
+    assert models.status_code == 200
+    first = models.json()["models"][0]
+    assert first["name"].startswith("models/")
+    assert "generateContent" in first["supportedGenerationMethods"]
+
+    one = client.get("/v1beta/models/gemini-3-flash-agent")
+    assert one.status_code == 200
+    assert one.json()["name"] == "models/gemini-3-flash-agent"
+
+    counted = client.post("/v1beta/models/gemini-3-flash-agent:countTokens", json={
+        "contents": [{"role": "user", "parts": [{"text": "hello world"}]}]
+    })
+    assert counted.status_code == 200
+    assert counted.json()["totalTokens"] > 0
+
+
+def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            seen["model"] = model
+            return {
+                "response": {
+                    "candidates": [{
+                        "content": {"role": "model", "parts": [{"text": "hello"}]},
+                        "finishReason": "STOP",
+                    }],
+                    "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 2, "totalTokenCount": 5},
+                }
+            }
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+        "generation_config": {"response_mime_type": "application/json", "max_output_tokens": 32},
+        "tools": [{"googleSearch": {}}],
+    })
+
+    assert response.status_code == 200
+    assert response.json()["candidates"][0]["content"]["parts"][0]["text"] == "hello"
+    assert seen["model"] == "gemini-3-flash-agent"
+    assert seen["request"]["generationConfig"]["responseMimeType"] == "application/json"
+    assert seen["request"]["generationConfig"]["maxOutputTokens"] == 32
+    assert seen["request"]["tools"] == [{"google_search": {}}]
+
+
+def test_gemini_stream_generate_content_sse(monkeypatch):
+    class FakeClient:
+        async def generate_raw_stream_async(self, *, request, model=""):
+            yield {"response": {"candidates": [{"content": {"parts": [{"text": "hi"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    with client.stream("POST", "/v1beta/models/gemini-3-flash-agent:streamGenerateContent", json={
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+    }) as response:
+        body = response.read().decode()
+
+    assert response.status_code == 200
+    assert 'data: {"candidates":' in body
+    assert "data: [DONE]" in body
+
+
 def test_admin_refresh_requires_configured_api_key(monkeypatch):
     monkeypatch.delenv("ANTIGRAVITY_PROXY_API_KEY", raising=False)
     client = TestClient(proxy.app)

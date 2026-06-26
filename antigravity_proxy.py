@@ -249,6 +249,136 @@ _MODEL_MAP = _rebuild_model_map(_MODELS)
 
 
 # ---------------------------------------------------------------------------
+# Gemini-compatible helpers
+# ---------------------------------------------------------------------------
+def _gemini_model_id(model: dict[str, Any]) -> str:
+    return str(model.get("antigravity_model") or model.get("id") or "").strip()
+
+
+def _gemini_model_name(model: dict[str, Any]) -> str:
+    return "models/" + _gemini_model_id(model)
+
+
+def _gemini_model_resource(model: dict[str, Any]) -> dict[str, Any]:
+    caps = _model_capabilities(model)
+    methods = ["generateContent", "streamGenerateContent", "countTokens"]
+    return {
+        "name": _gemini_model_name(model),
+        "version": _gemini_model_id(model),
+        "displayName": str(model.get("id") or _gemini_model_id(model)),
+        "description": "Antigravity-backed Gemini-compatible model",
+        "inputTokenLimit": 1048576,
+        "outputTokenLimit": 65536,
+        "supportedGenerationMethods": methods if not caps["internal"] else [],
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 64,
+    }
+
+
+def _resolve_gemini_model(model_name: str) -> dict[str, Any]:
+    key = model_name.strip().strip("/")
+    if key.startswith("models/"):
+        key = key[len("models/"):]
+    decoded = key.replace("%20", " ")
+    model = _MODEL_MAP.get(decoded) or _MODEL_MAP.get(decoded.lower())
+    if not model:
+        raise HTTPException(status_code=404, detail=f"Gemini model '{model_name}' not found.")
+    return model
+
+
+_GEMINI_KEY_ALIASES = {
+    "system_instruction": "systemInstruction",
+    "generation_config": "generationConfig",
+    "safety_settings": "safetySettings",
+    "tool_config": "toolConfig",
+    "cached_content": "cachedContent",
+    "response_mime_type": "responseMimeType",
+    "response_schema": "responseSchema",
+    "max_output_tokens": "maxOutputTokens",
+    "candidate_count": "candidateCount",
+    "stop_sequences": "stopSequences",
+    "response_logprobs": "responseLogprobs",
+    "logprobs": "logprobs",
+    "presence_penalty": "presencePenalty",
+    "frequency_penalty": "frequencyPenalty",
+    "thinking_config": "thinkingConfig",
+    "function_declarations": "functionDeclarations",
+    "function_calling_config": "functionCallingConfig",
+    "allowed_function_names": "allowedFunctionNames",
+    "code_execution": "codeExecution",
+    "codeExecution": "codeExecution",
+    "google_search": "google_search",
+    "googleSearch": "google_search",
+    "url_context": "url_context",
+    "urlContext": "url_context",
+    "file_search": "file_search",
+    "fileSearch": "file_search",
+    "file_data": "fileData",
+    "fileData": "fileData",
+    "inline_data": "inlineData",
+    "inlineData": "inlineData",
+    "mime_type": "mimeType",
+    "mimeType": "mimeType",
+    "file_uri": "fileUri",
+    "fileUri": "fileUri",
+    "video_metadata": "videoMetadata",
+    "function_call": "functionCall",
+    "functionCall": "functionCall",
+    "function_response": "functionResponse",
+    "functionResponse": "functionResponse",
+}
+
+
+def _gemini_normalize_request(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_gemini_normalize_request(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    out: dict[str, Any] = {}
+    for key, child in value.items():
+        mapped = _GEMINI_KEY_ALIASES.get(str(key), key)
+        out[mapped] = _gemini_normalize_request(child)
+    return out
+
+
+def _gemini_unwrap_response(data: dict[str, Any]) -> dict[str, Any]:
+    response = data.get("response")
+    if isinstance(response, dict):
+        return response
+    return data
+
+
+def _gemini_error_response(message: Any, *, status_code: int, status: str | None = None) -> JSONResponse:
+    if not isinstance(message, str):
+        message = json.dumps(message, ensure_ascii=False)
+    return JSONResponse(
+        {"error": {"code": status_code, "message": message, "status": status or _openai_error_type(status_code).upper()}},
+        status_code=status_code,
+    )
+
+
+def _gemini_count_tokens_request(body: dict[str, Any]) -> list[ChatMessage]:
+    payload = body.get("generateContentRequest") if isinstance(body.get("generateContentRequest"), dict) else body
+    contents = payload.get("contents") or []
+    if isinstance(contents, dict):
+        contents = [contents]
+    messages: list[ChatMessage] = []
+    for turn in contents if isinstance(contents, list) else []:
+        if not isinstance(turn, dict):
+            continue
+        role = str(turn.get("role") or "user")
+        if role == "model":
+            role = "assistant"
+        parts = turn.get("parts") or []
+        messages.append(ChatMessage(role=role, content=parts))
+    system_instruction = payload.get("systemInstruction")
+    if isinstance(system_instruction, dict):
+        messages.insert(0, ChatMessage(role="system", content=system_instruction.get("parts") or []))
+    return messages
+
+
+# ---------------------------------------------------------------------------
 # OpenAI-compatible Pydantic schemas
 # ---------------------------------------------------------------------------
 class ChatMessage(BaseModel):
@@ -1835,6 +1965,115 @@ def _extract_memories_v2(messages: list[ChatMessage]) -> list[str]:
 async def list_models():
     """Return the list of supported models (OpenAI-compatible)."""
     return ModelListResponse(data=_MODELS)
+
+
+@app.get("/v1beta/models")
+async def gemini_list_models():
+    """Gemini-compatible model listing."""
+    return {
+        "models": [
+            _gemini_model_resource(model)
+            for model in _MODELS
+            if not _model_capabilities(model)["internal"]
+        ]
+    }
+
+
+@app.get("/v1beta/models/{model_name:path}")
+async def gemini_get_model(model_name: str):
+    """Gemini-compatible model retrieval."""
+    try:
+        model = _resolve_gemini_model(model_name)
+    except HTTPException as exc:
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status="NOT_FOUND")
+    return _gemini_model_resource(model)
+
+
+@app.post("/v1beta/models/{model_name:path}:countTokens")
+async def gemini_count_tokens(model_name: str, request: Request):
+    """Gemini-compatible approximate countTokens endpoint."""
+    try:
+        _resolve_gemini_model(model_name)
+        body = _gemini_normalize_request(await request.json())
+        messages = _gemini_count_tokens_request(body if isinstance(body, dict) else {})
+        return {"totalTokens": _estimate_prompt_tokens(messages)}
+    except HTTPException as exc:
+        return _gemini_error_response(exc.detail, status_code=exc.status_code)
+    except Exception as exc:
+        log.exception("Gemini countTokens failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.post("/v1beta/models/{model_name:path}:generateContent")
+async def gemini_generate_content(model_name: str, request: Request):
+    """Gemini REST-compatible generateContent endpoint backed by Antigravity."""
+    try:
+        model = _resolve_gemini_model(model_name)
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body.pop("model", None)
+        data = await asyncio.to_thread(
+            _get_client().generate_raw,
+            request=body,
+            model=str(model["antigravity_model"]),
+        )
+        return JSONResponse(_gemini_unwrap_response(data))
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        _upstream = ""
+        _resp = getattr(exc, "response", None)
+        if _resp is not None:
+            try:
+                _upstream = _resp.text[:2000]
+            except Exception:
+                pass
+        log.error("Gemini generateContent failed: %s | UPSTREAM BODY: %s", exc, _upstream)
+        log.exception("Gemini generateContent exception traceback:")
+        return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
+
+
+@app.post("/v1beta/models/{model_name:path}:streamGenerateContent")
+async def gemini_stream_generate_content(model_name: str, request: Request):
+    """Gemini REST-compatible SSE streamGenerateContent endpoint."""
+    try:
+        model = _resolve_gemini_model(model_name)
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body.pop("model", None)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+    async def _gen():
+        try:
+            async for chunk in _get_client().generate_raw_stream_async(
+                request=body,
+                model=str(model["antigravity_model"]),
+            ):
+                payload = _gemini_unwrap_response(chunk)
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception as exc:
+            log.warning("Gemini streamGenerateContent failed; falling back to non-streaming: %s", exc)
+            try:
+                data = await asyncio.to_thread(
+                    _get_client().generate_raw,
+                    request=body,
+                    model=str(model["antigravity_model"]),
+                )
+                yield f"data: {json.dumps(_gemini_unwrap_response(data), ensure_ascii=False)}\n\n"
+            except Exception as inner:
+                payload = {"error": {"code": 502, "message": f"Antigravity upstream error: {inner}", "status": "UNAVAILABLE"}}
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
 @app.post("/v1/chat/completions")
