@@ -340,6 +340,11 @@ that already live under `/v1` keep their OpenAI behavior, so `/v1/models`,
 `/v1/chat/completions`, `/v1/responses`, and `/v1/images/generations` are not
 rewritten.
 
+Common SDK spelling variants are accepted for query parameters: `page_size`,
+`page_token`, and `update_mask` are normalized to the Gemini REST camelCase
+forms. `generateContent?alt=sse` and `generateContent?stream=true` are treated
+as streaming Gemini SSE responses.
+
 Implemented Gemini-compatible routes:
 
 - `GET /v1beta/models`

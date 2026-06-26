@@ -24,6 +24,7 @@ import secrets
 import sqlite3
 import time
 import uuid
+from urllib.parse import parse_qsl, urlencode
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -2188,6 +2189,21 @@ def _gemini_stable_alias_path(path: str) -> str:
     return path
 
 
+def _gemini_alias_query_string(query_string: bytes) -> bytes:
+    if not query_string:
+        return query_string
+    pairs = parse_qsl(query_string.decode("utf-8", errors="ignore"), keep_blank_values=True)
+    out: list[tuple[str, str]] = []
+    for key, value in pairs:
+        mapped = {
+            "page_size": "pageSize",
+            "page_token": "pageToken",
+            "update_mask": "updateMask",
+        }.get(key, key)
+        out.append((mapped, value))
+    return urlencode(out, doseq=True).encode("ascii")
+
+
 def _openai_error_type(status_code: int) -> str:
     if status_code == 401:
         return "authentication_error"
@@ -2551,6 +2567,9 @@ async def _optional_api_key_auth(request: Request, call_next):
     if aliased_path != request.scope.get("path"):
         request.scope["path"] = aliased_path
         request.scope["raw_path"] = aliased_path.encode("ascii", errors="ignore")
+    aliased_query = _gemini_alias_query_string(request.scope.get("query_string", b""))
+    if aliased_query != request.scope.get("query_string", b""):
+        request.scope["query_string"] = aliased_query
     expected = _proxy_api_key()
     if not expected or request.url.path == "/health":
         return await call_next(request)
@@ -4911,6 +4930,8 @@ async def gemini_generate_content(model_name: str, request: Request):
         body = _gemini_apply_file_search(body)
         body = _gemini_inline_local_files(body)
         body.pop("model", None)
+        if request.query_params.get("alt") == "sse" or request.query_params.get("stream", "").lower() == "true":
+            return _gemini_streaming_response(body=body, antigravity_model=str(model["antigravity_model"]))
         data = await asyncio.to_thread(
             _get_client().generate_raw,
             request=body,
@@ -4931,6 +4952,33 @@ async def gemini_generate_content(model_name: str, request: Request):
         log.error("Gemini generateContent failed: %s | UPSTREAM BODY: %s", exc, _upstream)
         log.exception("Gemini generateContent exception traceback:")
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
+
+
+def _gemini_streaming_response(*, body: dict[str, Any], antigravity_model: str) -> StreamingResponse:
+    async def _gen():
+        try:
+            async for chunk in _get_client().generate_raw_stream_async(
+                request=body,
+                model=antigravity_model,
+            ):
+                payload = _gemini_unwrap_response(chunk)
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception as exc:
+            log.warning("Gemini streamGenerateContent failed; falling back to non-streaming: %s", exc)
+            try:
+                data = await asyncio.to_thread(
+                    _get_client().generate_raw,
+                    request=body,
+                    model=antigravity_model,
+                )
+                yield f"data: {json.dumps(_gemini_unwrap_response(data), ensure_ascii=False)}\n\n"
+            except Exception as inner:
+                payload = {"error": {"code": 502, "message": f"Antigravity upstream error: {inner}", "status": "UNAVAILABLE"}}
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
 @app.post("/v1beta/models/{model_name:path}:batchGenerateContent")
@@ -5341,30 +5389,7 @@ async def gemini_stream_generate_content(model_name: str, request: Request):
     except Exception as exc:
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
-    async def _gen():
-        try:
-            async for chunk in _get_client().generate_raw_stream_async(
-                request=body,
-                model=str(model["antigravity_model"]),
-            ):
-                payload = _gemini_unwrap_response(chunk)
-                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-            yield "data: [DONE]\n\n"
-        except Exception as exc:
-            log.warning("Gemini streamGenerateContent failed; falling back to non-streaming: %s", exc)
-            try:
-                data = await asyncio.to_thread(
-                    _get_client().generate_raw,
-                    request=body,
-                    model=str(model["antigravity_model"]),
-                )
-                yield f"data: {json.dumps(_gemini_unwrap_response(data), ensure_ascii=False)}\n\n"
-            except Exception as inner:
-                payload = {"error": {"code": 502, "message": f"Antigravity upstream error: {inner}", "status": "UNAVAILABLE"}}
-                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-            yield "data: [DONE]\n\n"
-
-    return StreamingResponse(_gen(), media_type="text/event-stream")
+    return _gemini_streaming_response(body=body, antigravity_model=str(model["antigravity_model"]))
 
 
 @app.get("/v1beta/operations")

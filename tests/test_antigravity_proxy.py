@@ -328,6 +328,24 @@ def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
     assert seen["request"]["tools"] == [{"google_search": {}}]
 
 
+def test_gemini_generate_content_alt_sse(monkeypatch):
+    class FakeClient:
+        async def generate_raw_stream_async(self, *, request, model=""):
+            yield {"response": {"candidates": [{"content": {"parts": [{"text": "alt stream"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    with client.stream("POST", "/v1beta/models/gemini-3-flash-agent:generateContent?alt=sse", json={
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+    }) as response:
+        body = response.read().decode()
+
+    assert response.status_code == 200
+    assert "alt stream" in body
+    assert "data: [DONE]" in body
+
+
 def test_gemini_predict_and_predict_long_running(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
 
@@ -495,6 +513,40 @@ def test_gemini_batches_create_get_cancel_delete(tmp_path, monkeypatch):
     assert cancelled.status_code == 200
     assert deleted.status_code == 200
     assert missing.status_code == 404
+
+
+def test_gemini_snake_case_query_aliases(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    first = client.post("/v1beta/batches", json={
+        "model": "models/gemini-3-flash-agent",
+        "displayName": "first",
+        "requests": [{"contents": [{"role": "user", "parts": [{"text": "a"}]}]}],
+    }).json()
+    client.post("/v1beta/batches", json={
+        "model": "models/gemini-3-flash-agent",
+        "displayName": "second",
+        "requests": [{"contents": [{"role": "user", "parts": [{"text": "b"}]}]}],
+    })
+
+    listed = client.get("/v1beta/batches?page_size=1&page_token=0")
+    patched = client.patch(f"/v1beta/{first['name']}:updateGenerateContentBatch?update_mask=displayName", json={
+        "displayName": "patched",
+    })
+
+    assert listed.status_code == 200
+    assert len(listed.json()["batches"]) == 1
+    assert listed.json()["nextPageToken"] == "1"
+    assert patched.status_code == 200
+    assert patched.json()["displayName"] == "patched"
 
 
 def test_gemini_interactions_create_previous_store_and_stream(tmp_path, monkeypatch):
