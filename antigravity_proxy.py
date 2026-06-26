@@ -1061,6 +1061,129 @@ def _gemini_apply_file_search(body: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
+def _gemini_tuned_root() -> Path:
+    return Path(os.getenv("ANTIGRAVITY_GEMINI_TUNED_MODELS_DIR", "data/gemini_tuned_models")).expanduser()
+
+
+def _gemini_tuned_index_path() -> Path:
+    return _gemini_tuned_root() / "index.json"
+
+
+def _gemini_load_tuned_index() -> dict[str, dict[str, Any]]:
+    path = _gemini_tuned_index_path()
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        log.warning("Failed to read Gemini tunedModels index; starting empty.")
+        return {}
+
+
+def _gemini_save_tuned_index(index: dict[str, dict[str, Any]]) -> None:
+    root = _gemini_tuned_root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = _gemini_tuned_index_path()
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _gemini_tuned_name(name: str) -> str:
+    key = name.strip().strip("/")
+    if key.startswith("v1beta/"):
+        key = key[len("v1beta/"):]
+    if key.startswith("tunedModels/"):
+        return key
+    return "tunedModels/" + key
+
+
+def _gemini_tuned_resource(meta: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": meta["name"],
+        "displayName": meta.get("displayName") or meta["name"].split("/", 1)[-1],
+        "description": meta.get("description") or "",
+        "baseModel": meta.get("baseModel") or "models/gemini-3-flash-agent",
+        "state": meta.get("state") or "ACTIVE",
+        "createTime": meta.get("createTime"),
+        "updateTime": meta.get("updateTime"),
+        "temperature": meta.get("temperature"),
+        "topP": meta.get("topP"),
+        "topK": meta.get("topK"),
+    }
+
+
+def _gemini_create_tuned_model(body: dict[str, Any]) -> dict[str, Any]:
+    body = _gemini_normalize_request(body)
+    tuned_model = body.get("tunedModel") if isinstance(body.get("tunedModel"), dict) else body
+    source_id = str(body.get("tunedModelId") or body.get("tuned_model_id") or "").strip()
+    model_id = source_id or ("tuned_" + uuid.uuid4().hex)
+    name = _gemini_tuned_name(model_id)
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    meta = {
+        "name": name,
+        "displayName": tuned_model.get("displayName") or tuned_model.get("display_name") or model_id,
+        "description": tuned_model.get("description") or "",
+        "baseModel": tuned_model.get("baseModel") or tuned_model.get("base_model") or body.get("baseModel") or "models/gemini-3-flash-agent",
+        "state": "ACTIVE",
+        "createTime": now,
+        "updateTime": now,
+        "temperature": tuned_model.get("temperature"),
+        "topP": tuned_model.get("topP"),
+        "topK": tuned_model.get("topK"),
+        "permissions": {},
+    }
+    index = _gemini_load_tuned_index()
+    index[name] = meta
+    _gemini_save_tuned_index(index)
+    return _gemini_tuned_resource(meta)
+
+
+def _gemini_get_tuned_meta(name: str) -> dict[str, Any] | None:
+    return _gemini_load_tuned_index().get(_gemini_tuned_name(name))
+
+
+def _gemini_tuned_base_model(name: str) -> dict[str, Any]:
+    meta = _gemini_get_tuned_meta(name)
+    if not meta:
+        raise HTTPException(status_code=404, detail=f"Tuned model '{name}' not found.")
+    base = str(meta.get("baseModel") or "models/gemini-3-flash-agent")
+    return _resolve_gemini_model(base)
+
+
+def _gemini_permission_name(parent: str, permission_id: str) -> str:
+    return f"{_gemini_tuned_name(parent)}/permissions/{permission_id.strip().strip('/')}"
+
+
+def _gemini_permission_resource(parent: str, perm: dict[str, Any]) -> dict[str, Any]:
+    parent_name = _gemini_tuned_name(parent)
+    pid = str(perm.get("id") or perm.get("name", "").rsplit("/", 1)[-1] or ("perm_" + uuid.uuid4().hex))
+    return {
+        "name": f"{parent_name}/permissions/{pid}",
+        "granteeType": perm.get("granteeType") or perm.get("grantee_type") or "USER",
+        "emailAddress": perm.get("emailAddress") or perm.get("email_address"),
+        "role": perm.get("role") or "READER",
+    }
+
+
+def _gemini_store_permission(parent: str, body: dict[str, Any]) -> dict[str, Any]:
+    index = _gemini_load_tuned_index()
+    parent_name = _gemini_tuned_name(parent)
+    meta = index.get(parent_name)
+    if not meta:
+        raise HTTPException(status_code=404, detail=f"Tuned model '{parent}' not found.")
+    permission_id = "perm_" + uuid.uuid4().hex
+    perm = _gemini_permission_resource(parent_name, {"id": permission_id, **_gemini_normalize_request(body)})
+    meta.setdefault("permissions", {})[perm["name"]] = perm
+    meta["updateTime"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    index[parent_name] = meta
+    _gemini_save_tuned_index(index)
+    return perm
+
+
 # ---------------------------------------------------------------------------
 # OpenAI-compatible Pydantic schemas
 # ---------------------------------------------------------------------------
@@ -2950,6 +3073,198 @@ async def gemini_delete_file_search_document(store_id: str, document_id: str):
     meta["updateTime"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     index[store_name] = meta
     _gemini_save_fss_index(index)
+    return JSONResponse({})
+
+
+@app.post("/v1beta/tunedModels")
+async def gemini_create_tuned_model(request: Request):
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        tuned = _gemini_create_tuned_model(body)
+        operation = {
+            "name": "operations/createTunedModel-" + uuid.uuid4().hex,
+            "metadata": {
+                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.CreateTunedModelMetadata",
+                "tunedModel": tuned["name"],
+            },
+            "done": True,
+            "response": {
+                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.TunedModel",
+                **tuned,
+            },
+        }
+        return _gemini_store_operation(operation)
+    except HTTPException as exc:
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT")
+    except Exception as exc:
+        log.exception("Gemini tunedModels create failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.get("/v1beta/tunedModels")
+async def gemini_list_tuned_models(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+    models = [_gemini_tuned_resource(meta) for meta in _gemini_load_tuned_index().values()]
+    models.sort(key=lambda item: item.get("createTime") or "")
+    start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
+    end = start + pageSize
+    return {"tunedModels": models[start:end], "nextPageToken": str(end) if end < len(models) else ""}
+
+
+@app.get("/v1beta/tunedModels/{tuned_model_id}")
+async def gemini_get_tuned_model(tuned_model_id: str):
+    meta = _gemini_get_tuned_meta(tuned_model_id)
+    if not meta:
+        return _gemini_error_response(f"Tuned model '{tuned_model_id}' not found.", status_code=404, status="NOT_FOUND")
+    return _gemini_tuned_resource(meta)
+
+
+@app.patch("/v1beta/tunedModels/{tuned_model_id}")
+async def gemini_patch_tuned_model(tuned_model_id: str, request: Request):
+    index = _gemini_load_tuned_index()
+    name = _gemini_tuned_name(tuned_model_id)
+    meta = index.get(name)
+    if not meta:
+        return _gemini_error_response(f"Tuned model '{tuned_model_id}' not found.", status_code=404, status="NOT_FOUND")
+    body = _gemini_normalize_request(await request.json())
+    if isinstance(body, dict):
+        for key in ("displayName", "description", "temperature", "topP", "topK"):
+            if key in body:
+                meta[key] = body[key]
+        meta["updateTime"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        index[name] = meta
+        _gemini_save_tuned_index(index)
+    return _gemini_tuned_resource(meta)
+
+
+@app.delete("/v1beta/tunedModels/{tuned_model_id}")
+async def gemini_delete_tuned_model(tuned_model_id: str):
+    index = _gemini_load_tuned_index()
+    name = _gemini_tuned_name(tuned_model_id)
+    if name not in index:
+        return _gemini_error_response(f"Tuned model '{tuned_model_id}' not found.", status_code=404, status="NOT_FOUND")
+    index.pop(name, None)
+    _gemini_save_tuned_index(index)
+    return JSONResponse({})
+
+
+@app.post("/v1beta/tunedModels/{tuned_model_id}:generateContent")
+async def gemini_tuned_generate_content(tuned_model_id: str, request: Request):
+    try:
+        model = _gemini_tuned_base_model(tuned_model_id)
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body = _gemini_inline_local_files(_gemini_apply_file_search(_gemini_apply_cached_content(body)))
+        body.pop("model", None)
+        data = await asyncio.to_thread(_get_client().generate_raw, request=body, model=str(model["antigravity_model"]))
+        return JSONResponse(_gemini_unwrap_response(data))
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini tuned model generateContent failed")
+        return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
+
+
+@app.post("/v1beta/tunedModels/{tuned_model_id}:countTokens")
+async def gemini_tuned_count_tokens(tuned_model_id: str, request: Request):
+    try:
+        _gemini_tuned_base_model(tuned_model_id)
+        body = _gemini_normalize_request(await request.json())
+        if isinstance(body, dict):
+            body = _gemini_apply_file_search(_gemini_apply_cached_content(body))
+        return {"totalTokens": _estimate_prompt_tokens(_gemini_count_tokens_request(body if isinstance(body, dict) else {}))}
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+
+
+@app.get("/v1beta/tunedModels/{tuned_model_id}/permissions")
+async def gemini_list_tuned_model_permissions(tuned_model_id: str):
+    meta = _gemini_get_tuned_meta(tuned_model_id)
+    if not meta:
+        return _gemini_error_response(f"Tuned model '{tuned_model_id}' not found.", status_code=404, status="NOT_FOUND")
+    return {"permissions": list((meta.get("permissions") or {}).values())}
+
+
+@app.post("/v1beta/tunedModels/{tuned_model_id}/permissions")
+async def gemini_create_tuned_model_permission(tuned_model_id: str, request: Request):
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        return _gemini_store_permission(tuned_model_id, body)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+
+
+@app.get("/v1beta/tunedModels/{tuned_model_id}/permissions/{permission_id}")
+async def gemini_get_tuned_model_permission(tuned_model_id: str, permission_id: str):
+    meta = _gemini_get_tuned_meta(tuned_model_id)
+    if not meta:
+        return _gemini_error_response(f"Tuned model '{tuned_model_id}' not found.", status_code=404, status="NOT_FOUND")
+    perm = (meta.get("permissions") or {}).get(_gemini_permission_name(tuned_model_id, permission_id))
+    if not perm:
+        return _gemini_error_response(f"Permission '{permission_id}' not found.", status_code=404, status="NOT_FOUND")
+    return perm
+
+
+@app.patch("/v1beta/tunedModels/{tuned_model_id}/permissions/{permission_id}")
+async def gemini_patch_tuned_model_permission(tuned_model_id: str, permission_id: str, request: Request):
+    index = _gemini_load_tuned_index()
+    name = _gemini_tuned_name(tuned_model_id)
+    meta = index.get(name)
+    if not meta:
+        return _gemini_error_response(f"Tuned model '{tuned_model_id}' not found.", status_code=404, status="NOT_FOUND")
+    perm_name = _gemini_permission_name(tuned_model_id, permission_id)
+    perm = (meta.get("permissions") or {}).get(perm_name)
+    if not perm:
+        return _gemini_error_response(f"Permission '{permission_id}' not found.", status_code=404, status="NOT_FOUND")
+    body = _gemini_normalize_request(await request.json())
+    if isinstance(body, dict):
+        for key in ("role", "granteeType", "emailAddress"):
+            if key in body:
+                perm[key] = body[key]
+    meta.setdefault("permissions", {})[perm_name] = perm
+    index[name] = meta
+    _gemini_save_tuned_index(index)
+    return perm
+
+
+@app.post("/v1beta/tunedModels/{tuned_model_id}/permissions/{permission_id}:transferOwnership")
+async def gemini_transfer_tuned_model_permission(tuned_model_id: str, permission_id: str):
+    index = _gemini_load_tuned_index()
+    name = _gemini_tuned_name(tuned_model_id)
+    meta = index.get(name)
+    if not meta:
+        return _gemini_error_response(f"Tuned model '{tuned_model_id}' not found.", status_code=404, status="NOT_FOUND")
+    perm_name = _gemini_permission_name(tuned_model_id, permission_id)
+    perm = (meta.get("permissions") or {}).get(perm_name)
+    if not perm:
+        return _gemini_error_response(f"Permission '{permission_id}' not found.", status_code=404, status="NOT_FOUND")
+    perm["role"] = "OWNER"
+    meta.setdefault("permissions", {})[perm_name] = perm
+    index[name] = meta
+    _gemini_save_tuned_index(index)
+    return JSONResponse({})
+
+
+@app.delete("/v1beta/tunedModels/{tuned_model_id}/permissions/{permission_id}")
+async def gemini_delete_tuned_model_permission(tuned_model_id: str, permission_id: str):
+    index = _gemini_load_tuned_index()
+    name = _gemini_tuned_name(tuned_model_id)
+    meta = index.get(name)
+    if not meta:
+        return _gemini_error_response(f"Tuned model '{tuned_model_id}' not found.", status_code=404, status="NOT_FOUND")
+    perm_name = _gemini_permission_name(tuned_model_id, permission_id)
+    if perm_name not in (meta.get("permissions") or {}):
+        return _gemini_error_response(f"Permission '{permission_id}' not found.", status_code=404, status="NOT_FOUND")
+    meta["permissions"].pop(perm_name, None)
+    index[name] = meta
+    _gemini_save_tuned_index(index)
     return JSONResponse({})
 
 

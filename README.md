@@ -363,6 +363,19 @@ Implemented Gemini-compatible routes:
 - `GET /v1beta/fileSearchStores/{store}/documents`
 - `GET /v1beta/fileSearchStores/{store}/documents/{document}`
 - `DELETE /v1beta/fileSearchStores/{store}/documents/{document}`
+- `POST /v1beta/tunedModels`
+- `GET /v1beta/tunedModels`
+- `GET /v1beta/tunedModels/{tuned_model}`
+- `PATCH /v1beta/tunedModels/{tuned_model}`
+- `DELETE /v1beta/tunedModels/{tuned_model}`
+- `POST /v1beta/tunedModels/{tuned_model}:generateContent`
+- `POST /v1beta/tunedModels/{tuned_model}:countTokens`
+- `GET /v1beta/tunedModels/{tuned_model}/permissions`
+- `POST /v1beta/tunedModels/{tuned_model}/permissions`
+- `GET /v1beta/tunedModels/{tuned_model}/permissions/{permission}`
+- `PATCH /v1beta/tunedModels/{tuned_model}/permissions/{permission}`
+- `POST /v1beta/tunedModels/{tuned_model}/permissions/{permission}:transferOwnership`
+- `DELETE /v1beta/tunedModels/{tuned_model}/permissions/{permission}`
 
 Example:
 
@@ -456,6 +469,14 @@ File search stores:
   against these stores and injects the best matching document snippets into the
   outgoing Gemini request context.
 
+Tuned models and permissions:
+
+- `tunedModels` are implemented as local aliases over a base Antigravity model.
+- Creating a tuned model stores metadata and returns an immediately completed
+  operation; it does not run real model training.
+- `tunedModels/{id}:generateContent` forwards to the configured `baseModel`.
+- `permissions` are stored locally for Gemini SDK compatibility.
+
 Notes:
 
 - Model names are exposed as Gemini resources like
@@ -470,7 +491,9 @@ Notes:
   override with `ANTIGRAVITY_GEMINI_OPERATIONS_DIR`.
 - File search stores are stored locally under `data/gemini_file_search_stores`;
   override with `ANTIGRAVITY_GEMINI_FILE_SEARCH_STORES_DIR`.
-- Tuned models, live API, interactions, permissions, true async long-running
+- Tuned model metadata and permissions are stored locally under
+  `data/gemini_tuned_models`; override with `ANTIGRAVITY_GEMINI_TUNED_MODELS_DIR`.
+- Live API, interactions, real model tuning/training, true async long-running
   jobs, semantic Google embeddings, and semantic/vector `tools.file_search`
   retrieval are not fully implemented yet.
 

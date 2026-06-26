@@ -487,6 +487,67 @@ def test_gemini_file_search_tool_injects_local_context(tmp_path, monkeypatch):
     assert "tools" not in seen["request"]
 
 
+def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_TUNED_MODELS_DIR", str(tmp_path / "tuned"))
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            seen["model"] = model
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "tuned ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    created = client.post("/v1beta/tunedModels", json={
+        "tunedModelId": "my_tuned",
+        "tunedModel": {
+            "displayName": "My tuned",
+            "baseModel": "models/gemini-3-flash-agent",
+        },
+    })
+    assert created.status_code == 200
+    tuned = created.json()["response"]
+    assert tuned["name"] == "tunedModels/my_tuned"
+
+    listed = client.get("/v1beta/tunedModels")
+    fetched = client.get("/v1beta/tunedModels/my_tuned")
+    patched = client.patch("/v1beta/tunedModels/my_tuned", json={"description": "updated"})
+    assert listed.status_code == 200
+    assert fetched.json()["displayName"] == "My tuned"
+    assert patched.json()["description"] == "updated"
+
+    perm = client.post("/v1beta/tunedModels/my_tuned/permissions", json={
+        "emailAddress": "user@example.com",
+        "role": "READER",
+    })
+    assert perm.status_code == 200
+    perm_id = perm.json()["name"].rsplit("/", 1)[-1]
+    promoted = client.post(f"/v1beta/tunedModels/my_tuned/permissions/{perm_id}:transferOwnership")
+    fetched_perm = client.get(f"/v1beta/tunedModels/my_tuned/permissions/{perm_id}")
+    assert promoted.status_code == 200
+    assert fetched_perm.json()["role"] == "OWNER"
+
+    generated = client.post("/v1beta/tunedModels/my_tuned:generateContent", json={
+        "contents": [{"role": "user", "parts": [{"text": "hello tuned"}]}]
+    })
+    assert generated.status_code == 200
+    assert seen["model"] == "gemini-3-flash-agent"
+    assert seen["request"]["contents"][0]["parts"][0]["text"] == "hello tuned"
+
+    counted = client.post("/v1beta/tunedModels/my_tuned:countTokens", json={
+        "contents": [{"role": "user", "parts": [{"text": "hello tuned"}]}]
+    })
+    assert counted.status_code == 200
+    assert counted.json()["totalTokens"] > 0
+
+    deleted_perm = client.delete(f"/v1beta/tunedModels/my_tuned/permissions/{perm_id}")
+    deleted_model = client.delete("/v1beta/tunedModels/my_tuned")
+    assert deleted_perm.status_code == 200
+    assert deleted_model.status_code == 200
+
+
 def test_admin_refresh_requires_configured_api_key(monkeypatch):
     monkeypatch.delenv("ANTIGRAVITY_PROXY_API_KEY", raising=False)
     client = TestClient(proxy.app)
