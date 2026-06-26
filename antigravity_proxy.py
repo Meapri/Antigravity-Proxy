@@ -2570,6 +2570,12 @@ def _gemini_generated_file_name(name: str) -> str:
 
 
 def _gemini_generated_file_resource(meta: dict[str, Any]) -> dict[str, Any]:
+    sha256_hash = str(meta.get("sha256Hash") or "")
+    if len(sha256_hash) == 64 and all(ch in "0123456789abcdefABCDEF" for ch in sha256_hash):
+        try:
+            sha256_hash = base64.b64encode(bytes.fromhex(sha256_hash)).decode("ascii")
+        except ValueError:
+            pass
     return {
         "name": meta["name"],
         "displayName": meta.get("displayName") or meta["name"].split("/", 1)[-1],
@@ -2578,9 +2584,11 @@ def _gemini_generated_file_resource(meta: dict[str, Any]) -> dict[str, Any]:
         "createTime": meta.get("createTime") or _gemini_now_iso(),
         "updateTime": meta.get("updateTime") or meta.get("createTime") or _gemini_now_iso(),
         "expirationTime": meta.get("expirationTime"),
-        "sha256Hash": meta.get("sha256Hash") or "",
+        "sha256Hash": sha256_hash,
         "uri": meta.get("uri") or meta["name"],
-        "state": meta.get("state") or "ACTIVE",
+        "downloadUri": meta.get("downloadUri") or f"{meta.get('uri') or meta['name']}:download",
+        "state": _gemini_file_state(meta.get("state")),
+        "source": _gemini_file_source(meta.get("source") or "GENERATED", registered=False),
     }
 
 
@@ -2610,7 +2618,9 @@ def _gemini_store_generated_file(
         "updateTime": now,
         "sha256Hash": hashlib.sha256(data).hexdigest(),
         "uri": f"generatedFiles/{file_id}",
+        "downloadUri": f"generatedFiles/{file_id}:download",
         "state": "ACTIVE",
+        "source": "GENERATED",
         "path": str(blob_path),
         "sourceOperation": source_operation,
     }

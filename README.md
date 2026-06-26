@@ -916,7 +916,9 @@ Generated files:
   the local generation call up to 8 images when `numberOfImages` or
   `sampleCount` is provided.
 - Generated files are stored locally under `data/gemini_generated_files`;
-  override with `ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR`.
+  override with `ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR`. Generated file
+  resources expose Gemini File-like metadata including `downloadUri`,
+  base64-encoded `sha256Hash`, `state: ACTIVE`, and `source: GENERATED`.
 
 Video generation:
 

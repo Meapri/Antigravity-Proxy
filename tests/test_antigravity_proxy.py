@@ -3233,10 +3233,17 @@ def test_openai_image_generation_registers_gemini_generated_file(tmp_path, monke
 
     assert listed.status_code == 200
     assert listed.json()["generatedFiles"][0]["name"] == generated_name
+    assert listed.json()["generatedFiles"][0]["source"] == "GENERATED"
+    assert listed.json()["generatedFiles"][0]["state"] == "ACTIVE"
+    assert listed.json()["generatedFiles"][0]["downloadUri"].endswith(":download")
+    assert listed.json()["generatedFiles"][0]["sha256Hash"] == "8ISxNRxBzzxVTZMqOpeJkqObkC8onG4hO2Qow7OFQe0="
     assert operations.status_code == 200
     assert operations.json()["operations"][0]["metadata"]["generatedFile"] == generated_name
     assert fetched.status_code == 200
     assert fetched.json()["mimeType"] == "image/png"
+    assert fetched.json()["source"] == "GENERATED"
+    assert fetched.json()["downloadUri"].endswith(":download")
+    assert fetched.json()["sha256Hash"] == "8ISxNRxBzzxVTZMqOpeJkqObkC8onG4hO2Qow7OFQe0="
     assert downloaded.status_code == 200
     assert downloaded.content == b"fake-png"
     assert v1_listed.status_code == 200
@@ -3251,6 +3258,7 @@ def test_openai_image_generation_registers_gemini_generated_file(tmp_path, monke
     assert v1_cancelled.json() == {}
     assert v1_fetched.status_code == 200
     assert v1_fetched.json()["mimeType"] == "image/png"
+    assert v1_fetched.json()["source"] == "GENERATED"
     assert v1_downloaded.status_code == 200
     assert v1_downloaded.content == b"fake-png"
     assert v1_deleted.status_code == 200
