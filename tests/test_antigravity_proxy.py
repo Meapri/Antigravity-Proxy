@@ -1092,7 +1092,7 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_WEBHOOKS_DIR", str(tmp_path / "webhooks"))
     client = TestClient(proxy.app)
 
-    created = client.post("/v1beta/webhooks", json={
+    created = client.post("/v1/webhooks", json={
         "webhook": {
             "display_name": "Batch updates",
             "target_uri": "https://example.test/hook",
@@ -1135,14 +1135,18 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
     assert malformed.status_code == 400
     assert malformed.json()["error"]["status"] == "INVALID_ARGUMENT"
 
-    rotated = client.post(f"/v1beta/{webhook['name']}:rotateSigningSecret")
+    pinged = client.post(f"/v1/{webhook['name']}:ping")
+    assert pinged.status_code == 200
+    assert pinged.json()["deliveryAttempt"]["eventType"] == "webhooks.ping"
+
+    rotated = client.post(f"/v1/{webhook['name']}:rotateSigningSecret")
     assert rotated.status_code == 200
     assert rotated.json()["newSigningSecret"]["secret"]
     assert rotated.json()["newSigningSecret"]["secret"] != webhook["newSigningSecret"]["secret"]
     assert "secret" not in rotated.json()["signingSecrets"][0]
 
-    deleted = client.delete(f"/v1beta/{webhook['name']}")
-    missing = client.get(f"/v1beta/{webhook['name']}")
+    deleted = client.delete(f"/v1/{webhook['name']}")
+    missing = client.get(f"/v1/{webhook['name']}")
     assert deleted.status_code == 200
     assert missing.status_code == 404
 

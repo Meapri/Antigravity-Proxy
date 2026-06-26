@@ -1244,8 +1244,10 @@ def _gemini_save_webhooks_index(index: dict[str, dict[str, Any]]) -> None:
 
 def _gemini_webhook_name(name: str) -> str:
     key = name.strip().strip("/")
-    if key.startswith("v1beta/"):
-        key = key[len("v1beta/"):]
+    for prefix in ("v1beta/", "v1/"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+            break
     if key.startswith("webhooks/"):
         return key
     return "webhooks/" + key
@@ -2932,7 +2934,6 @@ def _gemini_stable_alias_path(path: str) -> str:
         "corpora",
         "fileSearchStores",
         "tunedModels",
-        "webhooks",
     )
     if suffix.startswith(stable_prefixes):
         return "/v1beta/" + suffix
@@ -6213,6 +6214,7 @@ async def gemini_delete_batch(batch_id: str):
     return JSONResponse({})
 
 
+@app.post("/v1/webhooks")
 @app.post("/v1beta/webhooks")
 async def gemini_create_webhook(request: Request):
     """Gemini-compatible webhooks.create stored locally.
@@ -6256,6 +6258,7 @@ async def gemini_create_webhook(request: Request):
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.get("/v1/webhooks")
 @app.get("/v1beta/webhooks")
 async def gemini_list_webhooks(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
     webhooks = list(_gemini_load_webhooks_index().values())
@@ -6268,6 +6271,7 @@ async def gemini_list_webhooks(pageSize: int = Query(default=100, ge=1, le=1000)
     }
 
 
+@app.get("/v1/webhooks/{webhook_id:path}")
 @app.get("/v1beta/webhooks/{webhook_id:path}")
 async def gemini_get_webhook(webhook_id: str):
     webhook = _gemini_get_webhook(webhook_id)
@@ -6276,6 +6280,7 @@ async def gemini_get_webhook(webhook_id: str):
     return _gemini_webhook_public_resource(webhook)
 
 
+@app.patch("/v1/webhooks/{webhook_id:path}")
 @app.patch("/v1beta/webhooks/{webhook_id:path}")
 async def gemini_patch_webhook(webhook_id: str, request: Request, updateMask: str | None = None):
     try:
@@ -6315,6 +6320,7 @@ async def gemini_patch_webhook(webhook_id: str, request: Request, updateMask: st
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.delete("/v1/webhooks/{webhook_id:path}")
 @app.delete("/v1beta/webhooks/{webhook_id:path}")
 async def gemini_delete_webhook(webhook_id: str):
     name = _gemini_webhook_name(webhook_id)
@@ -6326,6 +6332,7 @@ async def gemini_delete_webhook(webhook_id: str):
     return JSONResponse({})
 
 
+@app.post("/v1/webhooks/{webhook_id:path}:ping")
 @app.post("/v1beta/webhooks/{webhook_id:path}:ping")
 async def gemini_ping_webhook(webhook_id: str):
     name = _gemini_webhook_name(webhook_id)
@@ -6341,6 +6348,7 @@ async def gemini_ping_webhook(webhook_id: str):
     return {"deliveryAttempt": attempt}
 
 
+@app.post("/v1/webhooks/{webhook_id:path}:rotateSigningSecret")
 @app.post("/v1beta/webhooks/{webhook_id:path}:rotateSigningSecret")
 async def gemini_rotate_webhook_signing_secret(webhook_id: str):
     name = _gemini_webhook_name(webhook_id)

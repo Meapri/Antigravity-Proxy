@@ -398,6 +398,13 @@ Implemented Gemini-compatible routes:
 - `PATCH /v1beta/batches/{batch}:updateGenerateContentBatch`
 - `PATCH /v1beta/batches/{batch}:updateEmbedContentBatch`
 - `DELETE /v1beta/batches/{batch}`
+- `POST /v1/webhooks`
+- `GET /v1/webhooks`
+- `GET /v1/webhooks/{webhook}`
+- `PATCH /v1/webhooks/{webhook}`
+- `DELETE /v1/webhooks/{webhook}`
+- `POST /v1/webhooks/{webhook}:ping`
+- `POST /v1/webhooks/{webhook}:rotateSigningSecret`
 - `POST /v1beta/webhooks`
 - `GET /v1beta/webhooks`
 - `GET /v1beta/webhooks/{webhook}`
