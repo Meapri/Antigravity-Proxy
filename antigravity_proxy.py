@@ -389,6 +389,10 @@ _GEMINI_KEY_ALIASES = {
     "httpOptions": "httpOptions",
     "request_options": "requestOptions",
     "requestOptions": "requestOptions",
+    "provider_options": "providerOptions",
+    "providerOptions": "providerOptions",
+    "provider_metadata": "providerMetadata",
+    "providerMetadata": "providerMetadata",
     "api_version": "apiVersion",
     "apiVersion": "apiVersion",
     "base_url": "baseUrl",
@@ -534,6 +538,9 @@ _GEMINI_GENERATION_CONFIG_KEYS = {
 _GEMINI_SDK_TRANSPORT_KEYS = {
     "httpOptions",
     "requestOptions",
+    "providerOptions",
+    "providerMetadata",
+    "google",
     "apiVersion",
     "baseUrl",
     "headers",
@@ -604,6 +611,13 @@ def _gemini_normalize_generation_config(value: Any) -> Any:
     for key in ("responseLogprobs",):
         if key in out:
             out[key] = _gemini_bool_value(out[key])
+    if isinstance(out.get("thinkingConfig"), dict):
+        thinking = _gemini_normalize_request(out["thinkingConfig"])
+        if "thinkingBudget" in thinking:
+            thinking["thinkingBudget"] = _gemini_int_value(thinking["thinkingBudget"])
+        if "includeThoughts" in thinking:
+            thinking["includeThoughts"] = _gemini_bool_value(thinking["includeThoughts"])
+        out["thinkingConfig"] = thinking
     return out
 
 
@@ -672,16 +686,34 @@ def _gemini_normalize_request(value: Any) -> Any:
     return out
 
 
+def _gemini_provider_google_config(body: dict[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for key in ("providerOptions", "providerMetadata"):
+        options = body.get(key)
+        if not isinstance(options, dict):
+            continue
+        google = options.get("google")
+        if isinstance(google, dict):
+            merged.update(_gemini_normalize_request(google))
+    google = body.get("google")
+    if isinstance(google, dict):
+        merged.update(_gemini_normalize_request(google))
+    return merged
+
+
 def _gemini_apply_generate_config(body: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(body, dict):
         return body
+    provider_config = _gemini_provider_google_config(body)
     config = body.get("config")
     out = {key: value for key, value in body.items() if key not in _GEMINI_SDK_TRANSPORT_KEYS and key != "config"}
-    if not isinstance(config, dict):
+    if not provider_config and not isinstance(config, dict):
         return out
-    config = _gemini_normalize_request(config)
+    merged_config = dict(provider_config)
+    if isinstance(config, dict):
+        merged_config.update(_gemini_normalize_request(config))
     gen = _gemini_normalize_generation_config(out.get("generationConfig") or {}) if isinstance(out.get("generationConfig"), dict) else {}
-    for key, value in config.items():
+    for key, value in merged_config.items():
         if value is None:
             continue
         if key in _GEMINI_SDK_TRANSPORT_KEYS:

@@ -821,6 +821,48 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
     assert seen["request"]["generationConfig"]["responseSchema"]["type"] == "object"
 
 
+def test_gemini_generate_content_accepts_provider_google_options(monkeypatch):
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "hi",
+        "provider_options": {
+            "google": {
+                "system_instruction": "from provider",
+                "max_output_tokens": "12",
+                "thinking_config": {"thinking_budget": "64", "include_thoughts": "true"},
+                "tool_config": {"function_calling_config": {"mode": "validated"}},
+                "service_tier": "FLEX",
+            }
+        },
+        "config": {
+            "max_output_tokens": "18",
+            "response_mime_type": "text/plain",
+        },
+    })
+
+    assert response.status_code == 200
+    assert "providerOptions" not in seen["request"]
+    assert "google" not in seen["request"]
+    assert seen["request"]["systemInstruction"] == {"role": "system", "parts": [{"text": "from provider"}]}
+    assert seen["request"]["serviceTier"] == "FLEX"
+    assert seen["request"]["toolConfig"]["functionCallingConfig"] == {"mode": "VALIDATED"}
+    assert seen["request"]["generationConfig"]["maxOutputTokens"] == 18
+    assert seen["request"]["generationConfig"]["responseMimeType"] == "text/plain"
+    assert seen["request"]["generationConfig"]["thinkingConfig"] == {
+        "thinkingBudget": 64,
+        "includeThoughts": True,
+    }
+
+
 def test_gemini_generate_content_normalizes_tools_unions(monkeypatch):
     seen = {}
 
