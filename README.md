@@ -559,6 +559,9 @@ curl http://127.0.0.1:8765/v1beta/cachedContents \
 Then pass the returned `name` as `cachedContent` in `generateContent`. The proxy
 merges local cached content into the outgoing Antigravity request because the
 upstream internal endpoint does not expose public Gemini cache objects.
+Create and patch calls also accept SDK wrapper bodies like
+`{"cachedContent": {"ttl": "3600s"}}`; patch supports Gemini-style `ttl` or
+`expireTime` updates with `update_mask=ttl` / `updateMask=expireTime`.
 
 Embeddings and batch operations:
 

@@ -1211,6 +1211,36 @@ def test_gemini_cached_contents_merge_into_generate_request(tmp_path, monkeypatc
     assert listed.status_code == 200
     assert listed.json()["cachedContents"][0]["name"] == cache_name
 
+    wrapped_created = client.post("/v1beta/cachedContents", json={
+        "cachedContent": {
+            "model": "models/gemini-3-flash-agent",
+            "contents": [{"role": "user", "parts": [{"text": "wrapped cached context"}]}],
+            "ttl": "60s",
+        }
+    })
+    assert wrapped_created.status_code == 200
+    assert wrapped_created.json()["model"] == "models/gemini-3-flash-agent"
+    assert wrapped_created.json()["expireTime"]
+
+    patched = client.patch(f"/v1beta/{cache_name}?update_mask=ttl", json={
+        "cachedContent": {"ttl": "120s"}
+    })
+    assert patched.status_code == 200
+    assert patched.json()["ttl"] == "120s"
+    assert patched.json()["expireTime"]
+
+    patched_expire = client.patch(f"/v1beta/{cache_name}?updateMask=expireTime", json={
+        "expireTime": "2099-01-01T00:00:00Z"
+    })
+    assert patched_expire.status_code == 200
+    assert patched_expire.json()["expireTime"] == "2099-01-01T00:00:00Z"
+    assert "ttl" not in patched_expire.json()
+
+    bad_patch = client.patch(f"/v1beta/{cache_name}?updateMask=contents", json={
+        "contents": [{"role": "user", "parts": [{"text": "no"}]}],
+    })
+    assert bad_patch.status_code == 400
+
     response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
         "cachedContent": cache_name,
         "contents": [{"role": "user", "parts": [{"text": "new prompt"}]}],

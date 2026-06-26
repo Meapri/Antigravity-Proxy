@@ -1742,18 +1742,63 @@ def _gemini_cached_resource(meta: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _gemini_duration_seconds(value: Any) -> int | None:
+    if not isinstance(value, str) or not value.endswith("s"):
+        return None
+    try:
+        return max(1, int(float(value[:-1])))
+    except ValueError:
+        return None
+
+
+def _gemini_cached_body(body: Any) -> dict[str, Any]:
+    normalized = _gemini_normalize_request(body)
+    if not isinstance(normalized, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+    wrapped = normalized.get("cachedContent")
+    if isinstance(wrapped, dict):
+        merged = dict(wrapped)
+        for key in ("ttl", "expireTime"):
+            if key in normalized and key not in merged:
+                merged[key] = normalized[key]
+        return merged
+    return normalized
+
+
+def _gemini_cached_update_mask(update_mask: str | None) -> set[str] | None:
+    if not update_mask:
+        return None
+    aliases = {
+        "ttl": "ttl",
+        "expire_time": "expireTime",
+        "expiretime": "expireTime",
+        "expireTime": "expireTime",
+        "cachedContent.ttl": "ttl",
+        "cached_content.ttl": "ttl",
+        "cachedContent.expireTime": "expireTime",
+        "cached_content.expire_time": "expireTime",
+    }
+    fields: set[str] = set()
+    for raw in update_mask.split(","):
+        key = raw.strip()
+        if not key:
+            continue
+        fields.add(aliases.get(key, aliases.get(key.rsplit(".", 1)[-1], key)))
+    unsupported = fields - {"ttl", "expireTime"}
+    if unsupported:
+        raise HTTPException(
+            status_code=400,
+            detail="cachedContents.patch supports updateMask fields: ttl, expireTime.",
+        )
+    return fields
+
+
 def _gemini_create_cached_content(body: dict[str, Any]) -> dict[str, Any]:
-    body = _gemini_normalize_request(body)
+    body = _gemini_cached_body(body)
     now = int(time.time())
     iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
     cache_id = "cache_" + uuid.uuid4().hex
-    ttl = body.get("ttl")
-    expire_seconds = 3600
-    if isinstance(ttl, str) and ttl.endswith("s"):
-        try:
-            expire_seconds = max(1, int(float(ttl[:-1])))
-        except ValueError:
-            expire_seconds = 3600
+    expire_seconds = _gemini_duration_seconds(body.get("ttl")) or 3600
     expire_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + expire_seconds))
     meta = {
         "name": f"cachedContents/{cache_id}",
@@ -1765,6 +1810,32 @@ def _gemini_create_cached_content(body: dict[str, Any]) -> dict[str, Any]:
         "usageMetadata": {"totalTokenCount": _estimate_tokens(body)},
         "payload": body,
     }
+    index = _gemini_load_cached_index()
+    index[meta["name"]] = meta
+    _gemini_save_cached_index(index)
+    return _gemini_cached_resource(meta)
+
+
+def _gemini_patch_cached_meta(meta: dict[str, Any], body: dict[str, Any], update_mask: str | None) -> dict[str, Any]:
+    fields = _gemini_cached_update_mask(update_mask)
+    if fields is None:
+        fields = {key for key in ("ttl", "expireTime") if key in body}
+    if not fields:
+        raise HTTPException(status_code=400, detail="cachedContents.patch requires ttl or expireTime.")
+    if "ttl" in fields:
+        if "ttl" not in body:
+            raise HTTPException(status_code=400, detail="ttl is required by updateMask.")
+        seconds = _gemini_duration_seconds(body["ttl"])
+        if seconds is None:
+            raise HTTPException(status_code=400, detail="ttl must be a duration string such as '3600s'.")
+        meta["ttl"] = body["ttl"]
+        meta["expireTime"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(time.time()) + seconds))
+    if "expireTime" in fields:
+        if "expireTime" not in body:
+            raise HTTPException(status_code=400, detail="expireTime is required by updateMask.")
+        meta.pop("ttl", None)
+        meta["expireTime"] = body["expireTime"]
+    meta["updateTime"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     index = _gemini_load_cached_index()
     index[meta["name"]] = meta
     _gemini_save_cached_index(index)
@@ -4294,21 +4365,19 @@ async def gemini_get_cached_content(cache_id: str):
 
 
 @app.patch("/v1beta/cachedContents/{cache_id:path}")
-async def gemini_patch_cached_content(cache_id: str, request: Request):
-    meta = _gemini_get_cached_meta(cache_id)
-    if not meta:
-        return _gemini_error_response(f"Cached content '{cache_id}' not found.", status_code=404, status="NOT_FOUND")
-    body = await request.json()
-    if isinstance(body, dict):
-        if body.get("ttl"):
-            meta["ttl"] = body["ttl"]
-        if body.get("expireTime"):
-            meta["expireTime"] = body["expireTime"]
-        meta["updateTime"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        index = _gemini_load_cached_index()
-        index[meta["name"]] = meta
-        _gemini_save_cached_index(index)
-    return _gemini_cached_resource(meta)
+async def gemini_patch_cached_content(cache_id: str, request: Request, updateMask: str | None = None):
+    try:
+        meta = _gemini_get_cached_meta(cache_id)
+        if not meta:
+            raise HTTPException(status_code=404, detail=f"Cached content '{cache_id}' not found.")
+        body = _gemini_cached_body(await request.json())
+        return _gemini_patch_cached_meta(meta, body, updateMask)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini cachedContents patch failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
 @app.delete("/v1beta/cachedContents/{cache_id:path}")
