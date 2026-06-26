@@ -842,6 +842,10 @@ Tuned models and permissions:
 - `tunedModels` are implemented as local aliases over a base Antigravity model.
 - Creating a tuned model stores metadata and returns an immediately completed
   operation; it does not run real model training.
+- `tunedModels.create` and patch accept SDK-style `config` / `tunedModel`
+  wrappers and preserve Gemini tuning metadata such as `tuningTask`,
+  `hyperparameters`, `trainingData`, `validationData`, `readerProjectNumbers`,
+  and `tunedModelSource`.
 - `tunedModels/{id}:generateContent` forwards to the configured `baseModel`.
 - `permissions` are stored locally for Gemini SDK compatibility.
 

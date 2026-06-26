@@ -424,6 +424,15 @@ _GEMINI_KEY_ALIASES = {
     "document_ocr": "documentOcr",
     "audio_track_extraction": "audioTrackExtraction",
     "display_name": "displayName",
+    "tuned_model": "tunedModel",
+    "tuned_model_id": "tunedModelId",
+    "tuned_model_source": "tunedModelSource",
+    "tuning_task": "tuningTask",
+    "reader_project_numbers": "readerProjectNumbers",
+    "training_data": "trainingData",
+    "validation_data": "validationData",
+    "epoch_count": "epochCount",
+    "batch_size": "batchSize",
     "target_uri": "targetUri",
     "update_mask": "updateMask",
     "event_types": "eventTypes",
@@ -3368,7 +3377,7 @@ def _gemini_tuned_name(name: str) -> str:
 
 
 def _gemini_tuned_resource(meta: dict[str, Any]) -> dict[str, Any]:
-    return {
+    resource = {
         "name": meta["name"],
         "displayName": meta.get("displayName") or meta["name"].split("/", 1)[-1],
         "description": meta.get("description") or "",
@@ -3380,28 +3389,63 @@ def _gemini_tuned_resource(meta: dict[str, Any]) -> dict[str, Any]:
         "topP": meta.get("topP"),
         "topK": meta.get("topK"),
     }
+    for key in (
+        "tunedModelSource",
+        "tuningTask",
+        "readerProjectNumbers",
+        "hyperparameters",
+        "trainingData",
+        "validationData",
+    ):
+        if meta.get(key) is not None:
+            resource[key] = meta[key]
+    return {key: value for key, value in resource.items() if value is not None}
+
+
+def _gemini_tuned_scalar_fields(meta: dict[str, Any]) -> None:
+    for key in ("temperature", "topP"):
+        if key in meta:
+            meta[key] = _gemini_float_value(meta[key])
+    for key in ("topK",):
+        if key in meta:
+            meta[key] = _gemini_int_value(meta[key])
 
 
 def _gemini_create_tuned_model(body: dict[str, Any]) -> dict[str, Any]:
     body = _gemini_normalize_request(body)
     tuned_model = body.get("tunedModel") if isinstance(body.get("tunedModel"), dict) else body
-    source_id = str(body.get("tunedModelId") or body.get("tuned_model_id") or "").strip()
+    config = body.get("config") if isinstance(body.get("config"), dict) else {}
+    source_id = str(body.get("tunedModelId") or "").strip()
     model_id = source_id or ("tuned_" + uuid.uuid4().hex)
     name = _gemini_tuned_name(model_id)
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     meta = {
         "name": name,
-        "displayName": tuned_model.get("displayName") or tuned_model.get("display_name") or model_id,
+        "displayName": tuned_model.get("displayName") or config.get("displayName") or model_id,
         "description": tuned_model.get("description") or "",
-        "baseModel": tuned_model.get("baseModel") or tuned_model.get("base_model") or body.get("baseModel") or "models/gemini-3-flash-agent",
+        "baseModel": tuned_model.get("baseModel") or config.get("baseModel") or body.get("baseModel") or "models/gemini-3-flash-agent",
         "state": "ACTIVE",
         "createTime": now,
         "updateTime": now,
-        "temperature": tuned_model.get("temperature"),
-        "topP": tuned_model.get("topP"),
-        "topK": tuned_model.get("topK"),
+        "temperature": tuned_model.get("temperature") if tuned_model.get("temperature") is not None else config.get("temperature"),
+        "topP": tuned_model.get("topP") if tuned_model.get("topP") is not None else config.get("topP"),
+        "topK": tuned_model.get("topK") if tuned_model.get("topK") is not None else config.get("topK"),
         "permissions": {},
     }
+    for key in (
+        "tunedModelSource",
+        "tuningTask",
+        "readerProjectNumbers",
+        "hyperparameters",
+        "trainingData",
+        "validationData",
+    ):
+        value = tuned_model.get(key)
+        if value is None:
+            value = config.get(key)
+        if value is not None:
+            meta[key] = value
+    _gemini_tuned_scalar_fields(meta)
     index = _gemini_load_tuned_index()
     index[name] = meta
     _gemini_save_tuned_index(index)
@@ -6409,9 +6453,27 @@ async def gemini_patch_tuned_model(tuned_model_id: str, request: Request):
         return _gemini_error_response(f"Tuned model '{tuned_model_id}' not found.", status_code=404, status="NOT_FOUND")
     body = _gemini_normalize_request(await request.json())
     if isinstance(body, dict):
-        for key in ("displayName", "description", "temperature", "topP", "topK"):
-            if key in body:
-                meta[key] = body[key]
+        patch_body = body.get("tunedModel") if isinstance(body.get("tunedModel"), dict) else body
+        patch_config = body.get("config") if isinstance(body.get("config"), dict) else {}
+        merged_patch = dict(patch_config)
+        merged_patch.update(patch_body)
+        for key in (
+            "displayName",
+            "description",
+            "temperature",
+            "topP",
+            "topK",
+            "baseModel",
+            "tunedModelSource",
+            "tuningTask",
+            "readerProjectNumbers",
+            "hyperparameters",
+            "trainingData",
+            "validationData",
+        ):
+            if key in merged_patch:
+                meta[key] = merged_patch[key]
+        _gemini_tuned_scalar_fields(meta)
         meta["updateTime"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         index[name] = meta
         _gemini_save_tuned_index(index)

@@ -2640,15 +2640,29 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     client = TestClient(proxy.app)
 
     created = client.post("/v1/tunedModels", json={
-        "tunedModelId": "my_tuned",
+        "tuned_model_id": "my_tuned",
+        "config": {
+            "temperature": "0.4",
+            "top_k": "32",
+            "reader_project_numbers": ["123"],
+        },
         "tunedModel": {
             "displayName": "My tuned",
             "baseModel": "models/gemini-3-flash-agent",
+            "tuning_task": {
+                "hyperparameters": {"epochCount": 2, "batchSize": 4},
+                "training_data": {"examples": {"examples": [{"textInput": "hi", "output": "hello"}]}},
+            },
         },
     })
     assert created.status_code == 200
     tuned = created.json()["response"]
     assert tuned["name"] == "tunedModels/my_tuned"
+    assert tuned["temperature"] == 0.4
+    assert tuned["topK"] == 32
+    assert tuned["readerProjectNumbers"] == ["123"]
+    assert tuned["tuningTask"]["hyperparameters"]["epochCount"] == 2
+    assert tuned["tuningTask"]["trainingData"]["examples"]["examples"][0]["output"] == "hello"
     created_op_id = created.json()["name"].split("/", 1)[1]
 
     listed = client.get("/v1/tunedModels")
@@ -2657,7 +2671,12 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     fetched_operation = client.get(f"/v1/tunedModels/my_tuned/operations/{created_op_id}")
     waited_operation = client.post(f"/v1/tunedModels/my_tuned/operations/{created_op_id}:wait")
     cancelled_operation = client.post(f"/v1/tunedModels/my_tuned/operations/{created_op_id}:cancel")
-    patched = client.patch("/v1/tunedModels/my_tuned", json={"description": "updated"})
+    patched = client.patch("/v1/tunedModels/my_tuned", json={
+        "tuned_model": {
+            "description": "updated",
+            "tuning_task": {"hyperparameters": {"epoch_count": 3}},
+        }
+    })
     assert listed.status_code == 200
     assert fetched.json()["displayName"] == "My tuned"
     assert listed_operations.status_code == 200
@@ -2669,6 +2688,7 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert cancelled_operation.status_code == 200
     assert cancelled_operation.json() == {}
     assert patched.json()["description"] == "updated"
+    assert patched.json()["tuningTask"]["hyperparameters"]["epochCount"] == 3
 
     perm = client.post("/v1/tunedModels/my_tuned/permissions", json={
         "emailAddress": "user@example.com",
