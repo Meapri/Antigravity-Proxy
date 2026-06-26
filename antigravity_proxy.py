@@ -448,6 +448,10 @@ _GEMINI_KEY_ALIASES = {
     "functionCall": "functionCall",
     "function_response": "functionResponse",
     "functionResponse": "functionResponse",
+    "harm_category": "category",
+    "harmCategory": "category",
+    "harm_block_threshold": "threshold",
+    "harmBlockThreshold": "threshold",
 }
 
 _GEMINI_GENERATE_CONFIG_TOP_LEVEL_KEYS = {
@@ -707,6 +711,30 @@ def _gemini_normalize_system_instruction(value: Any) -> Any:
     return _gemini_content_from_value(value, default_role="system")
 
 
+def _gemini_normalize_safety_settings(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    items = value if isinstance(value, list) else [value]
+    settings: list[dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, dict):
+            settings.append(item)
+    return settings
+
+
+def _gemini_normalize_tool_config(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    out = dict(value)
+    if "functionCallingConfig" not in out:
+        fc_keys = {"mode", "allowedFunctionNames"}
+        if any(key in out for key in fc_keys):
+            out = {"functionCallingConfig": {key: out.pop(key) for key in list(out.keys()) if key in fc_keys}, **out}
+    if isinstance(out.get("functionCallingConfig"), dict):
+        out["functionCallingConfig"] = _gemini_normalize_function_calling_config(out["functionCallingConfig"])
+    return out
+
+
 def _gemini_normalize_tools_value(value: Any) -> list[dict[str, Any]]:
     if value is None:
         return []
@@ -763,6 +791,14 @@ def _gemini_normalize_generate_body(body: dict[str, Any]) -> dict[str, Any]:
         out["contents"] = _gemini_normalize_contents(out.get("contents"))
     if "systemInstruction" in out:
         out["systemInstruction"] = _gemini_normalize_system_instruction(out.get("systemInstruction"))
+    if "safetySettings" in out:
+        safety_settings = _gemini_normalize_safety_settings(out.get("safetySettings"))
+        if safety_settings:
+            out["safetySettings"] = safety_settings
+        else:
+            out.pop("safetySettings", None)
+    if "toolConfig" in out:
+        out["toolConfig"] = _gemini_normalize_tool_config(out.get("toolConfig"))
     return out
 
 

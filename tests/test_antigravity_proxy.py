@@ -667,6 +667,42 @@ def test_gemini_generate_content_normalizes_tools_unions(monkeypatch):
     }]
 
 
+def test_gemini_generate_content_normalizes_safety_and_tool_config_shortcuts(monkeypatch):
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "hi",
+        "safety_settings": {
+            "harm_category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+            "harm_block_threshold": "BLOCK_ONLY_HIGH",
+        },
+        "tool_config": {
+            "mode": "any",
+            "allowed_function_names": "lookup",
+        },
+    })
+
+    assert response.status_code == 200
+    assert seen["request"]["safetySettings"] == [{
+        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+        "threshold": "BLOCK_ONLY_HIGH",
+    }]
+    assert seen["request"]["toolConfig"] == {
+        "functionCallingConfig": {
+            "mode": "ANY",
+            "allowedFunctionNames": ["lookup"],
+        }
+    }
+
+
 def test_gemini_generate_content_rejects_unsupported_builtin_tools():
     client = TestClient(proxy.app)
 

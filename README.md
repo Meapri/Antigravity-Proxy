@@ -645,6 +645,9 @@ hosted tools. `toolConfig.functionCallingConfig.mode` and
 `tools` may be a single object or a list, and top-level
 `functionDeclarations` / `function_declarations` are wrapped into Gemini tool
 objects before forwarding.
+`safetySettings` may be supplied as a single object, and shortcut
+`toolConfig` forms such as `{mode, allowedFunctionNames}` are expanded into
+`functionCallingConfig`.
 `generateContent`, `streamGenerateContent`, `batchGenerateContent`, and
 `countTokens` also normalize SDK content-union inputs such as string
 `contents`, part dictionaries, part arrays, and string `systemInstruction`
