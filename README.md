@@ -733,6 +733,9 @@ upstream internal endpoint does not expose public Gemini cache objects.
 Create and patch calls also accept SDK wrapper bodies like
 `{"cachedContent": {"ttl": "3600s"}}`; patch supports Gemini-style `ttl` or
 `expireTime` updates with `update_mask=ttl` / `updateMask=expireTime`.
+Cached content creation uses the same SDK-friendly normalization as
+`generateContent`, including string `contents`, `config`, single
+`safetySettings`, and shortcut `toolConfig` forms.
 
 Embeddings and batch operations:
 

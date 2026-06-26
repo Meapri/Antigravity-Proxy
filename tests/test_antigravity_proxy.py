@@ -1815,12 +1815,30 @@ def test_gemini_cached_contents_merge_into_generate_request(tmp_path, monkeypatc
     wrapped_created = client.post("/v1beta/cachedContents", json={
         "cachedContent": {
             "model": "models/gemini-3-flash-agent",
-            "contents": [{"role": "user", "parts": [{"text": "wrapped cached context"}]}],
+            "contents": "wrapped cached context",
+            "config": {
+                "system_instruction": "wrapped cached system",
+                "tool_config": {"mode": "none"},
+                "safety_settings": {
+                    "harm_category": "HARM_CATEGORY_HARASSMENT",
+                    "harm_block_threshold": "BLOCK_ONLY_HIGH",
+                },
+            },
             "ttl": "60s",
         }
     })
     assert wrapped_created.status_code == 200
     assert wrapped_created.json()["model"] == "models/gemini-3-flash-agent"
+    assert wrapped_created.json()["contents"] == [{"role": "user", "parts": [{"text": "wrapped cached context"}]}]
+    assert wrapped_created.json()["systemInstruction"] == {
+        "role": "system",
+        "parts": [{"text": "wrapped cached system"}],
+    }
+    assert wrapped_created.json()["toolConfig"] == {"functionCallingConfig": {"mode": "NONE"}}
+    assert wrapped_created.json()["safetySettings"] == [{
+        "category": "HARM_CATEGORY_HARASSMENT",
+        "threshold": "BLOCK_ONLY_HIGH",
+    }]
     assert wrapped_created.json()["expireTime"]
 
     paged = client.get("/v1beta/cachedContents?pageSize=1")

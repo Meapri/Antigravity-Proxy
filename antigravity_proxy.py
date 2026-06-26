@@ -2400,7 +2400,7 @@ def _gemini_cached_resource(meta: dict[str, Any]) -> dict[str, Any]:
     out = {k: v for k, v in meta.items() if k not in {"payload"} and v is not None}
     payload = meta.get("payload")
     if isinstance(payload, dict):
-        for key in ("contents", "systemInstruction", "tools", "toolConfig"):
+        for key in ("contents", "systemInstruction", "tools", "toolConfig", "safetySettings"):
             if key in payload and key not in out:
                 out[key] = payload[key]
     return out
@@ -2425,8 +2425,10 @@ def _gemini_cached_body(body: Any) -> dict[str, Any]:
         for key in ("ttl", "expireTime"):
             if key in normalized and key not in merged:
                 merged[key] = normalized[key]
-        return merged
-    return normalized
+        normalized = merged
+    normalized = _gemini_apply_generate_config(normalized)
+    normalized = _gemini_apply_response_format(normalized)
+    return _gemini_normalize_generate_body(normalized)
 
 
 def _gemini_cached_update_mask(update_mask: str | None) -> set[str] | None:
