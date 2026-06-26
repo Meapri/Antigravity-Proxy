@@ -792,6 +792,20 @@ def _gemini_normalize_tool_config(value: Any) -> Any:
     return out
 
 
+def _gemini_normalize_function_declaration(decl: dict[str, Any]) -> dict[str, Any]:
+    out = dict(decl)
+    params = out.pop("parametersJsonSchema", None) or out.pop("parameters_json_schema", None)
+    if params is not None and "parameters" not in out:
+        out["parameters"] = params
+    response = out.pop("responseJsonSchema", None) or out.pop("response_json_schema", None)
+    if response is not None and "response" not in out:
+        out["response"] = response
+    for key in ("parameters", "response"):
+        if isinstance(out.get(key), dict):
+            out[key] = _sanitize_schema(out[key])
+    return out
+
+
 def _gemini_normalize_tools_value(value: Any) -> list[dict[str, Any]]:
     if value is None:
         return []
@@ -805,6 +819,12 @@ def _gemini_normalize_tools_value(value: Any) -> list[dict[str, Any]]:
             if isinstance(decls, dict):
                 item = dict(item)
                 item["functionDeclarations"] = [decls]
+            if isinstance(item.get("functionDeclarations"), list):
+                item = dict(item)
+                item["functionDeclarations"] = [
+                    _gemini_normalize_function_declaration(decl) if isinstance(decl, dict) else decl
+                    for decl in item["functionDeclarations"]
+                ]
             tools.append(item)
             continue
         if any(key in item for key in ("google_search", "codeExecution", "url_context", "file_search", "fileSearchRetrieval")):
@@ -818,9 +838,10 @@ def _gemini_normalize_tools_value(value: Any) -> list[dict[str, Any]]:
                 decl: dict[str, Any] = {"name": fn["name"]}
                 if fn.get("description"):
                     decl["description"] = fn["description"]
-                params = fn.get("parameters")
-                if isinstance(params, dict):
-                    decl["parameters"] = _sanitize_schema(params)
+                for key in ("parameters", "parametersJsonSchema", "response", "responseJsonSchema"):
+                    if key in fn:
+                        decl[key] = fn[key]
+                decl = _gemini_normalize_function_declaration(decl)
                 tools.append({"functionDeclarations": [decl]})
                 continue
         tools.append(item)
@@ -835,7 +856,10 @@ def _gemini_normalize_generate_body(body: dict[str, Any]) -> dict[str, Any]:
         if isinstance(function_declarations, dict):
             function_declarations = [function_declarations]
         if isinstance(function_declarations, list):
-            existing.append({"functionDeclarations": function_declarations})
+            existing.append({"functionDeclarations": [
+                _gemini_normalize_function_declaration(decl) if isinstance(decl, dict) else decl
+                for decl in function_declarations
+            ]})
         if existing:
             out["tools"] = existing
     elif "tools" in out:

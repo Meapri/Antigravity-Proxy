@@ -648,7 +648,9 @@ hosted tools. `toolConfig.functionCallingConfig.mode` and
 `allowedFunctionNames` are normalized from common SDK spellings.
 `tools` may be a single object or a list, and top-level
 `functionDeclarations` / `function_declarations` are wrapped into Gemini tool
-objects before forwarding.
+objects before forwarding. Function declaration schema aliases such as
+`parametersJsonSchema` / `parameters_json_schema` and `responseJsonSchema` /
+`response_json_schema` are normalized to Gemini `parameters` and `response`.
 `safetySettings` may be supplied as a single object, and shortcut
 `toolConfig` forms such as `{mode, allowedFunctionNames}` are expanded into
 `functionCallingConfig`.

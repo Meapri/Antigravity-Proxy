@@ -753,6 +753,31 @@ def test_gemini_generate_content_normalizes_tools_unions(monkeypatch):
         }]
     }]
 
+    schema_aliases = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "hi",
+        "tools": {
+            "functionDeclarations": {
+                "name": "typed_lookup",
+                "parameters_json_schema": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                },
+                "response_json_schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                },
+            }
+        },
+    })
+
+    assert schema_aliases.status_code == 200
+    declaration = seen["request"]["tools"][0]["functionDeclarations"][0]
+    assert declaration["name"] == "typed_lookup"
+    assert declaration["parameters"]["properties"]["query"]["type"] == "string"
+    assert declaration["response"]["properties"]["answer"]["type"] == "string"
+    assert "parametersJsonSchema" not in declaration
+    assert "responseJsonSchema" not in declaration
+
 
 def test_gemini_generate_content_normalizes_safety_and_tool_config_shortcuts(monkeypatch):
     seen = {}
