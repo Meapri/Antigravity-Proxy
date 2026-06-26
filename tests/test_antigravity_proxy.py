@@ -941,6 +941,10 @@ def test_gemini_interactions_create_previous_store_and_stream(tmp_path, monkeypa
     first_body = first.json()
     assert first_body["name"].startswith("interactions/")
     assert first_body["outputText"] == "echo:first"
+    assert first_body["steps"][0]["type"] == "model_output"
+    assert first_body["steps"][0]["content"][0]["type"] == "text"
+    assert first_body["steps"][0]["content"][0]["text"] == "echo:first"
+    assert first_body["steps"][0]["content"][0]["annotations"] == []
 
     second = client.post("/v1beta/interactions", json={
         "model": "models/gemini-3-flash-agent",
@@ -969,6 +973,7 @@ def test_gemini_interactions_create_previous_store_and_stream(tmp_path, monkeypa
     assert streamed.status_code == 200
     assert "interaction.created" in body
     assert "interaction.output_text.delta" in body
+    assert "interaction.step.completed" in body
     assert "data: [DONE]" in body
 
 
@@ -1039,6 +1044,7 @@ def test_gemini_interactions_v1_aliases(tmp_path, monkeypatch):
 
     assert streamed.status_code == 200
     assert "interaction.created" in stream_body
+    assert "interaction.step.completed" in stream_body
     assert "interaction.completed" in stream_body
     assert "data: [DONE]" in stream_body
 

@@ -6507,6 +6507,19 @@ async def gemini_rotate_webhook_signing_secret(webhook_id: str):
     return _gemini_webhook_public_resource(webhook, include_new_secret=True)
 
 
+def _gemini_interaction_model_output_step(text: str, response: dict[str, Any] | None = None) -> dict[str, Any]:
+    content: list[dict[str, Any]] = []
+    if text:
+        content.append({"type": "text", "text": text, "annotations": []})
+    return {
+        "type": "model_output",
+        "status": "completed",
+        "content": content,
+        "outputText": text,
+        "response": response or {},
+    }
+
+
 async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
@@ -6571,7 +6584,8 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
                     "type": "image_generation",
                     "status": "completed",
                     "generatedFile": image["generatedFile"]["name"],
-                }
+                },
+                _gemini_interaction_model_output_step("", response),
             ],
             "usageMetadata": {},
         }
@@ -6610,6 +6624,7 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
         "outputText": text,
         "history": new_history,
         "steps": [
+            _gemini_interaction_model_output_step(text, response),
             {
                 "type": "model_response",
                 "status": "completed",
@@ -6637,6 +6652,9 @@ async def gemini_create_interaction(request: Request):
                 yield f"data: {json.dumps({'type': 'interaction.created', 'interaction': created}, ensure_ascii=False)}\n\n"
                 if interaction.get("outputText"):
                     yield f"data: {json.dumps({'type': 'interaction.output_text.delta', 'delta': interaction['outputText']}, ensure_ascii=False)}\n\n"
+                for step in interaction.get("steps") or []:
+                    if isinstance(step, dict):
+                        yield f"data: {json.dumps({'type': 'interaction.step.completed', 'step': step}, ensure_ascii=False)}\n\n"
                 generated_file = interaction.get("generatedFile")
                 if generated_file:
                     yield f"data: {json.dumps({'type': 'interaction.output_image.done', 'generatedFile': generated_file}, ensure_ascii=False)}\n\n"
