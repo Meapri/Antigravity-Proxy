@@ -1,0 +1,1831 @@
+"""
+Antigravity OpenAI-compatible Proxy Server
+
+Wraps AntigravityClient behind OpenAI /v1/chat/completions and /v1/models
+endpoints so that any OpenAI-compatible client (including Hermes Agent) can
+use Antigravity models.
+
+Usage:
+    python antigravity_proxy.py
+    # or: uvicorn antigravity_proxy:app --host 127.0.0.1 --port 8765
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import secrets
+import time
+import uuid
+from contextlib import asynccontextmanager
+from typing import Any
+
+import sys
+
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
+
+from antigravity_proxy_core.antigravity import AntigravityClient
+from antigravity_proxy_core.config import Settings
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+log = logging.getLogger("antigravity_proxy")
+
+# ---------------------------------------------------------------------------
+# Model registry
+# ---------------------------------------------------------------------------
+# Models sourced from Antigravity API v1internal:fetchAvailableModels.
+# "id" = human-readable display name shown in /v1/models;
+# "antigravity_model" = real upstream model ID passed to the API.
+_MODELS: list[dict[str, Any]] = [
+    # ── Gemini 3.5 Flash ──
+    {
+        "id": "Gemini 3.5 Flash (Medium)",
+        "object": "model",
+        "created": 1737500000,
+        "owned_by": "antigravity",
+        "antigravity_model": "gemini-3.5-flash-low",
+    },
+    {
+        "id": "Gemini 3.5 Flash (High)",
+        "object": "model",
+        "created": 1737500000,
+        "owned_by": "antigravity",
+        "antigravity_model": "gemini-3-flash-agent",
+    },
+    {
+        "id": "Gemini 3.5 Flash (Low)",
+        "object": "model",
+        "created": 1737500000,
+        "owned_by": "antigravity",
+        "antigravity_model": "gemini-3.5-flash-extra-low",
+    },
+    # ── Gemini 3.1 Pro ──
+    {
+        "id": "Gemini 3.1 Pro (Low)",
+        "object": "model",
+        "created": 1737500000,
+        "owned_by": "antigravity",
+        "antigravity_model": "gemini-3.1-pro-low",
+    },
+    {
+        "id": "Gemini 3.1 Pro (High)",
+        "object": "model",
+        "created": 1737500000,
+        "owned_by": "antigravity",
+        "antigravity_model": "gemini-pro-agent",
+    },
+    # ── Gemini 3 Flash / Lite ──
+    {
+        "id": "Gemini 3 Flash",
+        "object": "model",
+        "created": 1737500000,
+        "owned_by": "antigravity",
+        "antigravity_model": "gemini-3-flash",
+    },
+    {
+        "id": "Gemini 3.1 Flash Lite",
+        "object": "model",
+        "created": 1737500000,
+        "owned_by": "antigravity",
+        # The REAL lite tier (was mislabelled as plain gemini-2.5-flash = regular
+        # Flash). Confirmed via v1internal:fetchAvailableModels.
+        "antigravity_model": "gemini-3.1-flash-lite",
+    },
+    # ── Image generation ──
+    {
+        "id": "Gemini 3.1 Flash Image",
+        "object": "model",
+        "created": 1737500000,
+        "owned_by": "antigravity",
+        "antigravity_model": "gemini-3.1-flash-image",
+    },
+    # ── Claude ──
+    {
+        "id": "Claude Opus 4.6 (Thinking)",
+        "object": "model",
+        "created": 1737500000,
+        "owned_by": "antigravity",
+        "antigravity_model": "claude-opus-4-6-thinking",
+    },
+    {
+        "id": "Claude Sonnet 4.6 (Thinking)",
+        "object": "model",
+        "created": 1737500000,
+        "owned_by": "antigravity",
+        "antigravity_model": "claude-sonnet-4-6",
+    },
+]
+
+def _display_id_for_model(model: dict[str, Any], duplicate_names: set[str]) -> str:
+    display_id = str(model.get("id") or model.get("antigravity_model") or "").strip()
+    upstream_id = str(model.get("antigravity_model") or display_id).strip()
+    if display_id in duplicate_names and upstream_id and display_id != upstream_id:
+        return f"{display_id} [{upstream_id}]"
+    return display_id
+
+
+def _is_internal_model(model: dict[str, Any]) -> bool:
+    display_id = str(model.get("id") or "").strip().lower()
+    upstream_id = str(model.get("antigravity_model") or display_id).strip().lower()
+    return display_id.startswith(("tab_", "chat_")) or upstream_id.startswith(("tab_", "chat_"))
+
+
+def _include_internal_models() -> bool:
+    return os.getenv("ANTIGRAVITY_PROXY_INCLUDE_INTERNAL_MODELS", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _model_capabilities(model: dict[str, Any]) -> dict[str, bool]:
+    display_id = str(model.get("id") or "").lower()
+    upstream_id = str(model.get("antigravity_model") or "").lower()
+    text = f"{display_id} {upstream_id}"
+    internal = _is_internal_model(model)
+    image_generation = "image" in text
+    return {
+        "chat": not image_generation and not internal,
+        "tools": not image_generation and not internal,
+        "vision": not image_generation and not internal,
+        "streaming": not image_generation and not internal,
+        "grounding": not image_generation and not internal,
+        "image_generation": image_generation,
+        "internal": internal,
+    }
+
+
+def _model_sort_key(model: dict[str, Any]) -> tuple[int, str]:
+    caps = _model_capabilities(model)
+    upstream_id = str(model.get("antigravity_model") or "")
+    display_id = str(model.get("id") or upstream_id)
+    if caps["internal"]:
+        group = 90
+    elif caps["image_generation"]:
+        group = 40
+    elif "claude" in upstream_id.lower() or "claude" in display_id.lower():
+        group = 20
+    elif "gemini" in upstream_id.lower() or "gemini" in display_id.lower():
+        group = 10
+    else:
+        group = 30
+    return group, display_id.lower()
+
+
+def _normalize_models(models: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deduplicate exact upstream models and disambiguate repeated display names."""
+    by_upstream: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for raw in models:
+        upstream_id = str(raw.get("antigravity_model") or raw.get("id") or "").strip()
+        if not upstream_id or upstream_id in by_upstream:
+            continue
+        model = dict(raw)
+        model["antigravity_model"] = upstream_id
+        model["id"] = str(model.get("id") or upstream_id).strip()
+        by_upstream[upstream_id] = model
+        order.append(upstream_id)
+
+    name_counts: dict[str, int] = {}
+    for model in by_upstream.values():
+        name = str(model.get("id") or "").strip()
+        name_counts[name] = name_counts.get(name, 0) + 1
+    duplicate_names = {name for name, count in name_counts.items() if count > 1}
+
+    normalized: list[dict[str, Any]] = []
+    for upstream_id in order:
+        model = dict(by_upstream[upstream_id])
+        model["id"] = _display_id_for_model(model, duplicate_names)
+        model["capabilities"] = _model_capabilities(model)
+        model["metadata"] = {
+            "antigravity_model": model["antigravity_model"],
+            "source": "antigravity",
+            "internal": model["capabilities"]["internal"],
+        }
+        normalized.append(model)
+    if not _include_internal_models():
+        normalized = [model for model in normalized if not _is_internal_model(model)]
+    return sorted(normalized, key=_model_sort_key)
+
+
+def _rebuild_model_map(models: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    model_map: dict[str, dict[str, Any]] = {}
+    for m in models:
+        model_map[m["id"]] = m
+        model_map[m["id"].lower()] = m
+        model_map[m["antigravity_model"]] = m
+        model_map[m["antigravity_model"].lower()] = m
+    for alias, target in _ALIASES.items():
+        if target in model_map:
+            model_map[alias] = model_map[target]
+            model_map[alias.lower()] = model_map[target]
+    return model_map
+
+# Map client aliases (antigravity.py) to survive direct backend requests
+_ALIASES = {
+    "gemini-3.5-flash": "gemini-3.5-flash-low",
+    "gemini-3.5-flash-high": "gemini-3-flash-agent",
+    "gemini-3.5-flash-medium": "gemini-3.5-flash-low",
+    "gemini-3.5-flash-low": "gemini-3.5-flash-extra-low",
+    "claude-opus-4.6": "claude-opus-4-6-thinking",
+    "claude-opus-4-6": "claude-opus-4-6-thinking",
+    "claude-4.6-opus": "claude-opus-4-6-thinking",
+    "claude-4-6-opus": "claude-opus-4-6-thinking",
+    "claude-opus-4.6-thinking": "claude-opus-4-6-thinking",
+    "gemini-3.1-pro-high": "gemini-pro-agent",
+    "gemini-3.1-pro": "gemini-3.1-pro-low",
+}
+_MODELS = _normalize_models(_MODELS)
+_MODEL_MAP = _rebuild_model_map(_MODELS)
+
+
+# ---------------------------------------------------------------------------
+# OpenAI-compatible Pydantic schemas
+# ---------------------------------------------------------------------------
+class ChatMessage(BaseModel):
+    role: str
+    # content may be a plain string, a list of content parts (multimodal), or
+    # None (e.g. an assistant message that only carries tool_calls).
+    content: Any | None = None
+    name: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+    tool_call_id: str | None = None
+
+    model_config = {"extra": "allow"}
+
+
+class ChatCompletionRequest(BaseModel):
+    model: str = "gemini-3-flash"
+    messages: list[ChatMessage]
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    max_tokens: int | None = Field(default=None, ge=1, le=1048576)
+    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
+    stop: str | list[str] | None = None
+    stream: bool = False
+    user: str | None = None
+    # Function/tool calling (OpenAI format). When present we forward them to
+    # Antigravity as Gemini functionDeclarations and translate functionCall
+    # responses back into OpenAI tool_calls.
+    tools: list[dict[str, Any]] | None = None
+    tool_choice: Any | None = None
+
+    model_config = {"extra": "allow"}
+
+
+class ChatCompletionChoice(BaseModel):
+    index: int = 0
+    message: ChatMessage
+    finish_reason: str = "stop"
+
+
+class ChatUsage(BaseModel):
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+
+class ChatCompletionResponse(BaseModel):
+    id: str
+    object: str = "chat.completion"
+    created: int
+    model: str
+    choices: list[ChatCompletionChoice]
+    usage: ChatUsage = Field(default_factory=ChatUsage)
+
+
+class ModelListResponse(BaseModel):
+    object: str = "list"
+    data: list[dict[str, Any]]
+
+
+# ---------------------------------------------------------------------------
+# Global state
+# ---------------------------------------------------------------------------
+_settings: Settings | None = None
+_client: AntigravityClient | None = None
+_LAST_MODEL_REFRESH_TS: float = 0.0
+_LAST_MODEL_REFRESH_OK: bool = False
+_LAST_MODEL_REFRESH_ERROR: str = ""
+
+
+def _get_settings() -> Settings:
+    global _settings
+    if _settings is None:
+        _settings = Settings.from_env()
+        log.info("Settings loaded (model=%s)", _settings.model)
+    return _settings
+
+
+def _get_client() -> AntigravityClient:
+    global _client
+    if _client is None:
+        _client = AntigravityClient(settings=_get_settings())
+        log.info("AntigravityClient initialized")
+    return _client
+
+
+async def _fetch_and_update_models() -> dict[str, Any]:
+    log.info("Fetching available models from Antigravity upstream...")
+    global _MODELS, _MODEL_MAP, _LAST_MODEL_REFRESH_TS, _LAST_MODEL_REFRESH_OK, _LAST_MODEL_REFRESH_ERROR
+    try:
+        client = _get_client()
+        creds = await asyncio.to_thread(client._valid_credentials)
+
+        url = "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
+        headers = {
+            "Authorization": f"Bearer {creds.access_token}",
+            "Content-Type": "application/json",
+            "User-Agent": "Antigravity/2.0.1 Chrome/138.0.7204.235 Electron/37.3.1 Safari/537.36",
+            "X-Goog-Api-Client": "antigravity-cli/2.0.1",
+        }
+
+        def _do_fetch():
+            import httpx as _httpx
+            _retryable = {429, 500, 502, 503, 504}
+            _delay = 1.0
+            for _attempt in range(3):
+                try:
+                    resp = client._http.post(url, json={}, headers=headers, timeout=10.0)
+                    resp.raise_for_status()
+                    return resp.json()
+                except _httpx.HTTPStatusError as exc:
+                    if exc.response.status_code not in _retryable or _attempt == 2:
+                        raise
+                    log.warning("fetchAvailableModels HTTP %d — retry %d/3 in %.1fs", exc.response.status_code, _attempt + 1, _delay)
+                    time.sleep(_delay)
+                    _delay = min(_delay * 2, 8.0)
+
+        data = await asyncio.to_thread(_do_fetch)
+        models_dict = data.get("models", {})
+        if not models_dict:
+            log.warning("No models returned from fetchAvailableModels.")
+            _LAST_MODEL_REFRESH_TS = time.time()
+            _LAST_MODEL_REFRESH_OK = False
+            _LAST_MODEL_REFRESH_ERROR = "No models returned from fetchAvailableModels."
+            return {
+                "ok": False,
+                "updated_count": 0,
+                "model_count": len(_MODELS),
+                "error": _LAST_MODEL_REFRESH_ERROR,
+            }
+            
+        new_models = list(_MODELS)
+        existing_antigravity_models = {m["antigravity_model"] for m in new_models}
+        
+        updated_count = 0
+        for model_id, info in models_dict.items():
+            if model_id not in existing_antigravity_models:
+                new_models.append({
+                    "id": info.get("displayName") or model_id,
+                    "object": "model",
+                    "created": int(time.time()),
+                    "owned_by": "antigravity",
+                    "antigravity_model": model_id,
+                })
+                updated_count += 1
+                
+        if updated_count > 0:
+            log.info("Discovered %d new models dynamically.", updated_count)
+            _MODELS = _normalize_models(new_models)
+            _MODEL_MAP = _rebuild_model_map(_MODELS)
+            log.info("Model map rebuilt with total %d entries (including aliases).", len(_MODEL_MAP))
+        _LAST_MODEL_REFRESH_TS = time.time()
+        _LAST_MODEL_REFRESH_OK = True
+        _LAST_MODEL_REFRESH_ERROR = ""
+        return {
+            "ok": True,
+            "updated_count": updated_count,
+            "model_count": len(_MODELS),
+            "map_entries": len(_MODEL_MAP),
+            "last_refresh_timestamp": _LAST_MODEL_REFRESH_TS,
+        }
+    except Exception as e:
+        log.warning("Failed to fetch available models dynamically, using hardcoded fallback: %s", e)
+        _LAST_MODEL_REFRESH_TS = time.time()
+        _LAST_MODEL_REFRESH_OK = False
+        _LAST_MODEL_REFRESH_ERROR = str(e)
+        return {
+            "ok": False,
+            "updated_count": 0,
+            "model_count": len(_MODELS),
+            "error": _LAST_MODEL_REFRESH_ERROR,
+            "last_refresh_timestamp": _LAST_MODEL_REFRESH_TS,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Lifespan
+# ---------------------------------------------------------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup/shutdown — pre-warm credentials."""
+    log.info("Starting Antigravity Proxy on 127.0.0.1:8765")
+    if not sys.stdin.isatty():
+        log.info(
+            "Non-TTY (background/systemd) environment detected — "
+            "interactive OAuth refresh is disabled. "
+            "Run 'agy auth' from a terminal if credentials expire."
+        )
+    try:
+        _get_client()  # triggers credential load
+        await _fetch_and_update_models()
+    except Exception as exc:
+        log.warning("Pre-warm failed (will retry on first request): %s", exc)
+    yield
+    log.info("Antigravity Proxy shutting down")
+
+
+# ---------------------------------------------------------------------------
+# FastAPI app
+# ---------------------------------------------------------------------------
+app = FastAPI(
+    title="Antigravity OpenAI Proxy",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+
+def _proxy_api_key() -> str:
+    return os.getenv("ANTIGRAVITY_PROXY_API_KEY", "").strip()
+
+
+def _request_api_key_valid(request: Request) -> bool:
+    expected = _proxy_api_key()
+    if not expected:
+        return False
+    auth = request.headers.get("authorization", "").strip()
+    bearer = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    api_key = request.headers.get("x-api-key", "").strip()
+    return secrets.compare_digest(bearer, expected) or secrets.compare_digest(api_key, expected)
+
+
+def _openai_error_type(status_code: int) -> str:
+    if status_code == 401:
+        return "authentication_error"
+    if status_code == 403:
+        return "permission_error"
+    if status_code == 429:
+        return "rate_limit_error"
+    if status_code >= 500:
+        return "api_error"
+    return "invalid_request_error"
+
+
+def _openai_error_response(
+    message: Any,
+    *,
+    status_code: int,
+    error_type: str | None = None,
+    code: str | None = None,
+    param: str | None = None,
+) -> JSONResponse:
+    if not isinstance(message, str):
+        message = json.dumps(message, ensure_ascii=False)
+    return JSONResponse(
+        {
+            "error": {
+                "message": message,
+                "type": error_type or _openai_error_type(status_code),
+                "param": param,
+                "code": code,
+            }
+        },
+        status_code=status_code,
+    )
+
+
+@app.middleware("http")
+async def _optional_api_key_auth(request: Request, call_next):
+    expected = _proxy_api_key()
+    if not expected or request.url.path == "/health":
+        return await call_next(request)
+    if _request_api_key_valid(request):
+        return await call_next(request)
+    return _openai_error_response(
+        "Invalid or missing API key.",
+        status_code=401,
+        error_type="authentication_error",
+        code="invalid_api_key",
+    )
+
+
+@app.exception_handler(HTTPException)
+async def _http_exception_handler(request: Request, exc: HTTPException):
+    return _openai_error_response(exc.detail, status_code=exc.status_code)
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = exc.errors()
+    param = None
+    if errors:
+        loc = errors[0].get("loc") or []
+        param = ".".join(str(part) for part in loc if part not in {"body", "query", "path"})
+    return _openai_error_response(
+        errors,
+        status_code=422,
+        error_type="invalid_request_error",
+        code="validation_error",
+        param=param,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers: OpenAI ↔ Antigravity conversion
+# ---------------------------------------------------------------------------
+def _extract_system_prompt(messages: list[ChatMessage]) -> str:
+    """Extract system message content from OpenAI messages."""
+    for msg in messages:
+        if msg.role == "system" and msg.content:
+            return _msg_text(msg.content).strip()
+    return ""
+
+
+def _extract_user_prompt(messages: list[ChatMessage]) -> str:
+    """Extract the last user message as the prompt."""
+    for msg in reversed(messages):
+        if msg.role == "user" and msg.content:
+            return _msg_text(msg.content).strip()
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Function calling: OpenAI tools  <->  Gemini functionDeclarations
+# ---------------------------------------------------------------------------
+
+# Gemini thinking models attach a `thoughtSignature` to functionCall parts that
+# must be echoed back on the follow-up turn. The OpenAI round-trip can't carry
+# it, so cache it keyed by the call's (name, args).
+import threading
+
+_SIGS_LOCK = threading.Lock()
+_SIGS_PATH = os.path.join(os.path.dirname(__file__), "data", "thought_signatures.json")
+_SIG_TTL = 86400.0  # 24 hours — entries older than this are garbage-collected
+
+
+def _load_thought_sigs() -> dict[str, dict[str, Any]]:
+    """Load thought signatures from disk, GC-ing entries older than _SIG_TTL.
+
+    Stored format: {key: {"sig": str, "ts": float}}.
+    Legacy format (plain string values) is migrated on load, stamped with
+    the current time so they survive at least one more 24-hour window.
+    """
+    if not os.path.exists(_SIGS_PATH):
+        return {}
+    try:
+        with open(_SIGS_PATH, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        now = time.time()
+        result: dict[str, dict[str, Any]] = {}
+        for k, v in raw.items():
+            if isinstance(v, str):
+                # Migrate legacy plain-string value
+                result[k] = {"sig": v, "ts": now}
+            elif isinstance(v, dict):
+                ts = float(v.get("ts") or 0)
+                if now - ts < _SIG_TTL:
+                    result[k] = v
+                # else: expired — drop silently
+        return result
+    except Exception as e:
+        log.warning("Failed to load thought signatures: %s", e)
+        return {}
+
+
+# In-memory store: {key: {"sig": str, "ts": float}}
+_THOUGHT_SIGS: dict[str, dict[str, Any]] = _load_thought_sigs()
+
+
+def _gc_thought_sigs_locked() -> None:
+    """Remove expired entries from _THOUGHT_SIGS (must be called with _SIGS_LOCK held)."""
+    now = time.time()
+    expired = [k for k, v in _THOUGHT_SIGS.items() if now - float(v.get("ts") or 0) >= _SIG_TTL]
+    for k in expired:
+        del _THOUGHT_SIGS[k]
+    if expired:
+        log.debug("GC'd %d expired thought signature(s)", len(expired))
+
+
+def _save_thought_sig(key: str, val: str) -> None:
+    with _SIGS_LOCK:
+        _THOUGHT_SIGS[key] = {"sig": val, "ts": time.time()}
+        _gc_thought_sigs_locked()
+        try:
+            os.makedirs(os.path.dirname(_SIGS_PATH), exist_ok=True)
+            # Atomic write: write to .tmp then rename so a concurrent reader
+            # never sees a half-written JSON file.
+            tmp = _SIGS_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(_THOUGHT_SIGS, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, _SIGS_PATH)
+        except Exception as e:
+            log.warning("Failed to save thought signature: %s", e)
+
+_SCHEMA_KEEP = {
+    "type", "description", "properties", "required", "items",
+    "enum", "nullable", "format", "minimum", "maximum",
+}
+
+
+def _sig_key(name: str, args: Any) -> str:
+    try:
+        return name + "|" + json.dumps(args, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        return name + "|" + str(args)
+
+
+def _msg_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        out: list[str] = []
+        for part in content:
+            if isinstance(part, dict) and part.get("text"):
+                out.append(str(part["text"]))
+            elif isinstance(part, str):
+                out.append(part)
+        return "\n".join(out)
+    return str(content)
+
+
+# Allowed inline image MIME types for Gemini cloudcode vision input.
+_IMAGE_MIME_BY_EXT = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".heic": "image/heic",
+    ".heif": "image/heif",
+    ".bmp": "image/bmp",
+}
+
+
+def _image_url_to_inline_part(image_url: Any) -> dict[str, Any] | None:
+    """Convert an OpenAI image_url part into a Gemini cloudcode inlineData part.
+
+    Accepts either a data: URL ("data:<mime>;base64,<data>") or an http(s) URL
+    (downloaded then base64-encoded). Returns
+    {"inlineData": {"mimeType": <mime>, "data": <b64>}} matching the convention
+    already used by antigravity_proxy_core/antigravity.py for describe_image/media.
+    """
+    import base64
+    import binascii
+
+    url: str | None = None
+    if isinstance(image_url, str):
+        url = image_url
+    elif isinstance(image_url, dict):
+        u = image_url.get("url")
+        if isinstance(u, str):
+            url = u
+    if not url:
+        return None
+
+    # data: URL — parse inline base64 payload.
+    if url.startswith("data:"):
+        header, _, data_part = url[len("data:"):].partition(",")
+        if not data_part:
+            return None
+        mime = "image/png"
+        is_b64 = False
+        if header:
+            segs = header.split(";")
+            if segs and segs[0]:
+                mime = segs[0].strip()
+            is_b64 = "base64" in (s.strip().lower() for s in segs[1:])
+        try:
+            if is_b64:
+                raw = base64.b64decode(data_part, validate=False)
+                b64 = base64.b64encode(raw).decode("ascii")
+            else:
+                # URL-encoded (rare) — re-encode raw bytes as base64.
+                from urllib.parse import unquote_to_bytes
+
+                raw = unquote_to_bytes(data_part)
+                b64 = base64.b64encode(raw).decode("ascii")
+        except (binascii.Error, ValueError):
+            return None
+        return {"inlineData": {"mimeType": mime, "data": b64}}
+
+    # http(s) URL — download and base64-encode.
+    if url.startswith("http://") or url.startswith("https://"):
+        import httpx
+
+        try:
+            resp = httpx.get(url, timeout=30.0, follow_redirects=True)
+            resp.raise_for_status()
+        except Exception:
+            log.exception("Failed to fetch image URL for vision input: %s", url[:200])
+            return None
+        raw = resp.content
+        mime = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+        if not mime.startswith("image/"):
+            # Fall back to extension-based inference.
+            from urllib.parse import urlparse
+            import os as _os
+
+            ext = _os.path.splitext(urlparse(url).path)[1].lower()
+            mime = _IMAGE_MIME_BY_EXT.get(ext, "image/png")
+        b64 = base64.b64encode(raw).decode("ascii")
+        return {"inlineData": {"mimeType": mime, "data": b64}}
+
+    return None
+
+
+def _msg_parts(content: Any) -> list[dict[str, Any]]:
+    """Convert OpenAI message content into Gemini cloudcode parts.
+
+    Handles plain strings, multimodal lists with text parts
+    ({"type":"text","text":...}) and image parts
+    ({"type":"image_url","image_url":{"url":...}}). Image parts become
+    inlineData parts; everything else is collected as text. Falls back to a
+    single text part so the text-only path is fully preserved.
+    """
+    if content is None:
+        return []
+    if isinstance(content, str):
+        return [{"text": content}] if content else []
+    if isinstance(content, list):
+        parts: list[dict[str, Any]] = []
+        for part in content:
+            if isinstance(part, str):
+                if part:
+                    parts.append({"text": part})
+                continue
+            if not isinstance(part, dict):
+                continue
+            ptype = part.get("type")
+            if ptype == "image_url" or "image_url" in part:
+                inline = _image_url_to_inline_part(part.get("image_url"))
+                if inline:
+                    parts.append(inline)
+                continue
+            if part.get("text"):
+                parts.append({"text": str(part["text"])})
+        return parts
+    text = _msg_text(content)
+    return [{"text": text}] if text else []
+
+
+def _last_user_image_parts(messages: list[ChatMessage]) -> list[dict[str, Any]]:
+    """Return the inlineData image parts from the last user message, if any.
+
+    Used by the plain-text (no-tools) path to detect a multimodal/vision
+    request so it can route through generate_raw() with image parts instead
+    of the text-only complete() path. Returns [] for pure-text requests so
+    that path is completely unaffected.
+    """
+    for msg in reversed(messages):
+        if msg.role == "user" and isinstance(msg.content, list):
+            return [p for p in _msg_parts(msg.content) if "inlineData" in p]
+        if msg.role == "user":
+            return []
+    return []
+
+
+def _sanitize_schema(schema: Any) -> Any:
+    """Strip JSON-schema keys Gemini/Claude rejects, and enforce valid shapes."""
+    if not isinstance(schema, dict):
+        if isinstance(schema, list):
+            return [_sanitize_schema(s) for s in schema]
+        return schema
+
+    # Force object type if properties/required exist but type doesn't
+    if ("properties" in schema or "required" in schema) and "type" not in schema:
+        schema["type"] = "object"
+
+    out: dict[str, Any] = {}
+    for k, v in schema.items():
+        if k not in _SCHEMA_KEEP:
+            continue
+        if k == "properties" and isinstance(v, dict):
+            out[k] = {pk: _sanitize_schema(pv) for pk, pv in v.items()}
+        elif k == "items":
+            out[k] = _sanitize_schema(v)
+        else:
+            out[k] = v
+
+    # Gemini requires non-empty properties for object type
+    if out.get("type") == "object" and "properties" not in out:
+        out["properties"] = {}
+
+    # Ensure required properties exist in properties
+    if "required" in out and isinstance(out["required"], list):
+        props = out.get("properties", {})
+        valid_required = [r for r in out["required"] if isinstance(r, str) and r in props]
+        if valid_required:
+            out["required"] = valid_required
+        else:
+            out.pop("required", None)
+
+    # Force string items if array type missing items
+    if out.get("type") == "array" and "items" not in out:
+        out["items"] = {"type": "string"}
+
+    return out
+
+
+def _tools_to_gemini(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    decls: list[dict[str, Any]] = []
+    for t in tools or []:
+        if not isinstance(t, dict):
+            continue
+        fn = t.get("function") if t.get("type") == "function" else t
+        if not isinstance(fn, dict) or not fn.get("name"):
+            continue
+        
+        decl: dict[str, Any] = {"name": fn["name"]}
+        if fn.get("description"):
+            decl["description"] = fn["description"]
+        
+        params = fn.get("parameters")
+        if isinstance(params, dict):
+            decl["parameters"] = _sanitize_schema(params)
+        else:
+            decl["parameters"] = {"type": "object", "properties": {}}
+            
+        decls.append(decl)
+    return [{"functionDeclarations": decls}] if decls else None
+
+
+def _messages_to_gemini(messages: list[ChatMessage]) -> tuple[str, list[dict[str, Any]]]:
+    system_texts: list[str] = []
+    contents: list[dict[str, Any]] = []
+    id_to_name: dict[str, str] = {}
+    # tool_call ids that became a STRUCTURED functionCall (had a thoughtSignature).
+    # Calls without a signature are rendered as text instead — and their tool
+    # results must be too — so cloudcode doesn't 400 on a sig-less functionCall.
+    structured_ids: set[str] = set()
+    for m in messages:
+        if m.role == "system":
+            t = _msg_text(m.content)
+            if t:
+                system_texts.append(t)
+        elif m.role == "user":
+            user_parts = _msg_parts(m.content)
+            if not user_parts:
+                user_parts = [{"text": ""}]
+            contents.append({"role": "user", "parts": user_parts})
+        elif m.role == "assistant":
+            parts: list[dict[str, Any]] = []
+            t = _msg_text(m.content)
+            if t:
+                parts.append({"text": t})
+            for tc in (m.tool_calls or []):
+                fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                name = fn.get("name") or ""
+                raw_args = fn.get("arguments")
+                try:
+                    args = json.loads(raw_args) if isinstance(raw_args, str) and raw_args.strip() else (raw_args or {})
+                except Exception:
+                    args = {}
+                tc_id = tc.get("id") if isinstance(tc, dict) else None
+                if tc_id:
+                    id_to_name[tc_id] = name
+                with _SIGS_LOCK:
+                    _entry = _THOUGHT_SIGS.get(_sig_key(name, args))
+                    sig = _entry["sig"] if _entry else None
+                if sig:
+                    # Thinking models REQUIRE the thoughtSignature on functionCall
+                    # parts; we have it, so emit a structured call.
+                    parts.append({"functionCall": {"name": name, "args": args}, "thoughtSignature": sig})
+                    if tc_id:
+                        structured_ids.add(tc_id)
+                # else: no cached signature (e.g. proxy restarted mid-conversation).
+                # A sig-less functionCall → upstream 400 "missing thought_signature".
+                # We DON'T emit a text stand-in for the call itself — the model
+                # imitates a "[called ...]" pattern and stops emitting real
+                # structured calls. The paired result is summarised as text below,
+                # which is enough context without teaching a bad output shape.
+            if parts:
+                contents.append({"role": "model", "parts": parts})
+        elif m.role == "tool":
+            name = m.name or id_to_name.get(m.tool_call_id or "", "") or "tool"
+            raw = _msg_text(m.content)
+            if m.tool_call_id and m.tool_call_id not in structured_ids:
+                # Paired call was sig-less (dropped above) — summarise its result as
+                # plain text so there's no orphan functionResponse and the model
+                # still has the observation as context (capped to avoid bloat).
+                contents.append({"role": "user", "parts": [{"text": f"(이전 {name} 도구 결과: {raw[:1500]})"}]})
+            else:
+                try:
+                    resp = json.loads(raw) if raw.strip().startswith(("{", "[")) else {"result": raw}
+                except Exception:
+                    resp = {"result": raw}
+                if not isinstance(resp, dict):
+                    resp = {"result": resp}
+                contents.append({"role": "user", "parts": [{"functionResponse": {"name": name, "response": resp}}]})
+
+    # Merge consecutive turns with the same role to prevent Gemini API 400 errors
+    merged_contents: list[dict[str, Any]] = []
+    for turn in contents:
+        if not turn.get("parts"):
+            continue
+        if merged_contents and merged_contents[-1]["role"] == turn["role"]:
+            merged_contents[-1]["parts"].extend(turn["parts"])
+        else:
+            merged_contents.append(turn)
+
+    return "\n\n".join(system_texts), merged_contents
+
+
+def _parse_gemini_fc(data: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+    inner = data.get("response") if isinstance(data.get("response"), dict) else data
+    cands = inner.get("candidates") if isinstance(inner, dict) else None
+    if not isinstance(cands, list) or not cands:
+        return "", []
+    parts = cands[0].get("content", {}).get("parts", []) or []
+    texts: list[str] = []
+    tool_calls: list[dict[str, Any]] = []
+    for p in parts:
+        if not isinstance(p, dict):
+            continue
+        if isinstance(p.get("functionCall"), dict):
+            fc = p["functionCall"]
+            name = fc.get("name") or ""
+            args = fc.get("args") or {}
+            sig = p.get("thoughtSignature")
+            if sig:
+                _save_thought_sig(_sig_key(name, args), sig)
+            tool_calls.append({
+                "id": fc.get("id") or ("call_" + uuid.uuid4().hex[:10]),
+                "type": "function",
+                "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)},
+            })
+        elif p.get("text"):
+            texts.append(str(p["text"]))
+    return "\n".join(texts).strip(), tool_calls
+
+
+def _iter_usage_candidates(value: Any):
+    if isinstance(value, dict):
+        usage_keys = {
+            "usageMetadata",
+            "usage_metadata",
+            "usage",
+            "tokenUsage",
+            "token_usage",
+            "promptTokenCount",
+            "prompt_token_count",
+            "prompt_tokens",
+            "input_tokens",
+            "candidatesTokenCount",
+            "candidates_token_count",
+            "completion_tokens",
+            "output_tokens",
+            "totalTokenCount",
+            "total_token_count",
+            "total_tokens",
+        }
+        if any(k in value for k in usage_keys):
+            yield value
+        for child in value.values():
+            yield from _iter_usage_candidates(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _iter_usage_candidates(child)
+
+
+def _int_field(data: dict[str, Any], *names: str) -> int:
+    for name in names:
+        raw = data.get(name)
+        if isinstance(raw, int):
+            return raw
+        if isinstance(raw, float):
+            return int(raw)
+        if isinstance(raw, str) and raw.isdigit():
+            return int(raw)
+    return 0
+
+
+def _estimate_tokens(value: Any) -> int:
+    text = _msg_text(value) if not isinstance(value, (dict, list)) else json.dumps(value, ensure_ascii=False)
+    text = text.strip()
+    if not text:
+        return 0
+    alnum_runs = 0
+    in_run = False
+    non_space_chars = 0
+    cjk_chars = 0
+    punctuation = 0
+    for ch in text:
+        if ch.isspace():
+            in_run = False
+            continue
+        non_space_chars += 1
+        if "\u3400" <= ch <= "\u9fff" or "\uac00" <= ch <= "\ud7a3":
+            cjk_chars += 1
+            in_run = False
+        elif ch.isalnum() or ch == "_":
+            if not in_run:
+                alnum_runs += 1
+                in_run = True
+        else:
+            punctuation += 1
+            in_run = False
+    charish = max(1, (non_space_chars + 3) // 4)
+    lexical = alnum_runs + max(1, (cjk_chars + 1) // 2) + punctuation
+    return max(charish, lexical)
+
+
+def _estimate_prompt_tokens(messages: list[ChatMessage]) -> int:
+    total = 0
+    for msg in messages:
+        total += 4 + _estimate_tokens(msg.content)
+        if msg.tool_calls:
+            total += _estimate_tokens(msg.tool_calls)
+        if msg.tool_call_id:
+            total += _estimate_tokens(msg.tool_call_id)
+        if msg.name:
+            total += _estimate_tokens(msg.name)
+    return total
+
+
+def _usage_from_response(
+    data: dict[str, Any] | None,
+    *,
+    messages: list[ChatMessage],
+    completion: Any,
+) -> dict[str, int]:
+    if data:
+        for candidate in _iter_usage_candidates(data):
+            usage = (
+                candidate.get("usageMetadata")
+                or candidate.get("usage_metadata")
+                or candidate.get("usage")
+                or candidate.get("tokenUsage")
+                or candidate.get("token_usage")
+            )
+            if isinstance(usage, dict):
+                candidate = usage
+            prompt = _int_field(
+                candidate,
+                "promptTokenCount",
+                "prompt_token_count",
+                "prompt_tokens",
+                "input_tokens",
+                "inputTokenCount",
+                "input_token_count",
+            )
+            completion_tokens = _int_field(
+                candidate,
+                "candidatesTokenCount",
+                "candidates_token_count",
+                "completion_tokens",
+                "output_tokens",
+                "outputTokenCount",
+                "output_token_count",
+                "generated_tokens",
+            )
+            total = _int_field(candidate, "totalTokenCount", "total_token_count", "total_tokens", "tokens")
+            if prompt or completion_tokens or total:
+                if not total:
+                    total = prompt + completion_tokens
+                if not prompt and total >= completion_tokens:
+                    prompt = total - completion_tokens
+                if not completion_tokens and total >= prompt:
+                    completion_tokens = total - prompt
+                return {
+                    "prompt_tokens": prompt,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total,
+                }
+
+    prompt = _estimate_prompt_tokens(messages)
+    completion_tokens = _estimate_tokens(completion)
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt + completion_tokens,
+    }
+
+
+def _tool_names(tools: list[dict[str, Any]] | None) -> set[str]:
+    names: set[str] = set()
+    for tool in tools or []:
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function") if tool.get("type") == "function" else tool
+        if isinstance(fn, dict) and fn.get("name"):
+            names.add(str(fn["name"]))
+    return names
+
+
+def _tool_choice_is_none(tool_choice: Any) -> bool:
+    return isinstance(tool_choice, str) and tool_choice.strip().lower() == "none"
+
+
+def _tool_choice_to_gemini(tool_choice: Any, tools: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    if tool_choice is None:
+        return None
+    if isinstance(tool_choice, str):
+        choice = tool_choice.strip().lower()
+        if choice == "auto":
+            return {"functionCallingConfig": {"mode": "AUTO"}}
+        if choice == "none":
+            return {"functionCallingConfig": {"mode": "NONE"}}
+        if choice in {"required", "any"}:
+            return {"functionCallingConfig": {"mode": "ANY"}}
+        raise HTTPException(status_code=400, detail=f"Unsupported tool_choice: {tool_choice}")
+    if isinstance(tool_choice, dict):
+        fn = tool_choice.get("function")
+        name = fn.get("name") if isinstance(fn, dict) else tool_choice.get("name")
+        if not name:
+            raise HTTPException(status_code=400, detail="tool_choice function name is required.")
+        name = str(name)
+        valid = _tool_names(tools)
+        if valid and name not in valid:
+            raise HTTPException(status_code=400, detail=f"tool_choice function '{name}' is not in tools.")
+        return {
+            "functionCallingConfig": {
+                "mode": "ANY",
+                "allowed_function_names": [name],
+            }
+        }
+    raise HTTPException(status_code=400, detail="Unsupported tool_choice shape.")
+
+
+def _chunk_text(chunk: dict[str, Any]) -> str:
+    """Extract text fragment from a streamGenerateContent response chunk."""
+    inner = chunk.get("response", chunk)
+    if not isinstance(inner, dict):
+        inner = chunk
+    cands = (inner.get("candidates") or []) if isinstance(inner, dict) else []
+    if not cands:
+        return ""
+    parts = (cands[0].get("content") or {}).get("parts") or []
+    return "".join(str(p.get("text") or "") for p in parts if isinstance(p, dict))
+
+
+def _fc_sse(response_id: str, created: int, model: str, msg: dict[str, Any], finish: str) -> StreamingResponse:
+    def _split_arguments(args: str, size: int = 256) -> list[str]:
+        if not args:
+            return [""]
+        return [args[i:i + size] for i in range(0, len(args), size)]
+
+    def _gen():
+        base = {"id": response_id, "object": "chat.completion.chunk", "created": created, "model": model}
+        first = dict(base)
+        first["choices"] = [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]
+        yield f"data: {json.dumps(first, ensure_ascii=False)}\n\n"
+
+        if msg.get("content"):
+            content_evt = dict(base)
+            content_evt["choices"] = [
+                {"index": 0, "delta": {"content": msg["content"]}, "finish_reason": None}
+            ]
+            yield f"data: {json.dumps(content_evt, ensure_ascii=False)}\n\n"
+
+        for i, tc in enumerate(msg.get("tool_calls") or []):
+            fn = tc.get("function") or {}
+            start_evt = dict(base)
+            start_evt["choices"] = [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "index": i,
+                        "id": tc.get("id"),
+                        "type": tc.get("type", "function"),
+                        "function": {"name": fn.get("name", ""), "arguments": ""},
+                    }]
+                },
+                "finish_reason": None,
+            }]
+            yield f"data: {json.dumps(start_evt, ensure_ascii=False)}\n\n"
+            for piece in _split_arguments(str(fn.get("arguments") or "")):
+                if not piece:
+                    continue
+                arg_evt = dict(base)
+                arg_evt["choices"] = [{
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [{
+                            "index": i,
+                            "function": {"arguments": piece},
+                        }]
+                    },
+                    "finish_reason": None,
+                }]
+                yield f"data: {json.dumps(arg_evt, ensure_ascii=False)}\n\n"
+
+        last = dict(base)
+        last["choices"] = [{"index": 0, "delta": {}, "finish_reason": finish}]
+        yield f"data: {json.dumps(last, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+    return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
+def _extract_memories_v2(messages: list[ChatMessage]) -> list[str]:
+    """
+    Convert conversation history into a list of memory strings.
+    Only assistant messages are kept as memories; system and the last user
+    message are excluded.
+    """
+    last_user_idx: int | None = None
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].role == "user":
+            last_user_idx = i
+            break
+
+    memories: list[str] = []
+    for i, msg in enumerate(messages):
+        if msg.role == "system":
+            continue
+        if msg.role == "user" and i == last_user_idx:
+            continue
+        content_text = _msg_text(msg.content).strip()
+        if content_text:
+            label = "assistant" if msg.role == "assistant" else msg.role
+            memories.append(f"[{label}]: {content_text}")
+    return memories
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+@app.get("/v1/models", response_model=ModelListResponse)
+async def list_models():
+    """Return the list of supported models (OpenAI-compatible)."""
+    return ModelListResponse(data=_MODELS)
+
+
+@app.post("/v1/chat/completions")
+async def chat_completions(req: ChatCompletionRequest):
+    """OpenAI-compatible chat completions endpoint.
+
+    Antigravity itself is non-streaming, but many clients (e.g. the Hermes
+    agent) always request `stream: true`. We compute the full completion and,
+    when streaming is requested, emit it as a single OpenAI SSE chunk followed
+    by [DONE]. This keeps both streaming and non-streaming clients working.
+    """
+    # Resolve model
+    model_info = _MODEL_MAP.get(req.model)
+    if model_info is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model '{req.model}' not found. Available: {list(_MODEL_MAP.keys())}",
+        )
+    antigravity_model: str = model_info["antigravity_model"]
+    client = _get_client()
+
+    # ── Function-calling path (the Hermes agent) ──
+    # When the request carries tool definitions, forward them to Antigravity as
+    # Gemini functionDeclarations and translate functionCall responses back into
+    # OpenAI tool_calls — this is what makes the agent able to actually run tools.
+    if req.tools:
+        response_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+        created = int(time.time())
+        system_text, contents = _messages_to_gemini(req.messages)
+        gemini_tools = None if _tool_choice_is_none(req.tool_choice) else _tools_to_gemini(req.tools)
+        # Accept large client requests but cap to what Gemini accepts (3.x flash
+        # supports up to 65536 output tokens).
+        gen: dict[str, Any] = {"maxOutputTokens": min(req.max_tokens or 4096, 65536)}
+        if req.temperature is not None:
+            gen["temperature"] = req.temperature
+        if req.top_p is not None:
+            gen["topP"] = req.top_p
+        request_body: dict[str, Any] = {
+            "contents": contents,
+            "generationConfig": gen,
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"},
+            ],
+        }
+        if system_text:
+            request_body["systemInstruction"] = {"role": "system", "parts": [{"text": system_text}]}
+        if gemini_tools:
+            request_body["tools"] = gemini_tools
+        tool_config = None if _tool_choice_is_none(req.tool_choice) else _tool_choice_to_gemini(req.tool_choice, req.tools)
+        if tool_config:
+            request_body["toolConfig"] = tool_config
+        try:
+            data = await asyncio.to_thread(client.generate_raw, request=request_body, model=antigravity_model)
+        except Exception as exc:
+            _upstream = ""
+            _resp = getattr(exc, "response", None)
+            if _resp is not None:
+                try:
+                    _upstream = _resp.text[:2000]
+                except Exception:
+                    pass
+            log.error("generate_raw (function-calling) failed: %s | UPSTREAM BODY: %s", exc, _upstream)
+            log.exception("generate_raw exception traceback:")
+            raise HTTPException(status_code=502, detail=f"Antigravity upstream error: {exc}")
+        text, tool_calls = _parse_gemini_fc(data)
+        if not text and not tool_calls:
+            raise HTTPException(status_code=502, detail="Antigravity returned empty response.")
+        finish = "tool_calls" if tool_calls else "stop"
+        message: dict[str, Any] = {"role": "assistant", "content": text or None}
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+        usage = _usage_from_response(data, messages=req.messages, completion=message)
+        if req.stream:
+            return _fc_sse(response_id, created, req.model, message, finish)
+        return JSONResponse({
+            "id": response_id,
+            "object": "chat.completion",
+            "created": created,
+            "model": req.model,
+            "choices": [{"index": 0, "message": message, "finish_reason": finish}],
+            "usage": usage,
+        })
+
+    # ── Plain text path (the lightweight chatbot, no tools) ──
+    # Convert OpenAI messages → Antigravity params
+    system = _extract_system_prompt(req.messages)
+    prompt = _extract_user_prompt(req.messages)
+    memories = _extract_memories_v2(req.messages)
+
+    # Vision: if the last user message carries image parts, route through
+    # generate_raw() with inlineData parts (complete() is text-only). Pure-text
+    # requests have no image parts here, so they fall through untouched.
+    image_parts = _last_user_image_parts(req.messages)
+
+    if not prompt and not image_parts:
+        raise HTTPException(status_code=400, detail="No user message found in the request.")
+
+    # Build IDs once — shared by both streaming and non-streaming paths below.
+    response_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+    created = int(time.time())
+
+    if image_parts:
+        # Build a normal text request, then replace the user parts with the
+        # full text+image part list so the upstream sees the image inline.
+        raw_req = client._build_gemini_request(
+            system=system,
+            prompt=prompt or "이 이미지를 설명해줘.",
+            memories=memories,
+            grounding=False,
+        )
+        user_parts: list[dict[str, Any]] = []
+        if prompt:
+            user_parts.append({"text": prompt})
+        user_parts.extend(image_parts)
+        raw_req["contents"] = [{"role": "user", "parts": user_parts}]
+        if req.max_tokens:
+            raw_req["generationConfig"]["maxOutputTokens"] = req.max_tokens
+
+        try:
+            data = await asyncio.to_thread(
+                client.generate_raw,
+                request=raw_req,
+                model=antigravity_model,
+            )
+            vision_text = client._extract_text(data)
+        except Exception as exc:
+            log.exception("Vision generate_raw() failed")
+            raise HTTPException(
+                status_code=502,
+                detail=f"Antigravity vision upstream error: {exc}",
+            )
+
+        if not vision_text:
+            raise HTTPException(status_code=502, detail="Antigravity returned empty vision response.")
+
+        if req.stream:
+            def _vision_sse():
+                base = {
+                    "id": response_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": req.model,
+                }
+                first = dict(base)
+                first["choices"] = [
+                    {"index": 0, "delta": {"role": "assistant", "content": vision_text}, "finish_reason": None}
+                ]
+                yield f"data: {json.dumps(first, ensure_ascii=False)}\n\n"
+                last = dict(base)
+                last["choices"] = [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+                yield f"data: {json.dumps(last, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+
+            return StreamingResponse(_vision_sse(), media_type="text/event-stream")
+
+        return ChatCompletionResponse(
+            id=response_id,
+            created=created,
+            model=req.model,
+            choices=[
+                ChatCompletionChoice(
+                    index=0,
+                    message=ChatMessage(role="assistant", content=vision_text),
+                    finish_reason="stop",
+                )
+            ],
+            usage=ChatUsage(**_usage_from_response(data, messages=req.messages, completion=vision_text)),
+        )
+
+    if req.stream:
+        # Try real upstream SSE via v1internal:streamGenerateContent (AsyncClient).
+        # If the endpoint is unsupported or returns an error, fall back to
+        # complete() + fake single-chunk SSE so all clients stay working.
+        raw_req = client._build_gemini_request(system=system, prompt=prompt, memories=memories)
+
+        async def _sse_gen():
+            base = {
+                "id": response_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": req.model,
+            }
+            first_frag = True
+            got_any = False
+            try:
+                async for chunk in client.generate_raw_stream_async(
+                    request=raw_req, model=antigravity_model
+                ):
+                    frag = _chunk_text(chunk)
+                    if frag:
+                        got_any = True
+                        delta: dict[str, Any] = {"content": frag}
+                        if first_frag:
+                            delta["role"] = "assistant"
+                            first_frag = False
+                        evt = dict(base)
+                        evt["choices"] = [{"index": 0, "delta": delta, "finish_reason": None}]
+                        yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+                if got_any:
+                    last = dict(base)
+                    last["choices"] = [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+                    yield f"data: {json.dumps(last, ensure_ascii=False)}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+                # Upstream returned no text chunks — fall through to complete()
+                log.warning("streamGenerateContent returned no text chunks; falling back to complete()")
+            except Exception as exc:
+                log.warning(
+                    "Upstream streaming failed (%s); falling back to complete()", exc
+                )
+
+            # Fallback: complete() → fake single-chunk SSE
+            try:
+                fb_text = await asyncio.to_thread(
+                    client.complete,
+                    system=system,
+                    prompt=prompt,
+                    memories=memories,
+                    model=antigravity_model,
+                )
+            except Exception as exc2:
+                log.error("Fallback complete() also failed: %s", exc2)
+                return
+            if fb_text:
+                fb_first = dict(base)
+                fb_first["choices"] = [
+                    {"index": 0, "delta": {"role": "assistant", "content": fb_text}, "finish_reason": None}
+                ]
+                yield f"data: {json.dumps(fb_first, ensure_ascii=False)}\n\n"
+            fb_last = dict(base)
+            fb_last["choices"] = [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+            yield f"data: {json.dumps(fb_last, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(_sse_gen(), media_type="text/event-stream")
+
+    # ── Non-streaming path ──
+    # complete() is synchronous — run in thread to avoid blocking the event loop
+    try:
+        text = await asyncio.to_thread(
+            client.complete,
+            system=system,
+            prompt=prompt,
+            memories=memories,
+            model=antigravity_model,
+        )
+    except Exception as exc:
+        log.exception("AntigravityClient.complete() failed")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Antigravity upstream error: {exc}",
+        )
+
+    if not text:
+        raise HTTPException(status_code=502, detail="Antigravity returned empty response.")
+
+    return ChatCompletionResponse(
+        id=response_id,
+        created=created,
+        model=req.model,
+        choices=[
+            ChatCompletionChoice(
+                index=0,
+                message=ChatMessage(role="assistant", content=text),
+                finish_reason="stop",
+            )
+        ],
+        usage=ChatUsage(**_usage_from_response(None, messages=req.messages, completion=text)),
+    )
+
+
+@app.get("/health")
+async def health():
+    """Health check endpoint."""
+    return {"status": "ok"}
+
+
+@app.post("/admin/models/refresh")
+async def refresh_models(request: Request):
+    """Refresh the dynamic Antigravity model catalog without restarting."""
+    if not _proxy_api_key():
+        return _openai_error_response(
+            "Admin model refresh requires ANTIGRAVITY_PROXY_API_KEY to be configured.",
+            status_code=403,
+            error_type="permission_error",
+            code="admin_api_key_not_configured",
+        )
+    if not _request_api_key_valid(request):
+        return _openai_error_response(
+            "Invalid or missing API key.",
+            status_code=401,
+            error_type="authentication_error",
+            code="invalid_api_key",
+        )
+    result = await _fetch_and_update_models()
+    status_code = 200 if result.get("ok") else 502
+    return JSONResponse(result, status_code=status_code)
+
+
+# ---------------------------------------------------------------------------
+# SearXNG-compatible web search, backed by Gemini Google-Search grounding.
+#
+# Hermes' built-in ``searxng`` web-search backend issues
+#   GET {SEARXNG_URL}/search?q=...&format=json&pageno=1
+# and expects a SearXNG JSON body: {"results": [{title, url, content, score}]}.
+# We answer that exact contract here using Antigravity's ``google_search``
+# grounding tool, so the Hermes agent gets real Google-grounded web search with
+# ZERO changes to Hermes itself — just set web.search_backend=searxng and
+# SEARXNG_URL to this proxy. Survives `hermes update` (only our code + ~/.hermes
+# config/.env are involved, never the Hermes git tree).
+# ---------------------------------------------------------------------------
+# Grounding model = the REAL 3.1 Flash Lite (`gemini-3.1-flash-lite`, Antigravity's
+# alias for Google MODEL_GOOGLE_GEMINI_2_5_FLASH_LITE; `gemini-2.5-flash-lite` is the
+# same model). Confirmed via v1internal:fetchAvailableModels — our proxy's _MODELS
+# map mislabelled "Gemini 3.1 Flash Lite" as plain `gemini-2.5-flash` (regular Flash).
+# The lite tier is a NON-thinking model: ~2-7s/query with rich grounding chunks
+# (10-21), no thinkingBudget needed. Set ANTIGRAVITY_GROUNDING_THINKING>=0 to add a
+# thinkingConfig (only useful for thinking models like gemini-3-flash-agent). All
+# env-overridable.
+_GROUNDING_MODEL = os.getenv("ANTIGRAVITY_GROUNDING_MODEL", "gemini-3.1-flash-lite")
+_GROUNDING_THINKING = int(os.getenv("ANTIGRAVITY_GROUNDING_THINKING", "-1"))  # <0 = no thinkingConfig
+_GROUNDING_MAXTOK = int(os.getenv("ANTIGRAVITY_GROUNDING_MAXTOK", "0"))  # 0 = no output cap
+
+
+def _grounding_search(query: str, limit: int) -> dict[str, Any]:
+    """Run a Google-Search-grounded query and map it to a SearXNG JSON body."""
+    client = _get_client()
+    # The lite default needs no caps: measured 2-7s with rich chunks even with no
+    # output limit. Both knobs are opt-in for thinking/heavier models — set
+    # ANTIGRAVITY_GROUNDING_MAXTOK>0 to cap output, ANTIGRAVITY_GROUNDING_THINKING>=0
+    # to attach a thinkingConfig — to keep them under Hermes' 15s timeout.
+    _gencfg: dict[str, Any] = {"temperature": 0.0}
+    if _GROUNDING_MAXTOK > 0:
+        _gencfg["maxOutputTokens"] = _GROUNDING_MAXTOK
+    if _GROUNDING_THINKING >= 0:
+        _gencfg["thinkingConfig"] = {"thinkingBudget": _GROUNDING_THINKING}
+    req = {
+        "contents": [{"role": "user", "parts": [{"text": query}]}],
+        "tools": [{"google_search": {}}],
+        "generationConfig": _gencfg,
+    }
+    data = client.generate_raw(request=req, model=_GROUNDING_MODEL)
+    # Antigravity wraps the Gemini payload under "response".
+    resp = data.get("response", data)
+    cand = (resp.get("candidates") or [{}])[0]
+    parts = cand.get("content", {}).get("parts") or []
+    answer = "".join(p.get("text", "") for p in parts).strip()
+    gm = cand.get("groundingMetadata") or cand.get("grounding_metadata") or {}
+    chunks = gm.get("groundingChunks") or gm.get("grounding_chunks") or []
+    supports = gm.get("groundingSupports") or gm.get("grounding_supports") or []
+
+    # Build a snippet per source from the answer segments that cite it.
+    snippet_by_chunk: dict[int, list[str]] = {}
+    for s in supports:
+        seg = (s.get("segment") or {}).get("text", "")
+        idxs = s.get("groundingChunkIndices") or s.get("grounding_chunk_indices") or []
+        for idx in idxs:
+            if seg:
+                snippet_by_chunk.setdefault(int(idx), []).append(seg)
+
+    results: list[dict[str, Any]] = []
+    n = len(chunks)
+    for i, ch in enumerate(chunks):
+        w = ch.get("web") or {}
+        url = (w.get("uri") or "").strip()
+        if not url:
+            continue
+        title = (w.get("title") or url).strip()
+        snippet = " ".join(snippet_by_chunk.get(i, [])).strip() or answer[:400]
+        results.append({
+            "title": title,
+            "url": url,  # vertexaisearch grounding-redirect → resolves to the real source
+            "content": snippet[:600],
+            "score": float(n - i),  # preserve Gemini's source ordering
+            "engine": "google-grounding",
+        })
+
+    results = results[:limit]
+    return {
+        "query": query,
+        "number_of_results": len(results),
+        "results": results,
+        "answers": [answer] if answer else [],
+        "suggestions": gm.get("webSearchQueries") or gm.get("web_search_queries") or [],
+        "infoboxes": [],
+    }
+
+
+_SEARCH_CACHE: dict[str, dict[str, Any]] = {}
+_SEARCH_CACHE_TTL = 300.0  # 5 minutes
+_SEARCH_CACHE_LOCK = threading.Lock()
+
+# In-flight dedup: maps query string → asyncio.Future[payload].
+# Concurrent requests for the same query share one upstream call.
+_SEARCH_INFLIGHT: dict[str, Any] = {}  # Any = asyncio.Future[dict]
+
+
+def _get_cached_search(query: str) -> dict[str, Any] | None:
+    with _SEARCH_CACHE_LOCK:
+        entry = _SEARCH_CACHE.get(query)
+        if entry:
+            if time.time() - entry["timestamp"] < _SEARCH_CACHE_TTL:
+                return entry["payload"]
+            else:
+                del _SEARCH_CACHE[query]
+    return None
+
+
+def _set_cached_search(query: str, payload: dict[str, Any]):
+    with _SEARCH_CACHE_LOCK:
+        _SEARCH_CACHE[query] = {
+            "timestamp": time.time(),
+            "payload": payload,
+        }
+
+
+async def _get_or_fetch_search(query: str, limit: int) -> dict[str, Any]:
+    """Deduplicated search fetch: concurrent requests for the same query share
+    one upstream call and all receive the same cached result."""
+    cached = _get_cached_search(query)
+    if cached is not None:
+        return cached
+
+    # If another coroutine is already fetching this query, wait for it.
+    # asyncio is single-threaded within the event loop, so the check-and-insert
+    # below has no race condition (no await between the check and the insert).
+    if query in _SEARCH_INFLIGHT:
+        try:
+            return await asyncio.shield(_SEARCH_INFLIGHT[query])
+        except Exception:
+            # Original fetch failed; try cache (may have been populated) or reraise.
+            cached = _get_cached_search(query)
+            if cached is not None:
+                return cached
+            raise
+
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future = loop.create_future()
+    _SEARCH_INFLIGHT[query] = fut
+    try:
+        payload = await asyncio.to_thread(_grounding_search, query, limit)
+        _set_cached_search(query, payload)
+        fut.set_result(payload)
+        return payload
+    except asyncio.CancelledError:
+        if not fut.done():
+            fut.cancel()
+        raise
+    except Exception as exc:
+        if not fut.done():
+            fut.set_exception(exc)
+        raise
+    finally:
+        _SEARCH_INFLIGHT.pop(query, None)
+
+
+@app.get("/search")
+async def searxng_search(
+    q: str = Query("", description="search query"),
+    format: str = Query("json"),
+    pageno: int = Query(1),
+    limit: int = Query(10, ge=1, le=20),
+):
+    """SearXNG-compatible JSON search endpoint (Gemini Google-Search grounded)."""
+    query = (q or "").strip()
+    empty = {"query": query, "number_of_results": 0, "results": [], "answers": []}
+    if not query or pageno > 1:
+        # Grounding has no pagination; page >1 simply has no further results.
+        return JSONResponse(empty)
+    cached = _get_cached_search(query)
+    if cached is not None:
+        log.info("SearXNG search cache hit for: %r", query)
+        return JSONResponse(cached)
+    try:
+        # Hard 13s ceiling — return a valid empty body BEFORE Hermes' own 15s
+        # SearXNG client timeout fires (which would surface as a tool error).
+        # _get_or_fetch_search deduplicates concurrent identical queries so
+        # only one upstream grounding call is made per unique query string.
+        payload = await asyncio.wait_for(
+            _get_or_fetch_search(query, limit), timeout=13.0
+        )
+        return JSONResponse(payload)
+    except asyncio.TimeoutError:
+        log.warning("grounding search timed out (>13s) for %r", query)
+        return JSONResponse(empty)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("grounding search failed for %r: %s", query, exc)
+        # Return an empty-but-valid SearXNG body so Hermes degrades gracefully.
+        return JSONResponse(empty)
+
+
+# ---------------------------------------------------------------------------
+# Image generation (OpenAI-compatible /v1/images/generations)
+# ---------------------------------------------------------------------------
+class ImageGenerationRequest(BaseModel):
+    prompt: str
+    model: str = "gemini-3.1-flash-image"
+    n: int = Field(default=1, ge=1, le=1)
+    size: str = "1024x1024"
+    response_format: str = "b64_json"
+    user: str | None = None
+
+    model_config = {"extra": "allow"}
+
+
+@app.post("/v1/images/generations")
+async def create_image(req: ImageGenerationRequest):
+    """Generate an image via Antigravity (Gemini native image output).
+
+    Returns OpenAI-compatible b64_json response that the chatbot adapter
+    saves to a temp file and sends to KakaoTalk.
+    """
+    import base64
+    import tempfile
+    from pathlib import Path
+
+    client = _get_client()
+
+    # Map size → aspect_ratio + image_size for Antigravity
+    size_map = {
+        "1024x1024": ("square", "1K"),
+        "1792x1024": ("landscape", "1K"),
+        "1024x1792": ("portrait", "1K"),
+    }
+    aspect_ratio, image_size = size_map.get(req.size, ("square", "1K"))
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = await asyncio.to_thread(
+                client.generate_image,
+                prompt=req.prompt,
+                output_dir=Path(tmpdir),
+                aspect_ratio=aspect_ratio,
+                image_size=image_size,
+            )
+            image_bytes = output_path.read_bytes()
+            image_b64 = base64.b64encode(image_bytes).decode("ascii")
+    except Exception as exc:
+        log.exception("Image generation failed")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Image generation failed: {exc}",
+        )
+
+    return JSONResponse({
+        "created": int(time.time()),
+        "data": [
+            {
+                "b64_json": image_b64,
+                "revised_prompt": req.prompt,
+            }
+        ],
+    })
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "antigravity_proxy:app",
+        host="0.0.0.0",
+        port=8765,
+        log_level="info",
+        # No reload in production-like proxy
+    )
