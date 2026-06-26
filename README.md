@@ -573,7 +573,8 @@ Embeddings and batch operations:
 - `asyncBatchEmbedContent` stores the deterministic batch embedding result as
   an immediately completed local operation and batch resource.
 - `batchGenerateContent` runs requests synchronously through Antigravity and
-  stores immediately completed `operations/*` and `batches/*` results.
+  stores immediately completed `operations/*` and `batches/*` results with
+  Gemini `BATCH_STATE_*` status values and `stats` counters.
 - `batches.create` accepts inline `requests` plus `model` and returns a
   completed local batch resource. It also accepts common SDK wrapper bodies
   such as `{"batch": {...}}`, `{"generateContentBatch": {...}}`, and

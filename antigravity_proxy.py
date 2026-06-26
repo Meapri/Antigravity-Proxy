@@ -1068,6 +1068,16 @@ def _gemini_batch_body(body: Any) -> Any:
     return body
 
 
+def _gemini_batch_stats(request_count: int, *, successful: int | None = None, failed: int = 0, pending: int = 0) -> dict[str, str]:
+    success_count = request_count - failed - pending if successful is None else successful
+    return {
+        "requestCount": str(max(0, request_count)),
+        "successfulRequestCount": str(max(0, success_count)),
+        "failedRequestCount": str(max(0, failed)),
+        "pendingRequestCount": str(max(0, pending)),
+    }
+
+
 def _gemini_store_batch(batch: dict[str, Any]) -> dict[str, Any]:
     index = _gemini_load_batches_index()
     index[batch["name"]] = batch
@@ -5434,6 +5444,7 @@ def _gemini_create_completed_embed_batch(model: dict[str, Any], body: dict[str, 
     operation_name = "operations/asyncBatchEmbedContent-" + uuid.uuid4().hex
     model_resource = _gemini_model_name(model)
     request_count = len(body.get("requests") or [])
+    stats = _gemini_batch_stats(request_count)
     response_payload = {
         "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.AsyncBatchEmbedContentResponse",
         **embedding_response,
@@ -5442,17 +5453,19 @@ def _gemini_create_completed_embed_batch(model: dict[str, Any], body: dict[str, 
         "name": batch_name,
         "displayName": body.get("displayName") or batch_name.rsplit("/", 1)[-1],
         "model": model_resource,
-        "state": "JOB_STATE_SUCCEEDED",
+        "state": "BATCH_STATE_SUCCEEDED",
         "createTime": now,
         "updateTime": now,
         "endTime": now,
         "requestCount": request_count,
+        "stats": stats,
         "operation": operation_name,
         "response": response_payload,
         "metadata": {
             "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.AsyncBatchEmbedContentMetadata",
             "model": model_resource,
             "requestCount": request_count,
+            "stats": stats,
         },
     }
     operation = {
@@ -5461,6 +5474,7 @@ def _gemini_create_completed_embed_batch(model: dict[str, Any], body: dict[str, 
             "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.AsyncBatchEmbedContentMetadata",
             "model": model_resource,
             "requestCount": request_count,
+            "stats": stats,
             "batch": batch_name,
         },
         "done": True,
@@ -5824,6 +5838,7 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
     model_resource = _gemini_model_name(model)
     batch_name = "batches/batch_" + uuid.uuid4().hex
     operation_name = "operations/batchGenerateContent-" + uuid.uuid4().hex
+    stats = _gemini_batch_stats(len(requests))
     response_payload = {
         "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.BatchGenerateContentResponse",
         "responses": responses,
@@ -5832,17 +5847,19 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
         "name": batch_name,
         "displayName": body.get("displayName") or body.get("display_name") or batch_name.rsplit("/", 1)[-1],
         "model": model_resource,
-        "state": "JOB_STATE_SUCCEEDED",
+        "state": "BATCH_STATE_SUCCEEDED",
         "createTime": now,
         "updateTime": now,
         "endTime": now,
         "requestCount": len(requests),
+        "stats": stats,
         "operation": operation_name,
         "response": response_payload,
         "metadata": {
             "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.BatchGenerateContentMetadata",
             "model": model_resource,
             "requestCount": len(requests),
+            "stats": stats,
         },
     }
     operation = {
@@ -5851,6 +5868,7 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
             "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.BatchGenerateContentMetadata",
             "model": model_resource,
             "requestCount": len(requests),
+            "stats": stats,
             "batch": batch_name,
         },
         "done": True,
@@ -5910,9 +5928,18 @@ async def gemini_cancel_batch(batch_id: str):
     batch = _gemini_get_batch(batch_id)
     if not batch:
         return _gemini_error_response(f"Batch '{batch_id}' not found.", status_code=404, status="NOT_FOUND")
-    if batch.get("state") not in {"JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED", "JOB_STATE_CANCELLED"}:
+    terminal_states = {
+        "BATCH_STATE_SUCCEEDED",
+        "BATCH_STATE_FAILED",
+        "BATCH_STATE_CANCELLED",
+        "BATCH_STATE_EXPIRED",
+        "JOB_STATE_SUCCEEDED",
+        "JOB_STATE_FAILED",
+        "JOB_STATE_CANCELLED",
+    }
+    if batch.get("state") not in terminal_states:
         now = _gemini_now_iso()
-        batch["state"] = "JOB_STATE_CANCELLED"
+        batch["state"] = "BATCH_STATE_CANCELLED"
         batch["updateTime"] = now
         batch["endTime"] = now
         _gemini_store_batch(batch)

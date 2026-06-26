@@ -657,7 +657,9 @@ def test_gemini_batch_generate_content_operation(tmp_path, monkeypatch):
     assert waited.json()["name"] == operation["name"]
     assert batch.status_code == 200
     assert batch.json()["name"] == batch_name
-    assert batch.json()["state"] == "JOB_STATE_SUCCEEDED"
+    assert batch.json()["state"] == "BATCH_STATE_SUCCEEDED"
+    assert batch.json()["stats"]["requestCount"] == "2"
+    assert operation["metadata"]["stats"]["successfulRequestCount"] == "2"
     assert batches.status_code == 200
     assert batches.json()["batches"][0]["operation"] == operation["name"]
     assert deleted.status_code == 200
@@ -706,11 +708,15 @@ def test_gemini_batch_wrapped_request_bodies(tmp_path, monkeypatch):
     assert created.status_code == 200
     assert created.json()["displayName"] == "wrapped batch"
     assert created.json()["requestCount"] == 1
+    assert created.json()["stats"]["requestCount"] == "1"
     assert generated.status_code == 200
     assert generated.json()["metadata"]["requestCount"] == 1
+    assert generated.json()["metadata"]["stats"]["successfulRequestCount"] == "1"
     assert generated.json()["response"]["responses"][0]["candidates"][0]["content"]["parts"][0]["text"] == "method"
     assert embedded.status_code == 200
     assert embedded.json()["displayName"] == "wrapped embed"
+    assert embedded.json()["state"] == "BATCH_STATE_SUCCEEDED"
+    assert embedded.json()["stats"]["successfulRequestCount"] == "1"
     assert embedded.json()["response"]["embeddings"][0]["values"]
     assert len(embedded.json()["response"]["embeddings"][0]["values"]) == 8
     assert wrong_method.status_code == 400
@@ -739,8 +745,9 @@ def test_gemini_batches_create_get_cancel_delete(tmp_path, monkeypatch):
     batch = created.json()
     assert batch["name"].startswith("batches/")
     assert batch["displayName"] == "docs batch"
-    assert batch["state"] == "JOB_STATE_SUCCEEDED"
+    assert batch["state"] == "BATCH_STATE_SUCCEEDED"
     assert batch["requestCount"] == 1
+    assert batch["stats"]["requestCount"] == "1"
 
     fetched = client.get(f"/v1beta/{batch['name']}")
     operation = client.get(f"/v1beta/{batch['operation']}")
