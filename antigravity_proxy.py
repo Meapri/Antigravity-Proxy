@@ -7476,7 +7476,9 @@ def _gemini_interaction_model_output_step(text: str, response: dict[str, Any] | 
 async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+    body = _gemini_apply_generate_config(body)
     body = _gemini_apply_response_format(body)
+    body = _gemini_normalize_generate_body(body)
     model_name = body.get("model") or body.get("modelName") or body.get("model_name") or "models/gemini-3-flash-agent"
     model = _resolve_gemini_model(str(model_name))
     contents = _gemini_interaction_contents(body)

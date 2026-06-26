@@ -1576,6 +1576,46 @@ def test_gemini_interactions_accept_content_item_aliases_and_image_model(tmp_pat
         "type": "object",
     }
 
+    configured_interaction = client.post("/v1beta/interactions", json={
+        "input": "use config",
+        "config": {
+            "system_instruction": "Use concise answers.",
+            "temperature": "0.25",
+            "top_k": "12",
+            "safety_settings": {"harassment": "none"},
+            "function_declarations": {
+                "name": "lookup",
+                "description": "Find a record.",
+                "parameters_json_schema": {
+                    "type": "object",
+                    "properties": {"id": {"type": "string"}},
+                },
+            },
+            "tool_config": {
+                "mode": "any",
+                "allowed_function_names": "lookup",
+            },
+        },
+        "store": False,
+    })
+
+    assert configured_interaction.status_code == 200
+    assert seen["request"]["systemInstruction"]["parts"] == [{"text": "Use concise answers."}]
+    assert seen["request"]["generationConfig"]["temperature"] == 0.25
+    assert seen["request"]["generationConfig"]["topK"] == 12
+    assert seen["request"]["safetySettings"] == [{
+        "category": "HARM_CATEGORY_HARASSMENT",
+        "threshold": "BLOCK_NONE",
+    }]
+    assert seen["request"]["tools"][0]["functionDeclarations"][0]["parameters"] == {
+        "type": "object",
+        "properties": {"id": {"type": "string"}},
+    }
+    assert seen["request"]["toolConfig"]["functionCallingConfig"] == {
+        "mode": "ANY",
+        "allowedFunctionNames": ["lookup"],
+    }
+
     image_interaction = client.post("/v1beta/interactions", json={
         "model": "models/gemini-image-latest",
         "input": [{"type": "text", "text": "draw an icon"}],

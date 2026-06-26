@@ -348,6 +348,10 @@ to the Gemini REST camelCase forms. `generateContent?alt=sse` and
 `generateContent?stream=true` are treated as streaming Gemini SSE responses.
 Streaming fallback errors use the same Gemini `error` payload and
 `google.rpc.ErrorInfo` details as non-streaming Gemini errors.
+`interactions.create` accepts the same SDK-style `config` object used by
+`generateContent`, including `systemInstruction`, `generationConfig` scalar
+coercion, `safetySettings`, `functionDeclarations`, `toolConfig`, and
+response-format aliases.
 
 Implemented Gemini-compatible routes:
 
