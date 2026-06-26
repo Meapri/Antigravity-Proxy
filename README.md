@@ -847,6 +847,9 @@ Corpora and semantic retriever:
 - Corpus and document `:query` perform local lexical chunk matching. They return
   Gemini-shaped `relevantChunks`, but they are not semantic Google retriever
   scores because Antigravity does not expose that service.
+- Corpus, document, and chunk patch calls honor `updateMask` / `update_mask`
+  for supported mutable fields, including wrapper paths such as
+  `corpus.displayName`, `document.customMetadata`, and `chunk.data`.
 
 Tuned models and permissions:
 

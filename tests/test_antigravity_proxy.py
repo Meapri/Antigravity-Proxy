@@ -2482,7 +2482,9 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
 
     listed_corpora = client.get("/v1/corpora")
     fetched_corpus = client.get(f"/v1/{corpus_name}")
-    patched_corpus = client.patch(f"/v1/{corpus_name}", json={"displayName": "Knowledge updated"})
+    patched_corpus = client.patch(f"/v1/{corpus_name}?updateMask=corpus.displayName", json={
+        "display_name": "Knowledge updated",
+    })
 
     assert listed_corpora.status_code == 200
     assert listed_corpora.json()["corpora"][0]["name"] == corpus_name
@@ -2491,14 +2493,20 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     assert patched_corpus.status_code == 200
     assert patched_corpus.json()["displayName"] == "Knowledge updated"
 
-    document = client.post(f"/v1/corpora/{corpus_id}/documents", json={"displayName": "Launch notes"})
+    document = client.post(f"/v1/corpora/{corpus_id}/documents", json={
+        "displayName": "Launch notes",
+        "customMetadata": [{"key": "source", "stringValue": "initial"}],
+    })
     assert document.status_code == 200
     doc_name = document.json()["name"]
     doc_id = doc_name.rsplit("/", 1)[-1]
 
     listed_docs = client.get(f"/v1/corpora/{corpus_id}/documents")
     fetched_doc = client.get(f"/v1/{doc_name}")
-    patched_doc = client.patch(f"/v1/{doc_name}", json={"displayName": "Launch notes updated"})
+    patched_doc = client.patch(f"/v1/{doc_name}?updateMask=document.displayName", json={
+        "displayName": "Launch notes updated",
+        "customMetadata": [{"key": "source", "stringValue": "ignored"}],
+    })
 
     assert listed_docs.status_code == 200
     assert listed_docs.json()["documents"][0]["name"] == doc_name
@@ -2506,9 +2514,11 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     assert fetched_doc.json()["displayName"] == "Launch notes"
     assert patched_doc.status_code == 200
     assert patched_doc.json()["displayName"] == "Launch notes updated"
+    assert patched_doc.json()["customMetadata"][0]["stringValue"] == "initial"
 
     chunk = client.post(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks", json={
         "data": {"stringValue": "Project Atlas launch window is October."},
+        "customMetadata": [{"key": "topic", "stringValue": "launch"}],
     })
     assert chunk.status_code == 200
     chunk_id = chunk.json()["name"].rsplit("/", 1)[-1]
@@ -2524,8 +2534,9 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     doc_queried = client.post(f"/v1/corpora/{corpus_id}/documents/{doc_id}:query", json={"query": "launch"})
     listed_chunks = client.get(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks")
     fetched_chunk = client.get(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks/{chunk_id}")
-    patched_chunk = client.patch(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks/{chunk_id}", json={
+    patched_chunk = client.patch(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks/{chunk_id}?updateMask=chunk.data", json={
         "data": {"stringValue": "Project Atlas moved to November."},
+        "customMetadata": [{"key": "topic", "stringValue": "ignored"}],
     })
 
     assert batch_created.status_code == 200
@@ -2538,6 +2549,7 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     assert chunk.json()["name"] in {item["name"] for item in listed_chunks.json()["chunks"]}
     assert fetched_chunk.json()["data"]["stringValue"].endswith("October.")
     assert patched_chunk.json()["data"]["stringValue"].endswith("November.")
+    assert patched_chunk.json()["customMetadata"][0]["stringValue"] == "launch"
 
     batch_deleted = client.post(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks:batchDelete", json={
         "names": [f"{doc_name}/chunks/batch_one"],

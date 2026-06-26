@@ -3221,6 +3221,31 @@ def _gemini_permission_update_fields(update_mask: str | None, body: dict[str, An
     return fields
 
 
+def _gemini_simple_update_fields(
+    *,
+    update_mask: str | None,
+    body: dict[str, Any],
+    allowed: set[str],
+    aliases: dict[str, str],
+    resource: str,
+) -> set[str]:
+    if not update_mask:
+        return {key for key in allowed if key in body}
+    fields: set[str] = set()
+    for raw in update_mask.split(","):
+        key = raw.strip()
+        if not key:
+            continue
+        fields.add(aliases.get(key, aliases.get(key.rsplit(".", 1)[-1], key)))
+    unsupported = fields - allowed
+    if unsupported:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{resource}.patch supports updateMask fields: {', '.join(sorted(allowed))}.",
+        )
+    return fields
+
+
 def _gemini_document_resource(doc: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in doc.items() if k not in {"chunks"} and v is not None}
 
@@ -5919,15 +5944,24 @@ async def gemini_get_corpus(corpus_id: str):
 
 @app.patch("/v1/corpora/{corpus_id}")
 @app.patch("/v1beta/corpora/{corpus_id}")
-async def gemini_patch_corpus(corpus_id: str, request: Request):
+async def gemini_patch_corpus(corpus_id: str, request: Request, updateMask: str | None = None):
     index = _gemini_load_corpora_index()
     name = _gemini_corpus_name(corpus_id)
     meta = index.get(name)
     if not meta:
         return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
     body = _gemini_normalize_request(await request.json())
-    if isinstance(body, dict) and "displayName" in body:
-        meta["displayName"] = body["displayName"]
+    if isinstance(body, dict):
+        updateMask = updateMask or body.pop("updateMask", None)
+        fields = _gemini_simple_update_fields(
+            update_mask=updateMask,
+            body=body,
+            allowed={"displayName"},
+            aliases={"display_name": "displayName", "corpus.display_name": "displayName", "corpus.displayName": "displayName"},
+            resource="corpora",
+        )
+        for key in fields:
+            meta[key] = body[key]
     meta["updateTime"] = _gemini_now_iso()
     index[name] = meta
     _gemini_save_corpora_index(index)
@@ -6138,17 +6172,36 @@ async def gemini_get_corpus_chunk(corpus_id: str, document_id: str, chunk_id: st
 
 @app.patch("/v1/corpora/{corpus_id}/documents/{document_id:path}/chunks/{chunk_id:path}")
 @app.patch("/v1beta/corpora/{corpus_id}/documents/{document_id:path}/chunks/{chunk_id:path}")
-async def gemini_patch_corpus_chunk(corpus_id: str, document_id: str, chunk_id: str, request: Request):
+async def gemini_patch_corpus_chunk(corpus_id: str, document_id: str, chunk_id: str, request: Request, updateMask: str | None = None):
     try:
         index, corpus_name, doc, doc_name = _gemini_get_corpus_doc_for_chunks(corpus_id, document_id)
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
-        body["name"] = _gemini_corpus_chunk_name(corpus_id, document_id, chunk_id)
-        chunk = _gemini_upsert_corpus_chunk(doc, doc_name, body)
+        updateMask = updateMask or body.pop("updateMask", None)
+        chunk_name = _gemini_corpus_chunk_name(corpus_id, document_id, chunk_id)
+        current = dict((doc.get("chunks") or {}).get(chunk_name) or {})
+        if not current:
+            raise HTTPException(status_code=404, detail=f"Chunk '{chunk_id}' not found.")
+        fields = _gemini_simple_update_fields(
+            update_mask=updateMask,
+            body=body,
+            allowed={"data", "customMetadata"},
+            aliases={
+                "chunk.data": "data",
+                "chunk.custom_metadata": "customMetadata",
+                "chunk.customMetadata": "customMetadata",
+                "custom_metadata": "customMetadata",
+            },
+            resource="chunks",
+        )
+        for key in fields:
+            current[key] = body[key]
+        current["updateTime"] = _gemini_now_iso()
+        doc.setdefault("chunks", {})[chunk_name] = current
         index[corpus_name]["documents"][doc_name] = doc
         _gemini_save_corpora_index(index)
-        return _gemini_chunk_resource(chunk)
+        return _gemini_chunk_resource(current)
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
@@ -6185,7 +6238,7 @@ async def gemini_get_corpus_document(corpus_id: str, document_id: str):
 
 @app.patch("/v1/corpora/{corpus_id}/documents/{document_id:path}")
 @app.patch("/v1beta/corpora/{corpus_id}/documents/{document_id:path}")
-async def gemini_patch_corpus_document(corpus_id: str, document_id: str, request: Request):
+async def gemini_patch_corpus_document(corpus_id: str, document_id: str, request: Request, updateMask: str | None = None):
     index = _gemini_load_corpora_index()
     corpus_name = _gemini_corpus_name(corpus_id)
     meta = index.get(corpus_name)
@@ -6197,7 +6250,22 @@ async def gemini_patch_corpus_document(corpus_id: str, document_id: str, request
         return _gemini_error_response(f"Document '{document_id}' not found.", status_code=404, status="NOT_FOUND")
     body = _gemini_normalize_request(await request.json())
     if isinstance(body, dict):
-        for key in ("displayName", "customMetadata"):
+        updateMask = updateMask or body.pop("updateMask", None)
+        fields = _gemini_simple_update_fields(
+            update_mask=updateMask,
+            body=body,
+            allowed={"displayName", "customMetadata"},
+            aliases={
+                "document.display_name": "displayName",
+                "document.displayName": "displayName",
+                "display_name": "displayName",
+                "document.custom_metadata": "customMetadata",
+                "document.customMetadata": "customMetadata",
+                "custom_metadata": "customMetadata",
+            },
+            resource="documents",
+        )
+        for key in fields:
             if key in body:
                 doc[key] = body[key]
     doc["updateTime"] = _gemini_now_iso()
