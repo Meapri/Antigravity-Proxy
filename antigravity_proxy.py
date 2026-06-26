@@ -4956,16 +4956,18 @@ async def gemini_generate_content(model_name: str, request: Request):
 
 def _gemini_streaming_response(*, body: dict[str, Any], antigravity_model: str) -> StreamingResponse:
     async def _gen():
+        got_any = False
         try:
             async for chunk in _get_client().generate_raw_stream_async(
                 request=body,
                 model=antigravity_model,
             ):
                 payload = _gemini_unwrap_response(chunk)
+                got_any = True
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-            yield "data: [DONE]\n\n"
         except Exception as exc:
             log.warning("Gemini streamGenerateContent failed; falling back to non-streaming: %s", exc)
+        if not got_any:
             try:
                 data = await asyncio.to_thread(
                     _get_client().generate_raw,
@@ -4976,7 +4978,7 @@ def _gemini_streaming_response(*, body: dict[str, Any], antigravity_model: str) 
             except Exception as inner:
                 payload = {"error": {"code": 502, "message": f"Antigravity upstream error: {inner}", "status": "UNAVAILABLE"}}
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-            yield "data: [DONE]\n\n"
+        yield "data: [DONE]\n\n"
 
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
