@@ -825,6 +825,9 @@ File search stores:
 - `uploadToFileSearchStore` accepts raw, multipart, or JSON direct uploads and
   stores documents locally while preserving custom metadata and
   `chunkingConfig`.
+- `fileSearchStores.documents.list` accepts `pageSize` / `pageToken` and
+  snake_case `page_size` / `page_token`, with the Gemini REST page size capped
+  at 20.
 - `tools.file_search` / `tools.fileSearch` performs local lexical retrieval
   against these stores and injects the best matching document snippets into the
   outgoing Gemini request context.

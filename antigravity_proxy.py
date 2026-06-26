@@ -6297,14 +6297,24 @@ async def gemini_upload_to_file_search_store(store_id: str, request: Request):
 
 @app.get("/v1/fileSearchStores/{store_id}/documents")
 @app.get("/v1beta/fileSearchStores/{store_id}/documents")
-async def gemini_list_file_search_documents(store_id: str, pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+async def gemini_list_file_search_documents(store_id: str, request: Request):
     meta = _gemini_get_fss_meta(store_id)
     if not meta:
         return _gemini_error_response(f"File search store '{store_id}' not found.", status_code=404, status="NOT_FOUND")
+    query = request.query_params
+    page_size_raw = query.get("pageSize") or query.get("page_size") or "20"
+    try:
+        page_size = max(1, min(20, int(page_size_raw)))
+    except (TypeError, ValueError):
+        page_size = 20
+    page_token = query.get("pageToken") or query.get("page_token") or "0"
+    try:
+        start = max(0, int(page_token))
+    except (TypeError, ValueError):
+        start = 0
     docs = [_gemini_document_resource(doc) for doc in (meta.get("documents") or {}).values()]
     docs.sort(key=lambda item: item.get("createTime") or "")
-    start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
-    end = start + pageSize
+    end = start + page_size
     return {"documents": docs[start:end], "nextPageToken": str(end) if end < len(docs) else ""}
 
 

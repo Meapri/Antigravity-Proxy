@@ -2604,12 +2604,16 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     listed_stores = client.get("/v1/fileSearchStores")
     fetched_store = client.get(f"/v1/{store_name}")
     listed = client.get(f"/v1/fileSearchStores/{store_id}/documents")
+    listed_snake_page = client.get(f"/v1/fileSearchStores/{store_id}/documents?page_size=1&page_token=1")
     assert listed_stores.status_code == 200
     assert listed_stores.json()["fileSearchStores"][0]["name"] == store_name
     assert fetched_store.status_code == 200
     assert fetched_store.json()["name"] == store_name
     assert listed.status_code == 200
     assert len(listed.json()["documents"]) == 2
+    assert listed_snake_page.status_code == 200
+    assert len(listed_snake_page.json()["documents"]) == 1
+    assert listed_snake_page.json()["nextPageToken"] == ""
 
     fetched = client.get(f"/v1/{imported_doc['name']}")
     assert fetched.status_code == 200
@@ -2654,6 +2658,33 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     assert deleted_upload_operation.status_code == 200
     assert deleted_doc.status_code == 200
     assert deleted_store.status_code == 200
+
+
+def test_gemini_file_search_documents_list_clamps_page_size(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILE_SEARCH_STORES_DIR", str(tmp_path / "fss"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    client = TestClient(proxy.app)
+
+    store = client.post("/v1beta/fileSearchStores", json={"displayName": "many docs"}).json()
+    store_id = store["name"].split("/", 1)[1]
+    for index in range(25):
+        uploaded = client.post(
+            f"/upload/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore?displayName=doc-{index}.txt",
+            json={"content": f"doc {index}"},
+        )
+        assert uploaded.status_code == 200
+
+    listed = client.get(f"/v1beta/fileSearchStores/{store_id}/documents?pageSize=999")
+    next_page = client.get(
+        f"/v1beta/fileSearchStores/{store_id}/documents?page_size=999&page_token={listed.json()['nextPageToken']}"
+    )
+
+    assert listed.status_code == 200
+    assert len(listed.json()["documents"]) == 20
+    assert listed.json()["nextPageToken"] == "20"
+    assert next_page.status_code == 200
+    assert len(next_page.json()["documents"]) == 5
+    assert next_page.json()["nextPageToken"] == ""
 
 
 def test_gemini_file_search_tool_injects_local_context(tmp_path, monkeypatch):
