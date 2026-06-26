@@ -7245,8 +7245,13 @@ async def gemini_tuned_generate_content(tuned_model_id: str, request: Request):
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body = _gemini_apply_generate_config(body)
         body = _gemini_apply_response_format(body)
-        body = _gemini_inline_local_files(_gemini_apply_file_search(_gemini_apply_cached_content(body)))
+        body = _gemini_normalize_generate_body(body)
+        body = _gemini_apply_cached_content(body)
+        body = _gemini_apply_file_search(body)
+        _gemini_reject_unsupported_builtin_tools(body)
+        body = _gemini_inline_local_files(body)
         body.pop("model", None)
         data = await asyncio.to_thread(_get_client().generate_raw, request=body, model=str(model["antigravity_model"]))
         return JSONResponse(_gemini_finalize_generate_response(

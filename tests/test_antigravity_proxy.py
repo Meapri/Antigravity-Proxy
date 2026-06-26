@@ -3131,11 +3131,27 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert fetched_perm.json()["role"] == "OWNER"
 
     generated = client.post("/v1/tunedModels/my_tuned:generateContent", json={
-        "contents": [{"role": "user", "parts": [{"text": "hello tuned"}]}]
+        "contents": [{"role": "user", "parts": [{"text": "hello tuned"}]}],
+        "provider_options": {
+            "google": {
+                "system_instruction": "tuned provider system",
+                "max_output_tokens": "13",
+                "tool_config": {"function_calling_config": {"mode": "none"}},
+            }
+        },
+        "config": {
+            "response_mime_type": "text/plain",
+        },
+        "processing_options": {"media_resolution": "MEDIA_RESOLUTION_LOW"},
     })
     assert generated.status_code == 200
     assert seen["model"] == "gemini-3-flash-agent"
     assert seen["request"]["contents"][0]["parts"][0]["text"] == "hello tuned"
+    assert seen["request"]["systemInstruction"]["parts"][0]["text"] == "tuned provider system"
+    assert seen["request"]["generationConfig"]["maxOutputTokens"] == 13
+    assert seen["request"]["generationConfig"]["responseMimeType"] == "text/plain"
+    assert seen["request"]["toolConfig"]["functionCallingConfig"] == {"mode": "NONE"}
+    assert "processingOptions" not in seen["request"]
 
     counted = client.post("/v1/tunedModels/my_tuned:countTokens", json={
         "contents": [{"role": "user", "parts": [{"text": "hello tuned"}]}]
