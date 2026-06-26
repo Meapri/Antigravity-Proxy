@@ -496,6 +496,30 @@ def test_gemini_embeddings_accept_latest_config_and_contents_forms():
             "embed_content_config": {"output_dimensionality": "11", "task_type": "code retrieval query"},
         }]
     })
+    request_wrapped = client.post("/v1beta/models/gemini-3-flash-agent:embedContent", json={
+        "request": {
+            "content": {"parts": [{"text": "provider wrapped"}]},
+        },
+        "provider_options": {
+            "google": {
+                "output_dimensionality": "9",
+                "task_type": "retrieval query",
+            }
+        },
+    })
+    embed_content_wrapped = client.post("/v1beta/models/gemini-3-flash-agent:batchEmbedContents", json={
+        "requests": [{
+            "embed_content_request": {
+                "content": {"parts": [{"text": "batch provider wrapped"}]},
+            },
+            "provider_options": {
+                "google": {
+                    "output_dimensionality": "7",
+                    "task_type": "classification",
+                }
+            },
+        }]
+    })
 
     assert configured.status_code == 200
     assert len(configured.json()["embeddings"]) == 2
@@ -505,6 +529,10 @@ def test_gemini_embeddings_accept_latest_config_and_contents_forms():
     assert wrapped.status_code == 200
     assert len(wrapped.json()["embeddings"]) == 2
     assert len(wrapped.json()["embeddings"][0]["values"]) == 11
+    assert request_wrapped.status_code == 200
+    assert len(request_wrapped.json()["embedding"]["values"]) == 9
+    assert embed_content_wrapped.status_code == 200
+    assert len(embed_content_wrapped.json()["embeddings"][0]["values"]) == 7
 
 
 def test_gemini_legacy_embed_text_methods():

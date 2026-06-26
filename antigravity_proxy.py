@@ -1204,6 +1204,9 @@ def _gemini_content_text(content: Any) -> str:
 
 def _gemini_embedding_config(body: dict[str, Any]) -> dict[str, Any]:
     config: dict[str, Any] = {}
+    provider_config = _gemini_provider_google_config(body)
+    if provider_config:
+        config.update(_gemini_normalize_embedding_config(provider_config))
     for key in ("config", "embedContentConfig"):
         value = body.get(key)
         if isinstance(value, dict):
@@ -1223,6 +1226,31 @@ def _gemini_embedding_content_items(body: dict[str, Any]) -> list[Any]:
     if isinstance(contents, list):
         return contents
     return [contents]
+
+
+def _gemini_embed_request_payload(body: dict[str, Any]) -> dict[str, Any]:
+    for key in ("embedContentRequest", "request"):
+        wrapped = body.get(key)
+        if isinstance(wrapped, dict):
+            out = dict(wrapped)
+            for outer_key in (
+                "model",
+                "config",
+                "embedContentConfig",
+                "outputDimensionality",
+                "taskType",
+                "title",
+                "autoTruncate",
+                "documentOcr",
+                "audioTrackExtraction",
+                "providerOptions",
+                "providerMetadata",
+                "google",
+            ):
+                if outer_key in body and outer_key not in out:
+                    out[outer_key] = body[outer_key]
+            return out
+    return body
 
 
 def _gemini_embedding_content(value: Any) -> dict[str, Any]:
@@ -1757,6 +1785,7 @@ def _gemini_embedding_values(text: str, *, dimensions: int = 768) -> list[float]
 
 
 def _gemini_embedding_from_request(body: dict[str, Any]) -> dict[str, Any]:
+    body = _gemini_normalize_request(_gemini_embed_request_payload(body))
     config = _gemini_embedding_config(body)
     output_dim = config.get("outputDimensionality") or 768
     embeddings: list[dict[str, Any]] = []
@@ -1779,7 +1808,21 @@ def _gemini_batch_request_item(item: dict[str, Any], *wrapper_keys: str) -> dict
         wrapped = item.get(key)
         if isinstance(wrapped, dict):
             out = dict(wrapped)
-            for outer_key in ("model", "config", "generationConfig", "embedContentConfig", "outputDimensionality", "taskType", "title"):
+            for outer_key in (
+                "model",
+                "config",
+                "generationConfig",
+                "embedContentConfig",
+                "outputDimensionality",
+                "taskType",
+                "title",
+                "autoTruncate",
+                "documentOcr",
+                "audioTrackExtraction",
+                "providerOptions",
+                "providerMetadata",
+                "google",
+            ):
                 if outer_key in item and outer_key not in out:
                     out[outer_key] = item[outer_key]
             return out

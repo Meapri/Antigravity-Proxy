@@ -807,7 +807,10 @@ Embeddings and batch operations:
   `retrieval document`, and boolean config fields such as `autoTruncate`,
   `documentOcr`, and `audioTrackExtraction`. They are stable and shaped like
   Gemini embeddings, but they are not semantic Google embedding model outputs
-  because Antigravity does not expose a public embedding RPC.
+  because Antigravity does not expose a public embedding RPC. Single and batch
+  embed requests accept SDK wrapper bodies such as `{"request": {...}}`,
+  `{"embedContentRequest": {...}}`, and `providerOptions.google` /
+  `provider_options.google` embedding config.
 - `asyncBatchEmbedContent` stores the deterministic batch embedding result as
   an immediately completed local operation and batch resource.
 - `batchGenerateContent` runs requests synchronously through Antigravity and
