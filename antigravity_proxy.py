@@ -1492,15 +1492,22 @@ def _gemini_store_operation(operation: dict[str, Any]) -> dict[str, Any]:
 
 def _gemini_get_operation(name: str) -> dict[str, Any] | None:
     index = _gemini_load_operations_index()
-    found = index.get(_gemini_operation_name(name))
-    if found:
-        return found
+    resolved = _gemini_resolve_operation_key(index, name)
+    if resolved:
+        return index.get(resolved)
+    return None
+
+
+def _gemini_resolve_operation_key(index: dict[str, dict[str, Any]], name: str) -> str | None:
+    normalized = _gemini_operation_name(name)
+    if normalized in index:
+        return normalized
     key = name.strip().strip("/")
     if "/operations/" in key:
         suffix = key.rsplit("/operations/", 1)[-1]
-        for op_name, operation in index.items():
+        for op_name in index:
             if op_name == f"operations/{suffix}" or op_name.endswith("/" + suffix):
-                return operation
+                return op_name
     return None
 
 
@@ -7625,9 +7632,9 @@ async def gemini_wait_operation(operation_id: str):
 @app.delete("/v1/operations/{operation_id:path}")
 @app.delete("/v1beta/operations/{operation_id:path}")
 async def gemini_delete_operation(operation_id: str):
-    name = _gemini_operation_name(operation_id)
     index = _gemini_load_operations_index()
-    if name not in index:
+    name = _gemini_resolve_operation_key(index, operation_id)
+    if not name:
         return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
     index.pop(name, None)
     _gemini_save_operations_index(index)

@@ -1034,6 +1034,26 @@ def test_gemini_operations_v1_aliases(tmp_path, monkeypatch):
     assert missing.status_code == 404
 
 
+def test_gemini_operations_delete_accepts_scoped_resource_name(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    client = TestClient(proxy.app)
+    operation = proxy._gemini_store_operation({
+        "name": "operations/scoped_delete",
+        "metadata": {"model": "models/gemini-3-flash-agent"},
+        "done": True,
+    })
+
+    scoped_name = f"models/gemini-3-flash-agent/{operation['name']}"
+    fetched = client.get(f"/v1beta/operations/{scoped_name}")
+    deleted = client.delete(f"/v1beta/operations/{scoped_name}")
+    missing = client.get(f"/v1beta/{operation['name']}")
+
+    assert fetched.status_code == 200
+    assert fetched.json()["name"] == operation["name"]
+    assert deleted.status_code == 200
+    assert missing.status_code == 404
+
+
 def test_gemini_batch_wrapped_request_bodies(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
