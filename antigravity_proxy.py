@@ -5485,26 +5485,44 @@ def _extract_memories_v2(messages: list[ChatMessage]) -> list[str]:
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
-@app.get("/v1/models", response_model=ModelListResponse)
-async def list_models():
+def _gemini_models_list_response(page_size: int, page_token: str | None) -> dict[str, Any]:
+    models = [
+        _gemini_model_resource(model)
+        for model in _MODELS
+        if not _model_capabilities(model)["internal"]
+    ]
+    start = int(page_token or 0) if page_token and page_token.isdigit() else 0
+    end = start + page_size
+    return {
+        "models": models[start:end],
+        "nextPageToken": str(end) if end < len(models) else "",
+    }
+
+
+@app.get("/v1/models")
+async def list_models(request: Request):
     """Return the list of supported models (OpenAI-compatible)."""
+    query = request.query_params
+    if "pageSize" in query or "pageToken" in query:
+        try:
+            page_size = int(query.get("pageSize") or "50")
+        except (TypeError, ValueError):
+            page_size = 50
+        if page_size < 1 or page_size > 1000:
+            return _gemini_error_response(
+                "pageSize must be between 1 and 1000.",
+                status_code=400,
+                status="INVALID_ARGUMENT",
+                field="pageSize",
+            )
+        return _gemini_models_list_response(page_size, query.get("pageToken"))
     return ModelListResponse(data=_MODELS)
 
 
 @app.get("/v1beta/models")
 async def gemini_list_models(pageSize: int = Query(default=50, ge=1, le=1000), pageToken: str | None = None):
     """Gemini-compatible model listing."""
-    models = [
-        _gemini_model_resource(model)
-        for model in _MODELS
-        if not _model_capabilities(model)["internal"]
-    ]
-    start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
-    end = start + pageSize
-    return {
-        "models": models[start:end],
-        "nextPageToken": str(end) if end < len(models) else "",
-    }
+    return _gemini_models_list_response(pageSize, pageToken)
 
 
 @app.get("/v1/models/{model_name:path}/operations")

@@ -364,6 +364,7 @@ def test_gemini_v1_model_routes_do_not_break_openai_models(monkeypatch, tmp_path
     client = TestClient(proxy.app)
 
     openai_models = client.get("/v1/models")
+    gemini_models = client.get("/v1/models?pageSize=1")
     fetched_model = client.get("/v1/models/gemini-3-flash-agent")
     generated = client.post("/v1/models/gemini-3-flash-agent:generateContent", json={
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
@@ -386,6 +387,10 @@ def test_gemini_v1_model_routes_do_not_break_openai_models(monkeypatch, tmp_path
 
     assert openai_models.status_code == 200
     assert openai_models.json()["object"] == "list"
+    assert gemini_models.status_code == 200
+    assert len(gemini_models.json()["models"]) == 1
+    assert gemini_models.json()["models"][0]["name"].startswith("models/")
+    assert gemini_models.json()["nextPageToken"] == "1"
     assert fetched_model.status_code == 200
     assert fetched_model.json()["name"] == "models/gemini-3-flash-agent"
     assert generated.status_code == 200

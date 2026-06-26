@@ -915,7 +915,9 @@ Notes:
 - Model resources include `supportedGenerationMethods`, token limits, and
   capability metadata for the local Gemini compatibility surface.
 - `models.list` supports Gemini `pageSize` / `pageToken` pagination with the
-  official default page size of 50 and maximum page size of 1000.
+  official default page size of 50 and maximum page size of 1000. `/v1/models`
+  keeps the OpenAI model-list shape by default, but returns the Gemini
+  `{"models": ...}` shape when Gemini pagination query parameters are present.
 - `countTokens` is approximate because Antigravity's internal endpoint does not
   expose a separate Gemini token-count RPC. Responses include `totalTokens`,
   `promptTokensDetails`, `cachedContentTokenCount`, and `cacheTokensDetails`
