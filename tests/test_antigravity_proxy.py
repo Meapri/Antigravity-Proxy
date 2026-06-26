@@ -282,6 +282,11 @@ def test_gemini_predict_and_predict_long_running(monkeypatch):
     assert long_running.json()["done"] is True
     assert long_running.json()["response"]["predictions"]
 
+    op_id = long_running.json()["name"].split("/", 1)[1]
+    model_operation = client.get(f"/v1beta/models/gemini-3-flash-agent/operations/{op_id}")
+    assert model_operation.status_code == 200
+    assert model_operation.json()["name"] == long_running.json()["name"]
+
 
 def test_gemini_stream_generate_content_sse(monkeypatch):
     class FakeClient:
@@ -697,12 +702,16 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert created.status_code == 200
     tuned = created.json()["response"]
     assert tuned["name"] == "tunedModels/my_tuned"
+    created_op_id = created.json()["name"].split("/", 1)[1]
 
     listed = client.get("/v1beta/tunedModels")
     fetched = client.get("/v1beta/tunedModels/my_tuned")
+    fetched_operation = client.get(f"/v1beta/tunedModels/my_tuned/operations/{created_op_id}")
     patched = client.patch("/v1beta/tunedModels/my_tuned", json={"description": "updated"})
     assert listed.status_code == 200
     assert fetched.json()["displayName"] == "My tuned"
+    assert fetched_operation.status_code == 200
+    assert fetched_operation.json()["name"] == created.json()["name"]
     assert patched.json()["description"] == "updated"
 
     perm = client.post("/v1beta/tunedModels/my_tuned/permissions", json={
@@ -733,6 +742,35 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     deleted_model = client.delete("/v1beta/tunedModels/my_tuned")
     assert deleted_perm.status_code == 200
     assert deleted_model.status_code == 200
+
+
+def test_openai_image_generation_registers_gemini_generated_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR", str(tmp_path / "generated"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+
+    class FakeClient:
+        def generate_image(self, *, prompt, output_dir, aspect_ratio="", image_size=""):
+            output = output_dir / "image.png"
+            output.write_bytes(b"fake-png")
+            return output
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    created = client.post("/v1/images/generations", json={"prompt": "draw a square"})
+
+    assert created.status_code == 200
+    generated_name = created.json()["data"][0]["generated_file"]
+    listed = client.get("/v1beta/generatedFiles")
+    fetched = client.get(f"/v1beta/{generated_name}")
+    downloaded = client.get(f"/v1beta/{generated_name}:download")
+
+    assert listed.status_code == 200
+    assert listed.json()["generatedFiles"][0]["name"] == generated_name
+    assert fetched.status_code == 200
+    assert fetched.json()["mimeType"] == "image/png"
+    assert downloaded.status_code == 200
+    assert downloaded.content == b"fake-png"
 
 
 def test_admin_refresh_requires_configured_api_key(monkeypatch):

@@ -334,6 +334,9 @@ Implemented Gemini-compatible routes:
 
 - `GET /v1beta/models`
 - `GET /v1beta/models/{model}`
+- `GET /v1beta/models/{model}/operations/{operation}`
+- `POST /v1beta/models/{model}/operations/{operation}:cancel`
+- `DELETE /v1beta/models/{model}/operations/{operation}`
 - `POST /v1beta/models/{model}:generateContent`
 - `POST /v1beta/models/{model}:streamGenerateContent`
 - `POST /v1beta/models/{model}:countTokens`
@@ -361,6 +364,13 @@ Implemented Gemini-compatible routes:
 - `GET /v1beta/files/{file}`
 - `GET /v1beta/files/{file}:download`
 - `DELETE /v1beta/files/{file}`
+- `GET /v1beta/generatedFiles`
+- `GET /v1beta/generatedFiles/{generated_file}`
+- `GET /v1beta/generatedFiles/{generated_file}:download`
+- `DELETE /v1beta/generatedFiles/{generated_file}`
+- `GET /v1beta/generatedFiles/operations/{operation}`
+- `POST /v1beta/generatedFiles/operations/{operation}:cancel`
+- `DELETE /v1beta/generatedFiles/operations/{operation}`
 - `POST /v1beta/cachedContents`
 - `GET /v1beta/cachedContents`
 - `GET /v1beta/cachedContents/{cached_content}`
@@ -386,6 +396,9 @@ Implemented Gemini-compatible routes:
 - `POST /v1beta/tunedModels`
 - `GET /v1beta/tunedModels`
 - `GET /v1beta/tunedModels/{tuned_model}`
+- `GET /v1beta/tunedModels/{tuned_model}/operations/{operation}`
+- `POST /v1beta/tunedModels/{tuned_model}/operations/{operation}:cancel`
+- `DELETE /v1beta/tunedModels/{tuned_model}/operations/{operation}`
 - `PATCH /v1beta/tunedModels/{tuned_model}`
 - `DELETE /v1beta/tunedModels/{tuned_model}`
 - `POST /v1beta/tunedModels/{tuned_model}:generateContent`
@@ -504,6 +517,14 @@ Tuned models and permissions:
 - `tunedModels/{id}:generateContent` forwards to the configured `baseModel`.
 - `permissions` are stored locally for Gemini SDK compatibility.
 
+Generated files:
+
+- OpenAI-compatible image generation also stores each image as a local Gemini
+  `generatedFiles/*` resource so Gemini-style clients can list, fetch, and
+  download generated media.
+- Generated files are stored locally under `data/gemini_generated_files`;
+  override with `ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR`.
+
 Notes:
 
 - Model names are exposed as Gemini resources like
@@ -520,6 +541,8 @@ Notes:
   override with `ANTIGRAVITY_GEMINI_BATCHES_DIR`.
 - Interactions are stored locally under `data/gemini_interactions` by default;
   override with `ANTIGRAVITY_GEMINI_INTERACTIONS_DIR`.
+- Generated files are stored locally under `data/gemini_generated_files` by
+  default; override with `ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR`.
 - File search stores are stored locally under `data/gemini_file_search_stores`;
   override with `ANTIGRAVITY_GEMINI_FILE_SEARCH_STORES_DIR`.
 - Tuned model metadata and permissions are stored locally under

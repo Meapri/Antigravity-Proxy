@@ -712,6 +712,101 @@ def _gemini_get_interaction(name: str) -> dict[str, Any] | None:
     return _gemini_load_interactions_index().get(_gemini_interaction_name(name))
 
 
+def _gemini_generated_files_root() -> Path:
+    return Path(os.getenv("ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR", "data/gemini_generated_files")).expanduser()
+
+
+def _gemini_generated_files_index_path() -> Path:
+    return _gemini_generated_files_root() / "index.json"
+
+
+def _gemini_load_generated_files_index() -> dict[str, dict[str, Any]]:
+    path = _gemini_generated_files_index_path()
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        log.warning("Failed to read Gemini generatedFiles index; starting empty.")
+        return {}
+
+
+def _gemini_save_generated_files_index(index: dict[str, dict[str, Any]]) -> None:
+    root = _gemini_generated_files_root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = _gemini_generated_files_index_path()
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _gemini_generated_file_name(name: str) -> str:
+    key = name.strip().strip("/")
+    if key.startswith("v1beta/"):
+        key = key[len("v1beta/"):]
+    if key.startswith("generatedFiles/"):
+        return key
+    return "generatedFiles/" + key
+
+
+def _gemini_generated_file_resource(meta: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": meta["name"],
+        "displayName": meta.get("displayName") or meta["name"].split("/", 1)[-1],
+        "mimeType": meta.get("mimeType") or "application/octet-stream",
+        "sizeBytes": str(int(meta.get("sizeBytes") or 0)),
+        "createTime": meta.get("createTime") or _gemini_now_iso(),
+        "updateTime": meta.get("updateTime") or meta.get("createTime") or _gemini_now_iso(),
+        "expirationTime": meta.get("expirationTime"),
+        "sha256Hash": meta.get("sha256Hash") or "",
+        "uri": meta.get("uri") or meta["name"],
+        "state": meta.get("state") or "ACTIVE",
+    }
+
+
+def _gemini_store_generated_file(
+    data: bytes,
+    *,
+    mime_type: str | None = None,
+    display_name: str | None = None,
+    source_operation: str | None = None,
+) -> dict[str, Any]:
+    if not data:
+        raise HTTPException(status_code=400, detail="Generated file is empty.")
+    root = _gemini_generated_files_root()
+    root.mkdir(parents=True, exist_ok=True)
+    file_id = "generated_" + uuid.uuid4().hex
+    mime = (mime_type or "image/png").split(";", 1)[0].strip()
+    extension = mimetypes.guess_extension(mime) or ".bin"
+    blob_path = root / f"{file_id}{extension}"
+    blob_path.write_bytes(data)
+    now = _gemini_now_iso()
+    meta = {
+        "name": f"generatedFiles/{file_id}",
+        "displayName": display_name or f"{file_id}{extension}",
+        "mimeType": mime,
+        "sizeBytes": len(data),
+        "createTime": now,
+        "updateTime": now,
+        "sha256Hash": hashlib.sha256(data).hexdigest(),
+        "uri": f"generatedFiles/{file_id}",
+        "state": "ACTIVE",
+        "path": str(blob_path),
+        "sourceOperation": source_operation,
+    }
+    index = _gemini_load_generated_files_index()
+    index[meta["name"]] = meta
+    _gemini_save_generated_files_index(index)
+    return _gemini_generated_file_resource(meta)
+
+
+def _gemini_get_generated_file_meta(name: str) -> dict[str, Any] | None:
+    return _gemini_load_generated_files_index().get(_gemini_generated_file_name(name))
+
+
 def _gemini_files_root() -> Path:
     return Path(os.getenv("ANTIGRAVITY_GEMINI_FILES_DIR", "data/gemini_files")).expanduser()
 
@@ -3031,6 +3126,33 @@ async def gemini_list_models():
     }
 
 
+@app.get("/v1beta/models/{model_name:path}/operations/{operation_id:path}")
+async def gemini_get_model_operation(model_name: str, operation_id: str):
+    operation = _gemini_get_operation(f"models/{model_name}/operations/{operation_id}")
+    if not operation:
+        return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    return operation
+
+
+@app.post("/v1beta/models/{model_name:path}/operations/{operation_id:path}:cancel")
+async def gemini_cancel_model_operation(model_name: str, operation_id: str):
+    operation = _gemini_get_operation(f"models/{model_name}/operations/{operation_id}")
+    if not operation:
+        return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    return JSONResponse({})
+
+
+@app.delete("/v1beta/models/{model_name:path}/operations/{operation_id:path}")
+async def gemini_delete_model_operation(model_name: str, operation_id: str):
+    operation = _gemini_get_operation(f"models/{model_name}/operations/{operation_id}")
+    if not operation:
+        return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    index = _gemini_load_operations_index()
+    index.pop(operation["name"], None)
+    _gemini_save_operations_index(index)
+    return JSONResponse({})
+
+
 @app.get("/v1beta/models/{model_name:path}")
 async def gemini_get_model(model_name: str):
     """Gemini-compatible model retrieval."""
@@ -3120,6 +3242,83 @@ async def gemini_upload_file(request: Request):
     except Exception as exc:
         log.exception("Gemini file upload failed")
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.get("/v1beta/generatedFiles")
+async def gemini_list_generated_files(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+    files = [_gemini_generated_file_resource(meta) for meta in _gemini_load_generated_files_index().values()]
+    files.sort(key=lambda item: item.get("createTime") or "")
+    start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
+    end = start + pageSize
+    return {"generatedFiles": files[start:end], "nextPageToken": str(end) if end < len(files) else ""}
+
+
+@app.get("/v1beta/generatedFiles/{generated_file_id:path}:download")
+async def gemini_download_generated_file(generated_file_id: str):
+    meta = _gemini_get_generated_file_meta(generated_file_id)
+    if not meta:
+        return _gemini_error_response(f"Generated file '{generated_file_id}' not found.", status_code=404, status="NOT_FOUND")
+    path = Path(str(meta.get("path") or ""))
+    if not path.is_file():
+        return _gemini_error_response(
+            f"Generated file '{generated_file_id}' has no local media blob.",
+            status_code=404,
+            status="NOT_FOUND",
+        )
+    return Response(content=path.read_bytes(), media_type=meta.get("mimeType") or "application/octet-stream")
+
+
+@app.get("/v1beta/generatedFiles/operations/{operation_id:path}")
+async def gemini_get_generated_file_operation(operation_id: str):
+    operation = _gemini_get_operation(f"generatedFiles/operations/{operation_id}")
+    if not operation:
+        return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    return operation
+
+
+@app.post("/v1beta/generatedFiles/operations/{operation_id:path}:cancel")
+async def gemini_cancel_generated_file_operation(operation_id: str):
+    operation = _gemini_get_operation(f"generatedFiles/operations/{operation_id}")
+    if not operation:
+        return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    return JSONResponse({})
+
+
+@app.delete("/v1beta/generatedFiles/operations/{operation_id:path}")
+async def gemini_delete_generated_file_operation(operation_id: str):
+    operation = _gemini_get_operation(f"generatedFiles/operations/{operation_id}")
+    if not operation:
+        return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    index = _gemini_load_operations_index()
+    index.pop(operation["name"], None)
+    _gemini_save_operations_index(index)
+    return JSONResponse({})
+
+
+@app.get("/v1beta/generatedFiles/{generated_file_id:path}")
+async def gemini_get_generated_file(generated_file_id: str):
+    meta = _gemini_get_generated_file_meta(generated_file_id)
+    if not meta:
+        return _gemini_error_response(f"Generated file '{generated_file_id}' not found.", status_code=404, status="NOT_FOUND")
+    return _gemini_generated_file_resource(meta)
+
+
+@app.delete("/v1beta/generatedFiles/{generated_file_id:path}")
+async def gemini_delete_generated_file(generated_file_id: str):
+    name = _gemini_generated_file_name(generated_file_id)
+    index = _gemini_load_generated_files_index()
+    meta = index.get(name)
+    if not meta:
+        return _gemini_error_response(f"Generated file '{generated_file_id}' not found.", status_code=404, status="NOT_FOUND")
+    index.pop(name, None)
+    _gemini_save_generated_files_index(index)
+    path = Path(str(meta.get("path") or ""))
+    if path.is_file():
+        try:
+            path.unlink()
+        except OSError:
+            log.warning("Failed to remove Gemini generatedFile blob: %s", path)
+    return JSONResponse({})
 
 
 @app.post("/upload/v1beta/files/{session_id}")
@@ -3425,6 +3624,33 @@ async def gemini_list_tuned_models(pageSize: int = Query(default=100, ge=1, le=1
     start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
     end = start + pageSize
     return {"tunedModels": models[start:end], "nextPageToken": str(end) if end < len(models) else ""}
+
+
+@app.get("/v1beta/tunedModels/{tuned_model_id:path}/operations/{operation_id:path}")
+async def gemini_get_tuned_model_operation(tuned_model_id: str, operation_id: str):
+    operation = _gemini_get_operation(f"tunedModels/{tuned_model_id}/operations/{operation_id}")
+    if not operation:
+        return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    return operation
+
+
+@app.post("/v1beta/tunedModels/{tuned_model_id:path}/operations/{operation_id:path}:cancel")
+async def gemini_cancel_tuned_model_operation(tuned_model_id: str, operation_id: str):
+    operation = _gemini_get_operation(f"tunedModels/{tuned_model_id}/operations/{operation_id}")
+    if not operation:
+        return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    return JSONResponse({})
+
+
+@app.delete("/v1beta/tunedModels/{tuned_model_id:path}/operations/{operation_id:path}")
+async def gemini_delete_tuned_model_operation(tuned_model_id: str, operation_id: str):
+    operation = _gemini_get_operation(f"tunedModels/{tuned_model_id}/operations/{operation_id}")
+    if not operation:
+        return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    index = _gemini_load_operations_index()
+    index.pop(operation["name"], None)
+    _gemini_save_operations_index(index)
+    return JSONResponse({})
 
 
 @app.get("/v1beta/tunedModels/{tuned_model_id}")
@@ -4834,6 +5060,24 @@ async def create_image(req: ImageGenerationRequest):
             )
             image_bytes = output_path.read_bytes()
             image_b64 = base64.b64encode(image_bytes).decode("ascii")
+            generated_file = _gemini_store_generated_file(
+                image_bytes,
+                mime_type=mimetypes.guess_type(str(output_path))[0] or "image/png",
+                display_name=output_path.name,
+            )
+            operation = {
+                "name": "operations/generateImage-" + uuid.uuid4().hex,
+                "metadata": {
+                    "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.GenerateImageMetadata",
+                    "generatedFile": generated_file["name"],
+                },
+                "done": True,
+                "response": {
+                    "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.GeneratedFile",
+                    **generated_file,
+                },
+            }
+            _gemini_store_operation(operation)
     except Exception as exc:
         log.exception("Image generation failed")
         raise HTTPException(
@@ -4847,6 +5091,7 @@ async def create_image(req: ImageGenerationRequest):
             {
                 "b64_json": image_b64,
                 "revised_prompt": req.prompt,
+                "generated_file": generated_file["name"],
             }
         ],
     })
