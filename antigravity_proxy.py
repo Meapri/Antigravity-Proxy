@@ -834,6 +834,133 @@ def _gemini_apply_cached_content(body: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
+def _gemini_fss_root() -> Path:
+    return Path(os.getenv("ANTIGRAVITY_GEMINI_FILE_SEARCH_STORES_DIR", "data/gemini_file_search_stores")).expanduser()
+
+
+def _gemini_fss_index_path() -> Path:
+    return _gemini_fss_root() / "index.json"
+
+
+def _gemini_load_fss_index() -> dict[str, dict[str, Any]]:
+    path = _gemini_fss_index_path()
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        log.warning("Failed to read Gemini fileSearchStores index; starting empty.")
+        return {}
+
+
+def _gemini_save_fss_index(index: dict[str, dict[str, Any]]) -> None:
+    root = _gemini_fss_root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = _gemini_fss_index_path()
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _gemini_fss_name(name: str) -> str:
+    key = name.strip().strip("/")
+    if key.startswith("v1beta/"):
+        key = key[len("v1beta/"):]
+    if key.startswith("fileSearchStores/"):
+        return key
+    return "fileSearchStores/" + key
+
+
+def _gemini_document_name(store_name: str, document_id: str) -> str:
+    doc = document_id.strip().strip("/")
+    if "/documents/" in doc:
+        doc = doc.rsplit("/documents/", 1)[-1]
+    return f"{_gemini_fss_name(store_name)}/documents/{doc}"
+
+
+def _gemini_fss_resource(meta: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": meta["name"],
+        "displayName": meta.get("displayName") or meta["name"].split("/", 1)[-1],
+        "createTime": meta.get("createTime"),
+        "updateTime": meta.get("updateTime"),
+        "fileCount": len(meta.get("documents") or {}),
+    }
+
+
+def _gemini_document_resource(doc: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in doc.items() if k not in {"content"} and v is not None}
+
+
+def _gemini_create_fss(body: dict[str, Any]) -> dict[str, Any]:
+    body = _gemini_normalize_request(body)
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    store_id = "fs_" + uuid.uuid4().hex
+    meta = {
+        "name": f"fileSearchStores/{store_id}",
+        "displayName": body.get("displayName") or body.get("display_name") or store_id,
+        "createTime": now,
+        "updateTime": now,
+        "documents": {},
+    }
+    index = _gemini_load_fss_index()
+    index[meta["name"]] = meta
+    _gemini_save_fss_index(index)
+    return _gemini_fss_resource(meta)
+
+
+def _gemini_get_fss_meta(store_name: str) -> dict[str, Any] | None:
+    return _gemini_load_fss_index().get(_gemini_fss_name(store_name))
+
+
+def _gemini_store_document(store_name: str, *, display_name: str | None, mime_type: str | None, content: bytes) -> dict[str, Any]:
+    index = _gemini_load_fss_index()
+    store_key = _gemini_fss_name(store_name)
+    store = index.get(store_key)
+    if not store:
+        raise HTTPException(status_code=404, detail=f"File search store '{store_name}' not found.")
+    doc_id = "doc_" + uuid.uuid4().hex
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    text_preview = content[:4096].decode("utf-8", errors="replace")
+    doc = {
+        "name": f"{store_key}/documents/{doc_id}",
+        "displayName": display_name or doc_id,
+        "mimeType": (mime_type or "application/octet-stream").split(";", 1)[0],
+        "createTime": now,
+        "updateTime": now,
+        "state": "ACTIVE",
+        "sizeBytes": str(len(content)),
+        "sha256Hash": hashlib.sha256(content).hexdigest(),
+        "content": base64.b64encode(content).decode("ascii"),
+        "textPreview": text_preview,
+    }
+    store.setdefault("documents", {})[doc["name"]] = doc
+    store["updateTime"] = now
+    index[store_key] = store
+    _gemini_save_fss_index(index)
+    return _gemini_document_resource(doc)
+
+
+def _gemini_import_file_to_fss(store_name: str, body: dict[str, Any]) -> dict[str, Any]:
+    body = _gemini_normalize_request(body)
+    file_name = str(body.get("fileName") or body.get("file") or body.get("fileUri") or "")
+    meta = _gemini_get_file_meta(file_name)
+    if not meta:
+        raise HTTPException(status_code=404, detail=f"File '{file_name}' not found.")
+    path = Path(str(meta.get("path") or ""))
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"File blob for '{file_name}' not found.")
+    return _gemini_store_document(
+        store_name,
+        display_name=meta.get("displayName"),
+        mime_type=meta.get("mimeType"),
+        content=path.read_bytes(),
+    )
+
+
 # ---------------------------------------------------------------------------
 # OpenAI-compatible Pydantic schemas
 # ---------------------------------------------------------------------------
@@ -2574,6 +2701,155 @@ async def gemini_delete_cached_content(cache_id: str):
     index = _gemini_load_cached_index()
     index.pop(meta["name"], None)
     _gemini_save_cached_index(index)
+    return JSONResponse({})
+
+
+@app.post("/v1beta/fileSearchStores")
+async def gemini_create_file_search_store(request: Request):
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        return _gemini_create_fss(body)
+    except HTTPException as exc:
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT")
+    except Exception as exc:
+        log.exception("Gemini fileSearchStores create failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.get("/v1beta/fileSearchStores")
+async def gemini_list_file_search_stores(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+    stores = [_gemini_fss_resource(meta) for meta in _gemini_load_fss_index().values()]
+    stores.sort(key=lambda item: item.get("createTime") or "")
+    start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
+    end = start + pageSize
+    return {"fileSearchStores": stores[start:end], "nextPageToken": str(end) if end < len(stores) else ""}
+
+
+@app.get("/v1beta/fileSearchStores/{store_id}")
+async def gemini_get_file_search_store(store_id: str):
+    meta = _gemini_get_fss_meta(store_id)
+    if not meta:
+        return _gemini_error_response(f"File search store '{store_id}' not found.", status_code=404, status="NOT_FOUND")
+    return _gemini_fss_resource(meta)
+
+
+@app.delete("/v1beta/fileSearchStores/{store_id}")
+async def gemini_delete_file_search_store(store_id: str):
+    name = _gemini_fss_name(store_id)
+    index = _gemini_load_fss_index()
+    if name not in index:
+        return _gemini_error_response(f"File search store '{store_id}' not found.", status_code=404, status="NOT_FOUND")
+    index.pop(name, None)
+    _gemini_save_fss_index(index)
+    return JSONResponse({})
+
+
+@app.post("/v1beta/fileSearchStores/{store_id}:importFile")
+async def gemini_import_file_to_file_search_store(store_id: str, request: Request):
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        document = _gemini_import_file_to_fss(store_id, body)
+        operation = {
+            "name": "operations/importFile-" + uuid.uuid4().hex,
+            "metadata": {
+                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.ImportFileMetadata",
+                "fileSearchStore": _gemini_fss_name(store_id),
+            },
+            "done": True,
+            "response": {
+                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.ImportFileResponse",
+                "document": document,
+            },
+        }
+        return _gemini_store_operation(operation)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini fileSearchStores importFile failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.post("/upload/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore")
+@app.post("/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore")
+async def gemini_upload_to_file_search_store(store_id: str, request: Request):
+    try:
+        content_type = request.headers.get("content-type", "")
+        body = await request.body()
+        metadata: dict[str, Any] = {}
+        media = body
+        media_type = content_type
+        if "multipart/" in content_type:
+            metadata, media, parsed_type = _parse_gemini_multipart_upload(content_type, body)
+            media_type = parsed_type or content_type
+        file_meta = metadata.get("file") if isinstance(metadata.get("file"), dict) else metadata
+        display_name = request.query_params.get("displayName")
+        if isinstance(file_meta, dict):
+            display_name = file_meta.get("displayName") or file_meta.get("display_name") or display_name
+            media_type = file_meta.get("mimeType") or file_meta.get("mime_type") or media_type
+        document = _gemini_store_document(store_id, display_name=display_name, mime_type=media_type, content=media)
+        operation = {
+            "name": "operations/uploadToFileSearchStore-" + uuid.uuid4().hex,
+            "metadata": {
+                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.UploadToFileSearchStoreMetadata",
+                "fileSearchStore": _gemini_fss_name(store_id),
+            },
+            "done": True,
+            "response": {
+                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.UploadToFileSearchStoreResponse",
+                "document": document,
+            },
+        }
+        return _gemini_store_operation(operation)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini uploadToFileSearchStore failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.get("/v1beta/fileSearchStores/{store_id}/documents")
+async def gemini_list_file_search_documents(store_id: str, pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+    meta = _gemini_get_fss_meta(store_id)
+    if not meta:
+        return _gemini_error_response(f"File search store '{store_id}' not found.", status_code=404, status="NOT_FOUND")
+    docs = [_gemini_document_resource(doc) for doc in (meta.get("documents") or {}).values()]
+    docs.sort(key=lambda item: item.get("createTime") or "")
+    start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
+    end = start + pageSize
+    return {"documents": docs[start:end], "nextPageToken": str(end) if end < len(docs) else ""}
+
+
+@app.get("/v1beta/fileSearchStores/{store_id}/documents/{document_id:path}")
+async def gemini_get_file_search_document(store_id: str, document_id: str):
+    meta = _gemini_get_fss_meta(store_id)
+    if not meta:
+        return _gemini_error_response(f"File search store '{store_id}' not found.", status_code=404, status="NOT_FOUND")
+    doc = (meta.get("documents") or {}).get(_gemini_document_name(store_id, document_id))
+    if not doc:
+        return _gemini_error_response(f"Document '{document_id}' not found.", status_code=404, status="NOT_FOUND")
+    return _gemini_document_resource(doc)
+
+
+@app.delete("/v1beta/fileSearchStores/{store_id}/documents/{document_id:path}")
+async def gemini_delete_file_search_document(store_id: str, document_id: str):
+    index = _gemini_load_fss_index()
+    store_name = _gemini_fss_name(store_id)
+    meta = index.get(store_name)
+    if not meta:
+        return _gemini_error_response(f"File search store '{store_id}' not found.", status_code=404, status="NOT_FOUND")
+    doc_name = _gemini_document_name(store_id, document_id)
+    if doc_name not in (meta.get("documents") or {}):
+        return _gemini_error_response(f"Document '{document_id}' not found.", status_code=404, status="NOT_FOUND")
+    meta["documents"].pop(doc_name, None)
+    meta["updateTime"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    index[store_name] = meta
+    _gemini_save_fss_index(index)
     return JSONResponse({})
 
 

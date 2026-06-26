@@ -354,6 +354,15 @@ Implemented Gemini-compatible routes:
 - `GET /v1beta/operations/{operation}`
 - `POST /v1beta/operations/{operation}:cancel`
 - `DELETE /v1beta/operations/{operation}`
+- `POST /v1beta/fileSearchStores`
+- `GET /v1beta/fileSearchStores`
+- `GET /v1beta/fileSearchStores/{store}`
+- `DELETE /v1beta/fileSearchStores/{store}`
+- `POST /v1beta/fileSearchStores/{store}:importFile`
+- `POST /upload/v1beta/fileSearchStores/{store}:uploadToFileSearchStore`
+- `GET /v1beta/fileSearchStores/{store}/documents`
+- `GET /v1beta/fileSearchStores/{store}/documents/{document}`
+- `DELETE /v1beta/fileSearchStores/{store}/documents/{document}`
 
 Example:
 
@@ -437,6 +446,16 @@ Embeddings and batch operations:
 - `batchGenerateContent` runs requests synchronously through Antigravity and
   stores an immediately completed `operations/*` result.
 
+File search stores:
+
+- `fileSearchStores` and document management are implemented as a local
+  compatibility layer under `data/gemini_file_search_stores`.
+- `importFile` imports files previously uploaded through the local Files API.
+- `uploadToFileSearchStore` accepts direct uploads and stores documents locally.
+- The proxy preserves Gemini-compatible resource shapes and operations, but it
+  does not yet execute a semantic vector search over these stores inside
+  `tools.file_search`.
+
 Notes:
 
 - Model names are exposed as Gemini resources like
@@ -449,9 +468,11 @@ Notes:
   default; override with `ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR`.
 - Batch operations are stored locally under `data/gemini_operations` by default;
   override with `ANTIGRAVITY_GEMINI_OPERATIONS_DIR`.
+- File search stores are stored locally under `data/gemini_file_search_stores`;
+  override with `ANTIGRAVITY_GEMINI_FILE_SEARCH_STORES_DIR`.
 - Tuned models, live API, interactions, permissions, true async long-running
-  jobs, semantic Google embeddings, and file search store management are not
-  fully implemented yet.
+  jobs, semantic Google embeddings, and semantic `tools.file_search` retrieval
+  are not fully implemented yet.
 
 ## Responses API Compatibility
 

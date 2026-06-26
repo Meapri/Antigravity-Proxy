@@ -406,6 +406,53 @@ def test_gemini_cached_contents_merge_into_generate_request(tmp_path, monkeypatc
     assert missing.status_code == 404
 
 
+def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILE_SEARCH_STORES_DIR", str(tmp_path / "fss"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "files"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    client = TestClient(proxy.app)
+
+    created = client.post("/v1beta/fileSearchStores", json={"displayName": "notes"})
+    assert created.status_code == 200
+    store_name = created.json()["name"]
+    store_id = store_name.split("/", 1)[1]
+
+    uploaded_file = client.post(
+        "/upload/v1beta/files?uploadType=media&displayName=source.txt",
+        content=b"source document",
+        headers={"Content-Type": "text/plain"},
+    ).json()["file"]
+
+    imported = client.post(f"/v1beta/fileSearchStores/{store_id}:importFile", json={"fileName": uploaded_file["name"]})
+    assert imported.status_code == 200
+    imported_doc = imported.json()["response"]["document"]
+
+    uploaded_doc = client.post(
+        f"/upload/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore?displayName=direct.txt",
+        content=b"direct document",
+        headers={"Content-Type": "text/plain"},
+    )
+    assert uploaded_doc.status_code == 200
+
+    listed = client.get(f"/v1beta/fileSearchStores/{store_id}/documents")
+    assert listed.status_code == 200
+    assert len(listed.json()["documents"]) == 2
+
+    fetched = client.get(f"/v1beta/{imported_doc['name']}")
+    assert fetched.status_code == 200
+    assert fetched.json()["displayName"] == "source.txt"
+
+    operation = client.get(f"/v1beta/{imported.json()['name']}")
+    assert operation.status_code == 200
+    assert operation.json()["done"] is True
+
+    deleted_doc = client.delete(f"/v1beta/{imported_doc['name']}")
+    deleted_store = client.delete(f"/v1beta/{store_name}")
+
+    assert deleted_doc.status_code == 200
+    assert deleted_store.status_code == 200
+
+
 def test_admin_refresh_requires_configured_api_key(monkeypatch):
     monkeypatch.delenv("ANTIGRAVITY_PROXY_API_KEY", raising=False)
     client = TestClient(proxy.app)
