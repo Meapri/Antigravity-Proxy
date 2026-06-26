@@ -924,6 +924,10 @@ Notes:
   official default page size of 50 and maximum page size of 1000. `/v1/models`
   keeps the OpenAI model-list shape by default, but returns the Gemini
   `{"models": ...}` shape when Gemini pagination query parameters are present.
+- Gemini list-style routes accept both REST-style `pageSize` / `pageToken` and
+  SDK-style `page_size` / `page_token` query aliases. Batch and operation list
+  routes also accept `return_partial_success` as an alias for
+  `returnPartialSuccess`.
 - `countTokens` is approximate because Antigravity's internal endpoint does not
   expose a separate Gemini token-count RPC. Responses include `totalTokens`,
   `promptTokensDetails`, `cachedContentTokenCount`, and `cacheTokensDetails`

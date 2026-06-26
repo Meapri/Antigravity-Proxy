@@ -182,6 +182,8 @@ def test_gemini_models_and_count_tokens():
     assert "capabilities" in first
     paged = client.get("/v1beta/models?pageSize=1")
     next_page = client.get(f"/v1beta/models?pageSize=1&pageToken={paged.json()['nextPageToken']}")
+    paged_snake = client.get("/v1beta/models?page_size=1")
+    stable_snake = client.get("/v1/models?page_size=1")
     too_many = client.get("/v1beta/models?pageSize=1001")
 
     assert paged.status_code == 200
@@ -189,6 +191,11 @@ def test_gemini_models_and_count_tokens():
     assert paged.json()["nextPageToken"] == "1"
     assert next_page.status_code == 200
     assert len(next_page.json()["models"]) == 1
+    assert paged_snake.status_code == 200
+    assert len(paged_snake.json()["models"]) == 1
+    assert paged_snake.json()["nextPageToken"] == "1"
+    assert stable_snake.status_code == 200
+    assert len(stable_snake.json()["models"]) == 1
     assert too_many.status_code == 400
     assert too_many.json()["error"]["status"] == "INVALID_ARGUMENT"
     assert too_many.json()["error"]["details"][0]["@type"] == "type.googleapis.com/google.rpc.BadRequest"
@@ -1363,6 +1370,7 @@ def test_gemini_snake_case_query_aliases(tmp_path, monkeypatch):
 
     listed = client.get("/v1beta/batches?page_size=1&page_token=0")
     filtered = client.get('/v1beta/batches?filter=displayName:"second"&return_partial_success=true')
+    listed_operations = client.get("/v1beta/operations?page_size=1&return_partial_success=true")
     done_filtered = client.get('/v1beta/batches?filter=done=true AND metadata.batchResource.state="BATCH_STATE_SUCCEEDED"')
     patched = client.patch(f"/v1beta/{first['name']}:updateGenerateContentBatch?update_mask=displayName", json={
         "generateContentBatch": {"displayName": "patched"},
@@ -1384,6 +1392,9 @@ def test_gemini_snake_case_query_aliases(tmp_path, monkeypatch):
     assert filtered.status_code == 200
     assert [item["metadata"]["displayName"] for item in filtered.json()["operations"]] == ["second"]
     assert filtered.json()["unreachable"] == []
+    assert listed_operations.status_code == 200
+    assert len(listed_operations.json()["operations"]) == 1
+    assert listed_operations.json()["unreachable"] == []
     assert done_filtered.status_code == 200
     assert len(done_filtered.json()["operations"]) == 2
     assert patched.status_code == 200

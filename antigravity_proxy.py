@@ -1808,6 +1808,53 @@ def _gemini_operation_list_response(operations: list[dict[str, Any]], page_size:
     return {"operations": operations[start:end], "nextPageToken": str(end) if end < len(operations) else ""}
 
 
+def _gemini_list_query_params(
+    request: Request,
+    *,
+    default_page_size: int,
+    max_page_size: int,
+    clamp_page_size: bool = False,
+) -> tuple[int, str | None]:
+    query = request.query_params
+    raw_page_size = query.get("pageSize") or query.get("page_size")
+    if raw_page_size is None:
+        page_size = default_page_size
+    else:
+        try:
+            page_size = int(raw_page_size)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail="pageSize must be an integer.",
+                headers={"x-gemini-error-field": "pageSize"},
+            )
+    if page_size < 1:
+        raise HTTPException(
+            status_code=400,
+            detail="pageSize must be at least 1.",
+            headers={"x-gemini-error-field": "pageSize"},
+        )
+    if page_size > max_page_size:
+        if clamp_page_size:
+            page_size = max_page_size
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"pageSize must be between 1 and {max_page_size}.",
+                headers={"x-gemini-error-field": "pageSize"},
+            )
+    return page_size, query.get("pageToken") or query.get("page_token")
+
+
+def _gemini_query_bool(request: Request, camel_name: str, snake_name: str, default: bool = False) -> bool:
+    value = request.query_params.get(camel_name)
+    if value is None:
+        value = request.query_params.get(snake_name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "t", "yes", "y", "on"}
+
+
 def _gemini_now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -4646,10 +4693,12 @@ async def _optional_api_key_auth(request: Request, call_next):
 @app.exception_handler(HTTPException)
 async def _http_exception_handler(request: Request, exc: HTTPException):
     if _is_gemini_http_path(str(request.scope.get("path") or request.url.path)):
+        field = (exc.headers or {}).get("x-gemini-error-field") if exc.headers else None
         return _gemini_error_response(
             exc.detail,
             status_code=exc.status_code,
             status=_gemini_status_for_http(exc.status_code),
+            field=field,
         )
     return _openai_error_response(exc.detail, status_code=exc.status_code)
 
@@ -4657,10 +4706,12 @@ async def _http_exception_handler(request: Request, exc: HTTPException):
 @app.exception_handler(StarletteHTTPException)
 async def _starlette_http_exception_handler(request: Request, exc: StarletteHTTPException):
     if _is_gemini_http_path(str(request.scope.get("path") or request.url.path)):
+        headers = getattr(exc, "headers", None) or {}
         return _gemini_error_response(
             exc.detail,
             status_code=exc.status_code,
             status=_gemini_status_for_http(exc.status_code),
+            field=headers.get("x-gemini-error-field"),
         )
     return _openai_error_response(exc.detail, status_code=exc.status_code)
 
@@ -5605,31 +5656,26 @@ def _gemini_models_list_response(page_size: int, page_token: str | None) -> dict
 async def list_models(request: Request):
     """Return the list of supported models (OpenAI-compatible)."""
     query = request.query_params
-    if "pageSize" in query or "pageToken" in query:
+    if "pageSize" in query or "pageToken" in query or "page_size" in query or "page_token" in query:
         try:
-            page_size = int(query.get("pageSize") or "50")
-        except (TypeError, ValueError):
-            page_size = 50
-        if page_size < 1 or page_size > 1000:
-            return _gemini_error_response(
-                "pageSize must be between 1 and 1000.",
-                status_code=400,
-                status="INVALID_ARGUMENT",
-                field="pageSize",
-            )
-        return _gemini_models_list_response(page_size, query.get("pageToken"))
+            page_size, page_token = _gemini_list_query_params(request, default_page_size=50, max_page_size=1000)
+        except HTTPException as exc:
+            return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT", field="pageSize")
+        return _gemini_models_list_response(page_size, page_token)
     return ModelListResponse(data=_MODELS)
 
 
 @app.get("/v1beta/models")
-async def gemini_list_models(pageSize: int = Query(default=50, ge=1, le=1000), pageToken: str | None = None):
+async def gemini_list_models(request: Request):
     """Gemini-compatible model listing."""
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=50, max_page_size=1000)
     return _gemini_models_list_response(pageSize, pageToken)
 
 
 @app.get("/v1/models/{model_name:path}/operations")
 @app.get("/v1beta/models/{model_name:path}/operations")
-async def gemini_list_model_operations(model_name: str, pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+async def gemini_list_model_operations(model_name: str, request: Request):
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
     if _is_gemini_video_model_id(model_name):
         model_resource = "models/" + _gemini_resource_model_id(model_name)
     else:
@@ -5696,8 +5742,9 @@ async def gemini_get_model(model_name: str):
 
 @app.get("/v1/files")
 @app.get("/v1beta/files")
-async def gemini_list_files(pageSize: int = Query(default=10, ge=1, le=100), pageToken: str | None = None):
+async def gemini_list_files(request: Request):
     """Gemini-compatible local Files API listing."""
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=10, max_page_size=100)
     index = _gemini_load_files_index()
     files = [_gemini_file_resource(meta) for meta in index.values()]
     files.sort(key=lambda item: item.get("createTime") or "")
@@ -5799,7 +5846,8 @@ async def gemini_upload_file(request: Request):
 
 @app.get("/v1/generatedFiles")
 @app.get("/v1beta/generatedFiles")
-async def gemini_list_generated_files(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+async def gemini_list_generated_files(request: Request):
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
     files = [_gemini_generated_file_resource(meta) for meta in _gemini_load_generated_files_index().values()]
     files.sort(key=lambda item: item.get("createTime") or "")
     start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
@@ -5809,7 +5857,8 @@ async def gemini_list_generated_files(pageSize: int = Query(default=100, ge=1, l
 
 @app.get("/v1/generatedFiles/operations")
 @app.get("/v1beta/generatedFiles/operations")
-async def gemini_list_generated_file_operations(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+async def gemini_list_generated_file_operations(request: Request):
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
     return _gemini_operation_list_response(_gemini_operations_for_scope("generatedFile"), pageSize, pageToken)
 
 
@@ -5928,11 +5977,11 @@ async def gemini_create_cached_content(request: Request):
 
 @app.get("/v1/cachedContents")
 @app.get("/v1beta/cachedContents")
-async def gemini_list_cached_contents(pageSize: int = Query(default=100, ge=1), pageToken: str | None = None):
+async def gemini_list_cached_contents(request: Request):
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000, clamp_page_size=True)
     index = _gemini_load_cached_index()
     items = [_gemini_cached_resource(meta) for meta in index.values()]
     items.sort(key=lambda item: item.get("createTime") or "")
-    pageSize = min(pageSize, 1000)
     start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
     end = start + pageSize
     return {"cachedContents": items[start:end], "nextPageToken": str(end) if end < len(items) else ""}
@@ -5990,7 +6039,8 @@ async def gemini_create_corpus(request: Request):
 
 @app.get("/v1/corpora")
 @app.get("/v1beta/corpora")
-async def gemini_list_corpora(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+async def gemini_list_corpora(request: Request):
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
     corpora = [_gemini_corpus_resource(meta) for meta in _gemini_load_corpora_index().values()]
     corpora.sort(key=lambda item: item.get("createTime") or "")
     start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
@@ -6091,7 +6141,8 @@ async def gemini_create_corpus_document(corpus_id: str, request: Request):
 
 @app.get("/v1/corpora/{corpus_id}/documents")
 @app.get("/v1beta/corpora/{corpus_id}/documents")
-async def gemini_list_corpus_documents(corpus_id: str, pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+async def gemini_list_corpus_documents(corpus_id: str, request: Request):
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
     meta = _gemini_load_corpora_index().get(_gemini_corpus_name(corpus_id))
     if not meta:
         return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
@@ -6222,7 +6273,8 @@ async def gemini_create_corpus_chunk(corpus_id: str, document_id: str, request: 
 
 @app.get("/v1/corpora/{corpus_id}/documents/{document_id:path}/chunks")
 @app.get("/v1beta/corpora/{corpus_id}/documents/{document_id:path}/chunks")
-async def gemini_list_corpus_chunks(corpus_id: str, document_id: str, pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+async def gemini_list_corpus_chunks(corpus_id: str, document_id: str, request: Request):
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
     try:
         _index, _corpus_name, doc, _doc_name = _gemini_get_corpus_doc_for_chunks(corpus_id, document_id)
         chunks = [_gemini_chunk_resource(chunk) for chunk in (doc.get("chunks") or {}).values()]
@@ -6472,7 +6524,8 @@ async def gemini_create_file_search_store(request: Request):
 
 @app.get("/v1/fileSearchStores")
 @app.get("/v1beta/fileSearchStores")
-async def gemini_list_file_search_stores(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+async def gemini_list_file_search_stores(request: Request):
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
     stores = [_gemini_fss_resource(meta) for meta in _gemini_load_fss_index().values()]
     stores.sort(key=lambda item: item.get("createTime") or "")
     start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
@@ -6650,7 +6703,8 @@ async def gemini_download_file_search_document_media(store_id: str, document_id:
 
 @app.get("/v1/fileSearchStores/{store_id}/operations")
 @app.get("/v1beta/fileSearchStores/{store_id}/operations")
-async def gemini_list_file_search_operations(store_id: str, pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+async def gemini_list_file_search_operations(store_id: str, request: Request):
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
     if not _gemini_get_fss_meta(store_id):
         return _gemini_error_response(f"File search store '{store_id}' not found.", status_code=404, status="NOT_FOUND")
     return _gemini_operation_list_response(
@@ -6784,7 +6838,8 @@ async def gemini_create_tuned_model(request: Request):
 
 @app.get("/v1/tunedModels")
 @app.get("/v1beta/tunedModels")
-async def gemini_list_tuned_models(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+async def gemini_list_tuned_models(request: Request):
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
     models = [_gemini_tuned_resource(meta) for meta in _gemini_load_tuned_index().values()]
     models.sort(key=lambda item: item.get("createTime") or "")
     start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
@@ -6794,7 +6849,8 @@ async def gemini_list_tuned_models(pageSize: int = Query(default=100, ge=1, le=1
 
 @app.get("/v1/tunedModels/{tuned_model_id:path}/operations")
 @app.get("/v1beta/tunedModels/{tuned_model_id:path}/operations")
-async def gemini_list_tuned_model_operations(tuned_model_id: str, pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+async def gemini_list_tuned_model_operations(tuned_model_id: str, request: Request):
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
     tuned_name = _gemini_tuned_name(tuned_model_id)
     return _gemini_operation_list_response(
         _gemini_operations_for_scope("tunedModel", tuned_name),
@@ -7703,12 +7759,9 @@ async def gemini_create_batch(request: Request):
 
 @app.get("/v1/batches")
 @app.get("/v1beta/batches")
-async def gemini_list_batches(
-    pageSize: int = Query(default=100, ge=1, le=1000),
-    pageToken: str | None = None,
-    filter: str | None = None,
-    returnPartialSuccess: bool = False,
-):
+async def gemini_list_batches(request: Request, filter: str | None = None):
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
+    returnPartialSuccess = _gemini_query_bool(request, "returnPartialSuccess", "return_partial_success")
     index = _gemini_load_batches_index()
     batch_items = []
     for batch in index.values():
@@ -7886,7 +7939,8 @@ async def gemini_create_webhook(request: Request):
 
 @app.get("/v1/webhooks")
 @app.get("/v1beta/webhooks")
-async def gemini_list_webhooks(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+async def gemini_list_webhooks(request: Request):
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
     webhooks = list(_gemini_load_webhooks_index().values())
     webhooks.sort(key=lambda item: item.get("name") or "")
     start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
@@ -8421,12 +8475,9 @@ async def gemini_stream_generate_content(model_name: str, request: Request):
 
 @app.get("/v1/operations")
 @app.get("/v1beta/operations")
-async def gemini_list_operations(
-    pageSize: int = Query(default=100, ge=1, le=1000),
-    pageToken: str | None = None,
-    filter: str | None = None,
-    returnPartialSuccess: bool = False,
-):
+async def gemini_list_operations(request: Request, filter: str | None = None):
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
+    returnPartialSuccess = _gemini_query_bool(request, "returnPartialSuccess", "return_partial_success")
     index = _gemini_load_operations_index()
     operations = [operation for operation in index.values() if _gemini_operation_filter_matches(operation, filter)]
     operations.sort(key=lambda item: item.get("name") or "")
