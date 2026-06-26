@@ -556,6 +556,32 @@ def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
     }
 
 
+def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypatch):
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            return {
+                "response": {
+                    "candidates": [{
+                        "content": {"parts": "hello"},
+                    }],
+                    "usage_metadata": {"prompt_tokens": 4},
+                }
+            }
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={"contents": "hi"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["candidates"][0]["content"] == {"role": "model", "parts": [{"text": "hello"}]}
+    assert body["candidates"][0]["finishReason"] == "STOP"
+    assert body["usageMetadata"]["promptTokenCount"] == 4
+    assert body["usageMetadata"]["candidatesTokenCount"] > 0
+    assert body["usageMetadata"]["totalTokenCount"] >= body["usageMetadata"]["promptTokenCount"]
+
+
 def test_gemini_generate_content_accepts_sdk_content_unions(monkeypatch):
     seen = {}
 

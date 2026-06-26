@@ -660,8 +660,9 @@ SDK transport-only options such as `httpOptions`, `requestOptions`,
 `response_format` / `responseFormat` wrappers are mapped into
 `generationConfig.responseMimeType` and `generationConfig.responseSchema`.
 Generate responses are normalized with Gemini-style `modelVersion`,
-`responseId`, candidate `index`, `finishReason`, and `usageMetadata` when the
-upstream response omits them.
+`responseId`, candidate `index`, `finishReason`, model-role content parts, and
+`usageMetadata` token counts when the upstream response omits or partially
+spells them differently.
 Gemini compatibility errors use the `google.rpc.Status`-style
 `error.code` / `error.message` / `error.status` shape. `INVALID_ARGUMENT`
 responses include `google.rpc.BadRequest` field-violation details, and

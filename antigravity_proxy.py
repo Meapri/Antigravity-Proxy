@@ -933,6 +933,31 @@ def _gemini_response_text(response: dict[str, Any]) -> str:
     return "".join(texts)
 
 
+def _gemini_normalize_usage_metadata(value: Any, *, request_body: dict[str, Any] | None, response: dict[str, Any]) -> dict[str, int]:
+    usage = dict(value) if isinstance(value, dict) else {}
+    aliases = {
+        "prompt_tokens": "promptTokenCount",
+        "input_tokens": "promptTokenCount",
+        "candidates_tokens": "candidatesTokenCount",
+        "candidate_tokens": "candidatesTokenCount",
+        "output_tokens": "candidatesTokenCount",
+        "total_tokens": "totalTokenCount",
+    }
+    for old, new in aliases.items():
+        if usage.get(new) is None and usage.get(old) is not None:
+            usage[new] = usage[old]
+    if usage.get("promptTokenCount") is None:
+        usage["promptTokenCount"] = _estimate_tokens(request_body or {})
+    if usage.get("candidatesTokenCount") is None:
+        usage["candidatesTokenCount"] = _estimate_tokens(_gemini_response_text(response))
+    if usage.get("totalTokenCount") is None:
+        try:
+            usage["totalTokenCount"] = int(usage.get("promptTokenCount") or 0) + int(usage.get("candidatesTokenCount") or 0)
+        except (TypeError, ValueError):
+            usage["totalTokenCount"] = _estimate_tokens(request_body or {}) + _estimate_tokens(_gemini_response_text(response))
+    return usage
+
+
 def _gemini_finalize_generate_response(response: dict[str, Any], *, model_name: str, request_body: dict[str, Any] | None = None) -> dict[str, Any]:
     if not isinstance(response, dict):
         return response
@@ -947,16 +972,25 @@ def _gemini_finalize_generate_response(response: dict[str, Any], *, model_name: 
                 candidate = dict(candidate)
                 candidate.setdefault("index", idx)
                 candidate.setdefault("finishReason", "STOP")
+                content = candidate.get("content")
+                if isinstance(content, dict):
+                    content = dict(content)
+                    content.setdefault("role", "model")
+                    parts = content.get("parts")
+                    if parts is None:
+                        content["parts"] = []
+                    elif not isinstance(parts, list):
+                        content["parts"] = [_gemini_content_part(parts)]
+                    else:
+                        content["parts"] = [_gemini_content_part(part) for part in parts]
+                    candidate["content"] = content
             finalized_candidates.append(candidate)
         out["candidates"] = finalized_candidates
-    if not isinstance(out.get("usageMetadata"), dict):
-        prompt_tokens = _estimate_tokens(request_body or {})
-        output_tokens = _estimate_tokens(_gemini_response_text(out))
-        out["usageMetadata"] = {
-            "promptTokenCount": prompt_tokens,
-            "candidatesTokenCount": output_tokens,
-            "totalTokenCount": prompt_tokens + output_tokens,
-        }
+    out["usageMetadata"] = _gemini_normalize_usage_metadata(
+        out.get("usageMetadata") or out.get("usage_metadata"),
+        request_body=request_body,
+        response=out,
+    )
     return out
 
 
