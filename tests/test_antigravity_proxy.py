@@ -627,7 +627,12 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
                     "usage_metadata": {
                         "prompt_tokens": 4,
                         "output_tokens": 2,
+                        "tool_use_prompt_tokens": 3,
+                        "thoughts_tokens": 5,
                         "prompt_tokens_details": [{"modality": "TEXT", "tokenCount": 4}],
+                        "tool_use_prompt_tokens_details": [{"modality": "TEXT", "tokenCount": 3}],
+                        "thoughts_tokens_details": [{"modality": "TEXT", "tokenCount": 5}],
+                        "traffic_type": "ON_DEMAND",
                     },
                 }
             }
@@ -647,8 +652,13 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
     assert body["candidates"][0]["avgLogprobs"] == -0.2
     assert body["usageMetadata"]["promptTokenCount"] == 4
     assert body["usageMetadata"]["candidatesTokenCount"] == 2
+    assert body["usageMetadata"]["toolUsePromptTokenCount"] == 3
+    assert body["usageMetadata"]["thoughtsTokenCount"] == 5
     assert body["usageMetadata"]["promptTokensDetails"][0]["modality"] == "TEXT"
-    assert body["usageMetadata"]["totalTokenCount"] >= body["usageMetadata"]["promptTokenCount"]
+    assert body["usageMetadata"]["toolUsePromptTokensDetails"][0]["tokenCount"] == 3
+    assert body["usageMetadata"]["thoughtsTokensDetails"][0]["tokenCount"] == 5
+    assert body["usageMetadata"]["trafficType"] == "ON_DEMAND"
+    assert body["usageMetadata"]["totalTokenCount"] == 14
     assert "usage_metadata" not in body
 
 

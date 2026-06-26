@@ -1223,9 +1223,16 @@ def _gemini_normalize_usage_metadata(value: Any, *, request_body: dict[str, Any]
         "output_tokens": "candidatesTokenCount",
         "total_tokens": "totalTokenCount",
         "thoughts_tokens": "thoughtsTokenCount",
+        "thoughts_token_count": "thoughtsTokenCount",
+        "tool_use_prompt_tokens": "toolUsePromptTokenCount",
+        "tool_use_prompt_token_count": "toolUsePromptTokenCount",
         "prompt_tokens_details": "promptTokensDetails",
+        "candidates_tokens_details": "candidatesTokensDetails",
+        "tool_use_prompt_tokens_details": "toolUsePromptTokensDetails",
+        "thoughts_tokens_details": "thoughtsTokensDetails",
         "cache_tokens_details": "cacheTokensDetails",
         "cached_content_token_count": "cachedContentTokenCount",
+        "traffic_type": "trafficType",
     }
     for old, new in aliases.items():
         if usage.get(new) is None and usage.get(old) is not None:
@@ -1237,7 +1244,10 @@ def _gemini_normalize_usage_metadata(value: Any, *, request_body: dict[str, Any]
         usage["candidatesTokenCount"] = _estimate_tokens(_gemini_response_text(response))
     if usage.get("totalTokenCount") is None:
         try:
-            usage["totalTokenCount"] = int(usage.get("promptTokenCount") or 0) + int(usage.get("candidatesTokenCount") or 0)
+            usage["totalTokenCount"] = sum(
+                int(usage.get(key) or 0)
+                for key in ("promptTokenCount", "candidatesTokenCount", "toolUsePromptTokenCount", "thoughtsTokenCount")
+            )
         except (TypeError, ValueError):
             usage["totalTokenCount"] = _estimate_tokens(request_body or {}) + _estimate_tokens(_gemini_response_text(response))
     return usage
