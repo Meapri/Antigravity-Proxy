@@ -432,10 +432,12 @@ def test_gemini_async_batch_embed_and_batch_update(tmp_path, monkeypatch):
     fetched = client.get(f"/v1beta/{batch_name}")
 
     assert updated.status_code == 200
-    assert updated.json()["displayName"] == "renamed"
+    assert updated.json()["name"] == batch_name
+    assert updated.json()["metadata"]["batchResource"]["displayName"] == "renamed"
     assert fetched.json()["name"] == batch_name
     assert fetched.json()["metadata"]["operation"] == operation["name"]
     assert fetched.json()["metadata"]["batchResource"]["displayName"] == "renamed"
+    assert fetched.json()["metadata"]["batchStats"]["requestCount"] == "2"
 
 
 def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
@@ -795,14 +797,23 @@ def test_gemini_snake_case_query_aliases(tmp_path, monkeypatch):
 
     listed = client.get("/v1beta/batches?page_size=1&page_token=0")
     patched = client.patch(f"/v1beta/{first['name']}:updateGenerateContentBatch?update_mask=displayName", json={
-        "displayName": "patched",
+        "generateContentBatch": {"displayName": "patched"},
+    })
+    priority = client.patch(f"/v1beta/{first['name']}:updateGenerateContentBatch?updateMask=priority", json={
+        "priority": "7",
+    })
+    bad_patch = client.patch(f"/v1beta/{first['name']}:updateGenerateContentBatch?updateMask=state", json={
+        "state": "BATCH_STATE_CANCELLED",
     })
 
     assert listed.status_code == 200
     assert len(listed.json()["batches"]) == 1
     assert listed.json()["nextPageToken"] == "1"
     assert patched.status_code == 200
-    assert patched.json()["displayName"] == "patched"
+    assert patched.json()["metadata"]["batchResource"]["displayName"] == "patched"
+    assert priority.status_code == 200
+    assert priority.json()["metadata"]["batchResource"]["priority"] == "7"
+    assert bad_patch.status_code == 400
 
 
 def test_gemini_interactions_create_previous_store_and_stream(tmp_path, monkeypatch):

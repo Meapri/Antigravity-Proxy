@@ -582,6 +582,9 @@ Embeddings and batch operations:
   `{"embedContentBatch": {...}}`; embed wrappers are completed with local
   deterministic embeddings. It is intended for Gemini SDK/REST management
   compatibility; it does not run true asynchronous Batch Mode jobs.
+- `batches.updateGenerateContentBatch` and `batches.updateEmbedContentBatch`
+  accept wrapper bodies plus `updateMask` / `update_mask` for `displayName`
+  and `priority`, and return the same completed `batches/*` operation view.
 - `predict` and `predictLongRunning` are mapped to Gemini `generateContent`
   requests and return prediction/operation-shaped compatibility responses.
 - Legacy `generateText`, `generateMessage`, `generateAnswer`, `embedText`,

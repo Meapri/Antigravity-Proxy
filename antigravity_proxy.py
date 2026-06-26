@@ -1078,6 +1078,37 @@ def _gemini_batch_stats(request_count: int, *, successful: int | None = None, fa
     }
 
 
+def _gemini_batch_update_fields(update_mask: str | None, body: dict[str, Any]) -> set[str]:
+    aliases = {
+        "display_name": "displayName",
+        "displayName": "displayName",
+        "generateContentBatch.displayName": "displayName",
+        "embedContentBatch.displayName": "displayName",
+        "generate_content_batch.display_name": "displayName",
+        "embed_content_batch.display_name": "displayName",
+        "priority": "priority",
+        "generateContentBatch.priority": "priority",
+        "embedContentBatch.priority": "priority",
+        "generate_content_batch.priority": "priority",
+        "embed_content_batch.priority": "priority",
+    }
+    if not update_mask:
+        return {key for key in ("displayName", "priority") if key in body}
+    fields: set[str] = set()
+    for raw in update_mask.split(","):
+        key = raw.strip()
+        if not key:
+            continue
+        fields.add(aliases.get(key, aliases.get(key.rsplit(".", 1)[-1], key)))
+    unsupported = fields - {"displayName", "priority"}
+    if unsupported:
+        raise HTTPException(
+            status_code=400,
+            detail="batch update supports updateMask fields: displayName, priority.",
+        )
+    return fields
+
+
 def _gemini_store_batch(batch: dict[str, Any]) -> dict[str, Any]:
     index = _gemini_load_batches_index()
     index[batch["name"]] = batch
@@ -1111,6 +1142,7 @@ def _gemini_batch_operation(batch: dict[str, Any]) -> dict[str, Any]:
         "model": batch.get("model"),
         "state": batch.get("state"),
         "stats": batch.get("stats"),
+        "batchStats": batch.get("batchStats") or batch.get("stats"),
         "createTime": batch.get("createTime"),
         "updateTime": batch.get("updateTime"),
         "endTime": batch.get("endTime"),
@@ -5494,6 +5526,7 @@ def _gemini_create_completed_embed_batch(model: dict[str, Any], body: dict[str, 
         "endTime": now,
         "requestCount": request_count,
         "stats": stats,
+        "batchStats": stats,
         "operation": operation_name,
         "response": response_payload,
         "metadata": {
@@ -5501,6 +5534,7 @@ def _gemini_create_completed_embed_batch(model: dict[str, Any], body: dict[str, 
             "model": model_resource,
             "requestCount": request_count,
             "stats": stats,
+            "batchStats": stats,
         },
     }
     operation = {
@@ -5510,6 +5544,7 @@ def _gemini_create_completed_embed_batch(model: dict[str, Any], body: dict[str, 
             "model": model_resource,
             "requestCount": request_count,
             "stats": stats,
+            "batchStats": stats,
             "batch": batch_name,
         },
         "done": True,
@@ -5888,6 +5923,7 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
         "endTime": now,
         "requestCount": len(requests),
         "stats": stats,
+        "batchStats": stats,
         "operation": operation_name,
         "response": response_payload,
         "metadata": {
@@ -5895,6 +5931,7 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
             "model": model_resource,
             "requestCount": len(requests),
             "stats": stats,
+            "batchStats": stats,
         },
     }
     operation = {
@@ -5904,6 +5941,7 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
             "model": model_resource,
             "requestCount": len(requests),
             "stats": stats,
+            "batchStats": stats,
             "batch": batch_name,
         },
         "done": True,
@@ -5991,17 +6029,24 @@ async def gemini_cancel_batch(batch_id: str):
     return JSONResponse({})
 
 
-def _gemini_patch_batch(batch_id: str, body: dict[str, Any]) -> dict[str, Any]:
+def _gemini_patch_batch(batch_id: str, body: dict[str, Any], update_mask: str | None = None) -> dict[str, Any]:
     name = _gemini_batch_name(batch_id)
     index = _gemini_load_batches_index()
     batch = index.get(name)
     if not batch:
         raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found.")
-    for key in ("displayName", "state", "endTime"):
+    body = _gemini_batch_body(body)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+    fields = _gemini_batch_update_fields(update_mask, body)
+    if not fields:
+        raise HTTPException(status_code=400, detail="batch update requires displayName or priority.")
+    for key in fields:
+        if key not in body:
+            raise HTTPException(status_code=400, detail=f"{key} is required by updateMask.")
+    for key in ("displayName", "priority"):
         if key in body:
             batch[key] = body[key]
-    if isinstance(body.get("metadata"), dict):
-        batch.setdefault("metadata", {}).update(body["metadata"])
     batch["updateTime"] = _gemini_now_iso()
     index[name] = batch
     _gemini_save_batches_index(index)
@@ -6010,12 +6055,12 @@ def _gemini_patch_batch(batch_id: str, body: dict[str, Any]) -> dict[str, Any]:
 
 @app.patch("/v1beta/batches/{batch_id:path}:updateGenerateContentBatch")
 @app.post("/v1beta/batches/{batch_id:path}:updateGenerateContentBatch")
-async def gemini_update_generate_content_batch(batch_id: str, request: Request):
+async def gemini_update_generate_content_batch(batch_id: str, request: Request, updateMask: str | None = None):
     try:
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
-        return _gemini_patch_batch(batch_id, body)
+        return _gemini_batch_operation(_gemini_patch_batch(batch_id, body, updateMask))
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
@@ -6023,12 +6068,12 @@ async def gemini_update_generate_content_batch(batch_id: str, request: Request):
 
 @app.patch("/v1beta/batches/{batch_id:path}:updateEmbedContentBatch")
 @app.post("/v1beta/batches/{batch_id:path}:updateEmbedContentBatch")
-async def gemini_update_embed_content_batch(batch_id: str, request: Request):
+async def gemini_update_embed_content_batch(batch_id: str, request: Request, updateMask: str | None = None):
     try:
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
-        return _gemini_patch_batch(batch_id, body)
+        return _gemini_batch_operation(_gemini_patch_batch(batch_id, body, updateMask))
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
