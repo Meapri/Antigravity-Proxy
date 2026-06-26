@@ -25,7 +25,7 @@ import sqlite3
 import time
 import tempfile
 import uuid
-from urllib.parse import parse_qsl, urlencode
+from urllib.parse import parse_qsl, urlencode, urlparse
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -1292,6 +1292,38 @@ def _gemini_file_uri_to_inline(file_uri: str) -> dict[str, Any] | None:
     return {"inlineData": {"mimeType": meta.get("mimeType") or "application/octet-stream", "data": data}}
 
 
+def _gemini_remote_file_uri_to_inline(file_uri: str, mime_type: str | None = None) -> dict[str, Any] | None:
+    parsed = urlparse(file_uri)
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    max_bytes = int(os.getenv("ANTIGRAVITY_GEMINI_REMOTE_FILE_MAX_BYTES", str(20 * 1024 * 1024)))
+    try:
+        import httpx
+
+        with httpx.Client(
+            follow_redirects=True,
+            timeout=httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0),
+        ) as client:
+            response = client.get(file_uri)
+            response.raise_for_status()
+            content_length = response.headers.get("content-length")
+            if content_length and int(content_length) > max_bytes:
+                raise HTTPException(status_code=400, detail=f"Remote file is too large: {content_length} bytes.")
+            raw = response.content
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not fetch remote fileData URI: {exc}") from exc
+    if len(raw) > max_bytes:
+        raise HTTPException(status_code=400, detail=f"Remote file is too large: {len(raw)} bytes.")
+    resolved_mime = mime_type or response.headers.get("content-type", "").split(";", 1)[0].strip()
+    if not resolved_mime:
+        resolved_mime = mimetypes.guess_type(parsed.path)[0] or "application/octet-stream"
+    if not (resolved_mime.startswith("image/") or resolved_mime.startswith("video/") or resolved_mime.startswith("audio/") or resolved_mime == "application/pdf"):
+        raise HTTPException(status_code=400, detail=f"Unsupported remote file MIME type: {resolved_mime}")
+    return {"inlineData": {"mimeType": resolved_mime, "data": base64.b64encode(raw).decode("ascii")}}
+
+
 def _gemini_inline_local_files(value: Any) -> Any:
     if isinstance(value, list):
         return [_gemini_inline_local_files(item) for item in value]
@@ -1301,6 +1333,9 @@ def _gemini_inline_local_files(value: Any) -> Any:
     if isinstance(file_data, dict):
         uri = str(file_data.get("fileUri") or file_data.get("uri") or "")
         inline = _gemini_file_uri_to_inline(uri)
+        if inline:
+            return inline
+        inline = _gemini_remote_file_uri_to_inline(uri, str(file_data.get("mimeType") or "") or None)
         if inline:
             return inline
     return {key: _gemini_inline_local_files(child) for key, child in value.items()}

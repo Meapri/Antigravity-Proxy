@@ -663,6 +663,9 @@ def test_gemini_interactions_accept_content_item_aliases_and_image_model(tmp_pat
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", str(tmp_path / "interactions"))
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR", str(tmp_path / "generated"))
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    monkeypatch.setattr(proxy, "_gemini_remote_file_uri_to_inline", lambda uri, mime_type=None: {
+        "inlineData": {"mimeType": mime_type or "image/jpeg", "data": "aW1hZ2U="}
+    })
     seen = {}
 
     class FakeClient:
@@ -697,7 +700,7 @@ def test_gemini_interactions_accept_content_item_aliases_and_image_model(tmp_pat
     assert text_interaction.status_code == 200
     parts = seen["request"]["contents"][0]["parts"]
     assert parts[0] == {"text": "describe"}
-    assert parts[1]["fileData"]["fileUri"] == "https://example.test/cat.jpg"
+    assert parts[1]["inlineData"] == {"mimeType": "image/jpeg", "data": "aW1hZ2U="}
     assert seen["request"]["generationConfig"]["responseModalities"] == ["TEXT"]
     assert seen["request"]["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_LOW"
 
