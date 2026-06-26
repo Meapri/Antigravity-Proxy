@@ -642,6 +642,10 @@ context. `urlContext` and `codeExecution` are recognized but return
 `UNIMPLEMENTED` because the current Antigravity backend does not expose those
 hosted tools. `toolConfig.functionCallingConfig.mode` and
 `allowedFunctionNames` are normalized from common SDK spellings.
+`generateContent`, `streamGenerateContent`, `batchGenerateContent`, and
+`countTokens` also normalize SDK content-union inputs such as string
+`contents`, part dictionaries, part arrays, and string `systemInstruction`
+values into Gemini REST `Content` objects before forwarding.
 `response_format` / `responseFormat` wrappers are mapped into
 `generationConfig.responseMimeType` and `generationConfig.responseSchema`.
 Generate responses are normalized with Gemini-style `modelVersion`,

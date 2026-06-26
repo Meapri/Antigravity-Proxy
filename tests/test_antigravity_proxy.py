@@ -556,6 +556,39 @@ def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
     }
 
 
+def test_gemini_generate_content_accepts_sdk_content_unions(monkeypatch):
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    generated = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": ["hello", {"text": "world"}, [{"text": "part one"}, "part two"]],
+        "system_instruction": "be brief",
+    })
+    counted = client.post("/v1beta/models/gemini-3-flash-agent:countTokens", json={
+        "generate_content_request": {
+            "contents": "count me",
+            "system_instruction": "count system",
+        }
+    })
+
+    assert generated.status_code == 200
+    assert seen["request"]["contents"] == [
+        {"role": "user", "parts": [{"text": "hello"}]},
+        {"role": "user", "parts": [{"text": "world"}]},
+        {"role": "user", "parts": [{"text": "part one"}, {"text": "part two"}]},
+    ]
+    assert seen["request"]["systemInstruction"] == {"role": "system", "parts": [{"text": "be brief"}]}
+    assert counted.status_code == 200
+    assert counted.json()["totalTokens"] > 0
+
+
 def test_gemini_generate_content_rejects_unsupported_builtin_tools():
     client = TestClient(proxy.app)
 

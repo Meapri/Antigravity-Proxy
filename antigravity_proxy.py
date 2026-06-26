@@ -382,6 +382,8 @@ _GEMINI_KEY_ALIASES = {
     "response_schema": "responseSchema",
     "response_format": "responseFormat",
     "responseFormat": "responseFormat",
+    "generate_content_request": "generateContentRequest",
+    "generateContentRequest": "generateContentRequest",
     "json_schema": "jsonSchema",
     "jsonSchema": "jsonSchema",
     "max_output_tokens": "maxOutputTokens",
@@ -577,9 +579,70 @@ def _gemini_status_for_http(status_code: int) -> str:
     return "INVALID_ARGUMENT"
 
 
+def _gemini_content_part(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        if any(key in value for key in ("text", "inlineData", "fileData", "functionCall", "functionResponse")):
+            return value
+        if value.get("type") in {"text", "input_text", "output_text"} and value.get("text") is not None:
+            return {"text": str(value["text"])}
+        if isinstance(value.get("content"), str):
+            return {"text": value["content"]}
+    return {"text": "" if value is None else str(value)}
+
+
+def _gemini_content_from_value(value: Any, *, default_role: str = "user") -> dict[str, Any]:
+    if isinstance(value, dict):
+        if "parts" in value:
+            out = dict(value)
+            parts = out.get("parts")
+            if isinstance(parts, str):
+                out["parts"] = [{"text": parts}]
+            elif isinstance(parts, list):
+                out["parts"] = [_gemini_content_part(part) for part in parts]
+            elif parts is None:
+                out["parts"] = []
+            else:
+                out["parts"] = [_gemini_content_part(parts)]
+            out["role"] = str(out.get("role") or default_role)
+            return out
+        if "role" in value and "content" in value:
+            content = _gemini_content_from_value(value.get("content"), default_role=str(value.get("role") or default_role))
+            content["role"] = str(value.get("role") or content.get("role") or default_role)
+            return content
+        if any(key in value for key in ("text", "inlineData", "fileData", "functionCall", "functionResponse")):
+            return {"role": default_role, "parts": [_gemini_content_part(value)]}
+    if isinstance(value, list):
+        return {"role": default_role, "parts": [_gemini_content_part(part) for part in value]}
+    return {"role": default_role, "parts": [{"text": "" if value is None else str(value)}]}
+
+
+def _gemini_normalize_contents(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [_gemini_content_from_value(item) for item in value]
+    return [_gemini_content_from_value(value)]
+
+
+def _gemini_normalize_system_instruction(value: Any) -> Any:
+    if value is None:
+        return None
+    return _gemini_content_from_value(value, default_role="system")
+
+
+def _gemini_normalize_generate_body(body: dict[str, Any]) -> dict[str, Any]:
+    out = dict(body)
+    if "contents" in out:
+        out["contents"] = _gemini_normalize_contents(out.get("contents"))
+    if "systemInstruction" in out:
+        out["systemInstruction"] = _gemini_normalize_system_instruction(out.get("systemInstruction"))
+    return out
+
+
 def _gemini_count_tokens_request(body: dict[str, Any]) -> list[ChatMessage]:
     payload = body.get("generateContentRequest") if isinstance(body.get("generateContentRequest"), dict) else body
     if isinstance(payload, dict):
+        payload = _gemini_normalize_generate_body(payload)
         payload = _gemini_apply_cached_content(payload)
         payload = _gemini_apply_file_search(payload)
     contents = payload.get("contents") or []
@@ -6074,6 +6137,7 @@ async def gemini_predict(model_name: str, request: Request):
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
         body = _gemini_apply_response_format(body)
+        body = _gemini_normalize_generate_body(body)
         if _model_capabilities(model)["image_generation"]:
             image = await _gemini_generate_image_payload(model_name, body)
             return {
@@ -6314,6 +6378,7 @@ async def gemini_generate_content(model_name: str, request: Request):
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
         body = _gemini_apply_response_format(body)
+        body = _gemini_normalize_generate_body(body)
         if _model_capabilities(model)["image_generation"]:
             image = await _gemini_generate_image_payload(model_name, body)
             return JSONResponse(_gemini_finalize_generate_response({
@@ -6431,6 +6496,7 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
             raise HTTPException(status_code=400, detail="batchGenerateContent request items must be objects.")
         req_body = _gemini_normalize_request(dict(item))
         req_body = _gemini_apply_response_format(req_body)
+        req_body = _gemini_normalize_generate_body(req_body)
         req_body = _gemini_apply_cached_content(req_body)
         req_body = _gemini_apply_file_search(req_body)
         req_body = _gemini_inline_local_files(req_body)
@@ -7103,6 +7169,7 @@ async def gemini_stream_generate_content(model_name: str, request: Request):
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
         body = _gemini_apply_response_format(body)
+        body = _gemini_normalize_generate_body(body)
         body = _gemini_apply_cached_content(body)
         body = _gemini_apply_file_search(body)
         _gemini_reject_unsupported_builtin_tools(body)
