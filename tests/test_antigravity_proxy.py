@@ -1699,10 +1699,21 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
     client = TestClient(proxy.app)
 
-    created = client.post("/v1/fileSearchStores", json={"displayName": "notes"})
+    created = client.post("/v1/fileSearchStores", json={
+        "config": {
+            "displayName": "notes",
+            "embeddingModel": "models/text-embedding-004",
+            "chunkingConfig": {"whiteSpaceConfig": {}},
+            "customMetadata": [{"key": "team", "stringValue": "research"}],
+        }
+    })
     assert created.status_code == 200
     store_name = created.json()["name"]
     store_id = store_name.split("/", 1)[1]
+    assert created.json()["displayName"] == "notes"
+    assert created.json()["embeddingModel"] == "models/text-embedding-004"
+    assert created.json()["chunkingConfig"] == {"whiteSpaceConfig": {}}
+    assert created.json()["customMetadata"][0]["key"] == "team"
 
     uploaded_file = client.post(
         "/upload/v1beta/files?uploadType=media&displayName=source.txt",
@@ -1710,9 +1721,17 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
         headers={"Content-Type": "text/plain"},
     ).json()["file"]
 
-    imported = client.post(f"/v1/fileSearchStores/{store_id}:importFile", json={"fileName": uploaded_file["name"]})
+    imported = client.post(f"/v1/fileSearchStores/{store_id}:importFile", json={
+        "config": {
+            "fileName": uploaded_file["name"],
+            "displayName": "source import",
+            "customMetadata": [{"key": "source", "stringValue": "files-api"}],
+        }
+    })
     assert imported.status_code == 200
     imported_doc = imported.json()["response"]["document"]
+    assert imported_doc["displayName"] == "source import"
+    assert imported_doc["customMetadata"][0]["stringValue"] == "files-api"
 
     uploaded_doc = client.post(
         f"/upload/v1/fileSearchStores/{store_id}:uploadToFileSearchStore?displayName=direct.txt",
@@ -1733,7 +1752,8 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
 
     fetched = client.get(f"/v1/{imported_doc['name']}")
     assert fetched.status_code == 200
-    assert fetched.json()["displayName"] == "source.txt"
+    assert fetched.json()["displayName"] == "source import"
+    assert fetched.json()["customMetadata"][0]["key"] == "source"
 
     operation = client.get(f"/v1/{imported.json()['name']}")
     assert operation.status_code == 200

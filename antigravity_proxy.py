@@ -2233,14 +2233,30 @@ def _gemini_document_name(store_name: str, document_id: str) -> str:
     return f"{_gemini_fss_name(store_name)}/documents/{doc}"
 
 
+def _gemini_config_body(body: dict[str, Any]) -> dict[str, Any]:
+    body = _gemini_normalize_request(body)
+    config = body.get("config") if isinstance(body.get("config"), dict) else {}
+    if not config:
+        return body
+    merged = dict(config)
+    for key, value in body.items():
+        if key != "config":
+            merged[key] = value
+    return _gemini_normalize_request(merged)
+
+
 def _gemini_fss_resource(meta: dict[str, Any]) -> dict[str, Any]:
-    return {
+    resource = {
         "name": meta["name"],
         "displayName": meta.get("displayName") or meta["name"].split("/", 1)[-1],
         "createTime": meta.get("createTime"),
         "updateTime": meta.get("updateTime"),
         "fileCount": len(meta.get("documents") or {}),
     }
+    for key in ("embeddingModel", "chunkingConfig", "customMetadata"):
+        if meta.get(key) is not None:
+            resource[key] = meta[key]
+    return resource
 
 
 def _gemini_document_resource(doc: dict[str, Any]) -> dict[str, Any]:
@@ -2248,7 +2264,7 @@ def _gemini_document_resource(doc: dict[str, Any]) -> dict[str, Any]:
 
 
 def _gemini_create_fss(body: dict[str, Any]) -> dict[str, Any]:
-    body = _gemini_normalize_request(body)
+    body = _gemini_config_body(body)
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     store_id = "fs_" + uuid.uuid4().hex
     meta = {
@@ -2258,6 +2274,9 @@ def _gemini_create_fss(body: dict[str, Any]) -> dict[str, Any]:
         "updateTime": now,
         "documents": {},
     }
+    for key in ("embeddingModel", "chunkingConfig", "customMetadata"):
+        if body.get(key) is not None:
+            meta[key] = body[key]
     index = _gemini_load_fss_index()
     index[meta["name"]] = meta
     _gemini_save_fss_index(index)
@@ -2297,7 +2316,7 @@ def _gemini_store_document(store_name: str, *, display_name: str | None, mime_ty
 
 
 def _gemini_import_file_to_fss(store_name: str, body: dict[str, Any]) -> dict[str, Any]:
-    body = _gemini_normalize_request(body)
+    body = _gemini_config_body(body)
     file_name = str(body.get("fileName") or body.get("file") or body.get("fileUri") or "")
     meta = _gemini_get_file_meta(file_name)
     if not meta:
@@ -2305,12 +2324,24 @@ def _gemini_import_file_to_fss(store_name: str, body: dict[str, Any]) -> dict[st
     path = Path(str(meta.get("path") or ""))
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"File blob for '{file_name}' not found.")
-    return _gemini_store_document(
+    document = _gemini_store_document(
         store_name,
-        display_name=meta.get("displayName"),
+        display_name=body.get("displayName") or body.get("display_name") or meta.get("displayName"),
         mime_type=meta.get("mimeType"),
         content=path.read_bytes(),
     )
+    if body.get("customMetadata") is not None or body.get("metadata") is not None:
+        index = _gemini_load_fss_index()
+        store_key = _gemini_fss_name(store_name)
+        doc_key = document["name"]
+        stored = index.get(store_key, {}).get("documents", {}).get(doc_key)
+        if stored is not None:
+            stored["customMetadata"] = body.get("customMetadata") or body.get("metadata")
+            stored["updateTime"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            index[store_key]["documents"][doc_key] = stored
+            _gemini_save_fss_index(index)
+            document = _gemini_document_resource(stored)
+    return document
 
 
 def _gemini_extract_search_query(body: dict[str, Any]) -> str:
@@ -5143,12 +5174,30 @@ async def gemini_upload_to_file_search_store(store_id: str, request: Request):
         if "multipart/" in content_type:
             metadata, media, parsed_type = _parse_gemini_multipart_upload(content_type, body)
             media_type = parsed_type or content_type
+        metadata = _gemini_config_body(metadata) if isinstance(metadata, dict) else {}
         file_meta = metadata.get("file") if isinstance(metadata.get("file"), dict) else metadata
         display_name = request.query_params.get("displayName")
         if isinstance(file_meta, dict):
             display_name = file_meta.get("displayName") or file_meta.get("display_name") or display_name
             media_type = file_meta.get("mimeType") or file_meta.get("mime_type") or media_type
         document = _gemini_store_document(store_id, display_name=display_name, mime_type=media_type, content=media)
+        custom_metadata = metadata.get("customMetadata") or metadata.get("metadata")
+        if isinstance(file_meta, dict):
+            custom_metadata = (
+                file_meta.get("customMetadata")
+                or file_meta.get("metadata")
+                or custom_metadata
+            )
+        if custom_metadata is not None:
+            index = _gemini_load_fss_index()
+            store_key = _gemini_fss_name(store_id)
+            stored = index.get(store_key, {}).get("documents", {}).get(document["name"])
+            if stored is not None:
+                stored["customMetadata"] = custom_metadata
+                stored["updateTime"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                index[store_key]["documents"][document["name"]] = stored
+                _gemini_save_fss_index(index)
+                document = _gemini_document_resource(stored)
         operation = {
             "name": "operations/uploadToFileSearchStore-" + uuid.uuid4().hex,
             "metadata": {

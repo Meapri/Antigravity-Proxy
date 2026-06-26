@@ -741,7 +741,10 @@ File search stores:
 
 - `fileSearchStores` and document management are implemented as a local
   compatibility layer under `data/gemini_file_search_stores`.
-- `importFile` imports files previously uploaded through the local Files API.
+- `fileSearchStores.create`, `importFile`, and `uploadToFileSearchStore` accept
+  current SDK-style `config` wrappers as well as direct REST fields.
+- `importFile` imports files previously uploaded through the local Files API and
+  preserves document display names and custom metadata when supplied.
 - `uploadToFileSearchStore` accepts direct uploads and stores documents locally.
 - `tools.file_search` / `tools.fileSearch` performs local lexical retrieval
   against these stores and injects the best matching document snippets into the
