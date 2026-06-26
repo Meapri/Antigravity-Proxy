@@ -1001,8 +1001,10 @@ Notes:
 - Interaction responses include `steps` with `model_output` content blocks, and
   streaming emits `interaction.step.completed` events for step-aware clients.
 - Interaction create accepts SDK-style `config` / `interaction` wrappers,
-  exposes both `created` / `updated` / `usage` and legacy
-  `createTime` / `updateTime` / `usageMetadata`, and supports list pagination.
+  exposes `object: "interaction"`, `created` / `updated`,
+  `created_at` / `updated_at`, `outputText` / `output_text`, legacy
+  `createTime` / `updateTime` / `usageMetadata`, and both camelCase and
+  snake_case token usage fields such as `totalTokens` / `total_tokens`.
 - `background=true` creates a stored `in_progress` interaction resource without
   starting generation; it can be retrieved or cancelled by name.
 - Interaction cancel endpoints return the updated interaction resource.

@@ -1671,12 +1671,19 @@ def test_gemini_interactions_create_previous_store_and_stream(tmp_path, monkeypa
     assert first.status_code == 200
     first_body = first.json()
     assert first_body["name"].startswith("interactions/")
+    assert first_body["object"] == "interaction"
     assert first_body["created"] == first_body["createTime"]
     assert first_body["updated"] == first_body["updateTime"]
+    assert first_body["created_at"] == first_body["created"]
+    assert first_body["updated_at"] == first_body["updated"]
     assert first_body["outputText"] == "echo:first"
+    assert first_body["output_text"] == "echo:first"
     assert first_body["output"]["modelVersion"] == "gemini-3-flash-agent"
     assert first_body["output"]["responseId"].startswith("resp_")
     assert first_body["usage"]["totalTokens"] > 0
+    assert first_body["usage"]["total_tokens"] == first_body["usage"]["totalTokens"]
+    assert first_body["usage"]["input_tokens"] == first_body["usage"]["inputTokens"]
+    assert first_body["usage"]["output_tokens"] == first_body["usage"]["outputTokens"]
     assert first_body["usageMetadata"]["totalTokenCount"] > 0
     assert first_body["steps"][0]["type"] == "model_output"
     assert first_body["steps"][0]["content"][0]["type"] == "text"
@@ -1702,6 +1709,7 @@ def test_gemini_interactions_create_previous_store_and_stream(tmp_path, monkeypa
 
     assert fetched.status_code == 200
     assert listed.status_code == 200
+    assert listed.json()["interactions"][0]["object"] == "interaction"
     assert first_body["name"] in {item["name"] for item in listed.json()["interactions"]}
     assert listed.json()["nextPageToken"] == ""
     assert missing.status_code == 404
@@ -1784,6 +1792,7 @@ def test_gemini_interactions_v1_aliases(tmp_path, monkeypatch):
     })
 
     fetched = client.get(f"/v1/{body['name']}")
+    fetched_with_version_prefix = client.get(f"/v1/interactions/v1/{body['name']}")
     listed = client.get("/v1/interactions?pageSize=2&pageToken=0")
     colon_cancelled = client.post(f"/v1/{body['name']}:cancel")
     rest_cancelled = client.post(f"/v1/{body['name']}/cancel")
@@ -1792,12 +1801,17 @@ def test_gemini_interactions_v1_aliases(tmp_path, monkeypatch):
     missing = client.get(f"/v1/{body['name']}")
 
     assert wrapped.status_code == 200
+    assert wrapped.json()["object"] == "interaction"
+    assert wrapped.json()["created_at"] == wrapped.json()["created"]
+    assert wrapped.json()["output_text"] == "v1:wrapped"
     assert wrapped.json()["outputText"] == "v1:wrapped"
     assert background.status_code == 200
     assert background.json()["status"] == "in_progress"
     assert background.json()["background"] is True
     assert background.json()["usage"] == {}
     assert fetched.status_code == 200
+    assert fetched_with_version_prefix.status_code == 200
+    assert fetched_with_version_prefix.json()["name"] == body["name"]
     assert listed.status_code == 200
     assert {item["name"] for item in listed.json()["interactions"]} >= {body["name"], background.json()["name"]}
     assert colon_cancelled.status_code == 200

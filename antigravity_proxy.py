@@ -1343,7 +1343,48 @@ def _gemini_interaction_usage(value: Any) -> dict[str, Any]:
     for old, new in aliases.items():
         if usage.get(new) is None and usage.get(old) is not None:
             usage[new] = usage[old]
+    snake_aliases = {
+        "inputTokens": "input_tokens",
+        "outputTokens": "output_tokens",
+        "totalTokens": "total_tokens",
+        "cachedTokens": "cached_tokens",
+        "reasoningTokens": "reasoning_tokens",
+    }
+    for old, new in snake_aliases.items():
+        if usage.get(new) is None and usage.get(old) is not None:
+            usage[new] = usage[old]
+    modality_aliases = {
+        "promptTokensDetails": "input_tokens_by_modality",
+        "candidatesTokensDetails": "output_tokens_by_modality",
+    }
+    for old, new in modality_aliases.items():
+        details = usage.get(old)
+        if usage.get(new) is None and isinstance(details, list):
+            usage[new] = {
+                str(item.get("modality") or "TEXT").lower(): int(item.get("tokenCount") or item.get("token_count") or 0)
+                for item in details
+                if isinstance(item, dict)
+            }
     return usage
+
+
+def _gemini_interaction_resource(value: dict[str, Any]) -> dict[str, Any]:
+    out = dict(value)
+    out.setdefault("object", "interaction")
+    if out.get("created_at") is None:
+        out["created_at"] = out.get("created") or out.get("createTime")
+    if out.get("updated_at") is None:
+        out["updated_at"] = out.get("updated") or out.get("updateTime")
+    if out.get("previous_interaction_id") is None and out.get("previousInteractionId") is not None:
+        out["previous_interaction_id"] = out.get("previousInteractionId")
+    if out.get("output_text") is None and out.get("outputText") is not None:
+        out["output_text"] = out.get("outputText")
+    out["usage"] = _gemini_interaction_usage(out.get("usage") or {})
+    if isinstance(out.get("usageMetadata"), dict):
+        out["usageMetadata"] = _gemini_normalize_usage_metadata(out["usageMetadata"], request_body=out.get("request"), response=out.get("output") or {})
+    else:
+        out["usageMetadata"] = _gemini_normalize_usage_metadata(out["usage"], request_body=out.get("request"), response=out.get("output") or {})
+    return out
 
 
 def _gemini_normalize_candidate(candidate: dict[str, Any], index: int) -> dict[str, Any]:
@@ -2359,6 +2400,8 @@ def _gemini_save_interactions_index(index: dict[str, dict[str, Any]]) -> None:
 
 def _gemini_interaction_name(name: str) -> str:
     key = name.strip().strip("/")
+    if key.startswith("v1/"):
+        key = key[len("v1/"):]
     if key.startswith("v1beta/"):
         key = key[len("v1beta/"):]
     if key.startswith("interactions/"):
@@ -2367,6 +2410,7 @@ def _gemini_interaction_name(name: str) -> str:
 
 
 def _gemini_store_interaction(interaction: dict[str, Any]) -> dict[str, Any]:
+    interaction = _gemini_interaction_resource(interaction)
     index = _gemini_load_interactions_index()
     index[interaction["name"]] = interaction
     _gemini_save_interactions_index(index)
@@ -2374,7 +2418,8 @@ def _gemini_store_interaction(interaction: dict[str, Any]) -> dict[str, Any]:
 
 
 def _gemini_get_interaction(name: str) -> dict[str, Any] | None:
-    return _gemini_load_interactions_index().get(_gemini_interaction_name(name))
+    interaction = _gemini_load_interactions_index().get(_gemini_interaction_name(name))
+    return _gemini_interaction_resource(interaction) if isinstance(interaction, dict) else None
 
 
 def _gemini_webhooks_root() -> Path:
@@ -8538,7 +8583,7 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
         }
         if body.get("store", True) is not False:
             _gemini_store_interaction(interaction)
-        return interaction
+        return _gemini_interaction_resource(interaction)
 
     if _model_capabilities(model)["image_generation"]:
         image = await _gemini_generate_image_payload(str(model_name), request_body)
@@ -8589,7 +8634,7 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
         if body.get("store", True) is not False:
             _gemini_store_interaction(interaction)
             await _gemini_emit_webhook_event("interaction.completed", interaction)
-        return interaction
+        return _gemini_interaction_resource(interaction)
 
     request_body = _gemini_apply_cached_content(request_body)
     request_body = _gemini_apply_file_search(request_body)
@@ -8640,7 +8685,7 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
     if body.get("store", True) is not False:
         _gemini_store_interaction(interaction)
         await _gemini_emit_webhook_event("interaction.completed", interaction)
-    return interaction
+    return _gemini_interaction_resource(interaction)
 
 
 @app.post("/v1/interactions")
@@ -8689,7 +8734,11 @@ async def gemini_list_interactions(request: Request):
         start = max(0, int(page_token))
     except (TypeError, ValueError):
         start = 0
-    interactions = list(_gemini_load_interactions_index().values())
+    interactions = [
+        _gemini_interaction_resource(interaction)
+        for interaction in _gemini_load_interactions_index().values()
+        if isinstance(interaction, dict)
+    ]
     interactions.sort(key=lambda item: item.get("createTime") or item.get("created") or item.get("name") or "")
     end = start + page_size
     return {
