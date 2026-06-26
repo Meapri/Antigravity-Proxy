@@ -184,6 +184,20 @@ def test_gemini_models_and_count_tokens():
     })
     assert counted.status_code == 200
     assert counted.json()["totalTokens"] > 0
+    assert counted.json()["promptTokensDetails"][0]["modality"] == "TEXT"
+    assert counted.json()["cacheTokensDetails"] == []
+
+    counted_media = client.post("/v1beta/models/gemini-3-flash-agent:countTokens", json={
+        "contents": [{
+            "role": "user",
+            "parts": [
+                {"text": "describe"},
+                {"inlineData": {"mimeType": "image/png", "data": "aW1hZ2U="}},
+            ],
+        }]
+    })
+    assert counted_media.status_code == 200
+    assert {item["modality"] for item in counted_media.json()["promptTokensDetails"]} >= {"TEXT", "IMAGE"}
 
 
 def test_gemini_video_model_and_generate_videos_operation(tmp_path, monkeypatch):
@@ -1326,6 +1340,8 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     })
     assert counted.status_code == 200
     assert counted.json()["totalTokens"] > 0
+    assert counted.json()["promptTokensDetails"][0]["modality"] == "TEXT"
+    assert counted.json()["cacheTokensDetails"] == []
 
     deleted_perm = client.delete(f"/v1beta/tunedModels/my_tuned/permissions/{perm_id}")
     deleted_model = client.delete("/v1beta/tunedModels/my_tuned")

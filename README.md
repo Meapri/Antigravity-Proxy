@@ -640,7 +640,9 @@ Notes:
 - Model resources include `supportedGenerationMethods`, token limits, and
   capability metadata for the local Gemini compatibility surface.
 - `countTokens` is approximate because Antigravity's internal endpoint does not
-  expose a separate Gemini token-count RPC.
+  expose a separate Gemini token-count RPC. Responses include `totalTokens`,
+  `promptTokensDetails`, and `cacheTokensDetails` fields for Gemini SDK
+  compatibility.
 - Files are stored locally under `data/gemini_files` by default; override with
   `ANTIGRAVITY_GEMINI_FILES_DIR`.
 - Cached contents are stored locally under `data/gemini_cached_contents` by

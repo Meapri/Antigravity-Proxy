@@ -3666,6 +3666,55 @@ def _estimate_prompt_tokens(messages: list[ChatMessage]) -> int:
     return total
 
 
+def _gemini_part_modality(part: Any) -> str:
+    if not isinstance(part, dict):
+        return "TEXT"
+    if part.get("text") is not None:
+        return "TEXT"
+    data = part.get("inlineData") if isinstance(part.get("inlineData"), dict) else part.get("fileData")
+    if not isinstance(data, dict):
+        return "TEXT"
+    mime = str(data.get("mimeType") or "").lower()
+    if mime.startswith("image/"):
+        return "IMAGE"
+    if mime.startswith("video/"):
+        return "VIDEO"
+    if mime.startswith("audio/"):
+        return "AUDIO"
+    if mime == "application/pdf" or mime.startswith("text/"):
+        return "DOCUMENT"
+    return "DOCUMENT"
+
+
+def _gemini_count_tokens_response(messages: list[ChatMessage]) -> dict[str, Any]:
+    prompt_estimate = _estimate_prompt_tokens(messages)
+    by_modality: dict[str, int] = {}
+    for message in messages:
+        content = message.content
+        parts = content if isinstance(content, list) else [{"text": content}]
+        for part in parts:
+            modality = _gemini_part_modality(part)
+            token_count = _estimate_tokens(part)
+            by_modality[modality] = by_modality.get(modality, 0) + token_count
+
+    if not by_modality:
+        by_modality["TEXT"] = prompt_estimate
+    detail_sum = sum(by_modality.values())
+    total_tokens = max(prompt_estimate, detail_sum)
+    if detail_sum != total_tokens:
+        by_modality["TEXT"] = by_modality.get("TEXT", 0) + (total_tokens - detail_sum)
+
+    return {
+        "totalTokens": total_tokens,
+        "promptTokensDetails": [
+            {"modality": modality, "tokenCount": count}
+            for modality, count in sorted(by_modality.items())
+            if count > 0
+        ],
+        "cacheTokensDetails": [],
+    }
+
+
 def _usage_from_response(
     data: dict[str, Any] | None,
     *,
@@ -4979,7 +5028,7 @@ async def gemini_tuned_count_tokens(tuned_model_id: str, request: Request):
         body = _gemini_normalize_request(await request.json())
         if isinstance(body, dict):
             body = _gemini_apply_file_search(_gemini_apply_cached_content(body))
-        return {"totalTokens": _estimate_prompt_tokens(_gemini_count_tokens_request(body if isinstance(body, dict) else {}))}
+        return _gemini_count_tokens_response(_gemini_count_tokens_request(body if isinstance(body, dict) else {}))
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
@@ -5082,7 +5131,7 @@ async def gemini_count_tokens(model_name: str, request: Request):
             body = _gemini_apply_cached_content(body)
             body = _gemini_apply_file_search(body)
         messages = _gemini_count_tokens_request(body if isinstance(body, dict) else {})
-        return {"totalTokens": _estimate_prompt_tokens(messages)}
+        return _gemini_count_tokens_response(messages)
     except HTTPException as exc:
         return _gemini_error_response(exc.detail, status_code=exc.status_code)
     except Exception as exc:
