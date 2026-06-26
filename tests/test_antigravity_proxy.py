@@ -1493,6 +1493,50 @@ def test_gemini_resumable_file_upload(tmp_path, monkeypatch):
     assert file_resource["mimeType"] == "text/plain"
 
 
+def test_gemini_resumable_file_upload_query_offset_and_finalize(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "gemini_files"))
+    client = TestClient(proxy.app)
+
+    started = client.post(
+        "/upload/v1/files",
+        json={"file": {"displayName": "chunked.txt", "mimeType": "text/plain"}},
+        headers={
+            "X-Goog-Upload-Protocol": "resumable",
+            "X-Goog-Upload-Command": "start",
+            "X-Goog-Upload-Header-Content-Type": "text/plain",
+        },
+    )
+    session_path = "/" + started.headers["x-goog-upload-url"].split("/", 3)[3]
+
+    initial_query = client.post(session_path, headers={"X-Goog-Upload-Command": "query"})
+    first_chunk = client.post(
+        session_path,
+        content=b"hello ",
+        headers={"X-Goog-Upload-Command": "upload", "X-Goog-Upload-Offset": "0"},
+    )
+    second_query = client.post(session_path, headers={"X-Goog-Upload-Command": "query"})
+    wrong_offset = client.post(
+        session_path,
+        content=b"bad",
+        headers={"X-Goog-Upload-Command": "upload", "X-Goog-Upload-Offset": "0"},
+    )
+    finalized = client.post(
+        session_path,
+        content=b"world",
+        headers={"X-Goog-Upload-Command": "upload, finalize", "X-Goog-Upload-Offset": "6"},
+    )
+
+    assert initial_query.headers["x-goog-upload-size-received"] == "0"
+    assert first_chunk.status_code == 200
+    assert first_chunk.headers["x-goog-upload-size-received"] == "6"
+    assert second_query.headers["x-goog-upload-size-received"] == "6"
+    assert wrong_offset.status_code == 400
+    assert finalized.status_code == 200
+    file_resource = finalized.json()["file"]
+    downloaded = client.get(f"/v1/{file_resource['name']}:download")
+    assert downloaded.content == b"hello world"
+
+
 def test_gemini_files_v1_aliases(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "gemini_files"))
     client = TestClient(proxy.app)

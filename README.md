@@ -658,7 +658,8 @@ curl "http://127.0.0.1:8765/upload/v1beta/files?uploadType=media&displayName=not
 
 The upload endpoint also supports the Gemini resumable upload headers
 (`X-Goog-Upload-Protocol: resumable`, `X-Goog-Upload-Command: start`, then
-`upload, finalize`) used by SDK-style file uploads.
+`query`, `upload`, and `upload, finalize` with `X-Goog-Upload-Offset`) used by
+SDK-style file uploads.
 
 Metadata-only File creation is also available through the official metadata
 URI:

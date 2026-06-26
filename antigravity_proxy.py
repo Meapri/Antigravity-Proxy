@@ -1943,6 +1943,8 @@ async def _gemini_start_resumable_upload(request: Request, upload_version: str |
             or "application/octet-stream"
         ),
         "created": int(time.time()),
+        "offset": 0,
+        "data": "",
     }
     _gemini_save_upload_sessions(sessions)
     if upload_version is None:
@@ -1965,6 +1967,8 @@ async def _gemini_finish_resumable_upload(session_id: str, request: Request) -> 
     if not session:
         raise HTTPException(status_code=404, detail=f"Upload session '{session_id}' not found.")
     data = await request.body()
+    existing = base64.b64decode(str(session.get("data") or ""), validate=False) if session.get("data") else b""
+    data = existing + data
     file_resource = _gemini_store_file(
         data,
         mime_type=session.get("mimeType") or request.headers.get("content-type"),
@@ -1973,6 +1977,69 @@ async def _gemini_finish_resumable_upload(session_id: str, request: Request) -> 
     sessions.pop(session_id, None)
     _gemini_save_upload_sessions(sessions)
     return file_resource
+
+
+async def _gemini_resumable_upload_command(session_id: str, request: Request) -> Response | dict[str, Any]:
+    sessions = _gemini_load_upload_sessions()
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Upload session '{session_id}' not found.")
+    command = request.headers.get("x-goog-upload-command", "").lower()
+    commands = {part.strip() for part in command.split(",") if part.strip()} or {"upload", "finalize"}
+    if "query" in commands:
+        return JSONResponse(
+            {},
+            headers={
+                "X-Goog-Upload-Status": "active",
+                "X-Goog-Upload-Size-Received": str(int(session.get("offset") or 0)),
+            },
+        )
+    unsupported = commands - {"upload", "finalize", "cancel"}
+    if unsupported:
+        raise HTTPException(status_code=400, detail=f"Unsupported upload command: {command}")
+    if "cancel" in commands:
+        sessions.pop(session_id, None)
+        _gemini_save_upload_sessions(sessions)
+        return JSONResponse({}, headers={"X-Goog-Upload-Status": "cancelled"})
+
+    current_offset = int(session.get("offset") or 0)
+    header_offset = request.headers.get("x-goog-upload-offset")
+    if header_offset not in (None, ""):
+        try:
+            requested_offset = int(header_offset)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="X-Goog-Upload-Offset must be an integer.") from exc
+        if requested_offset != current_offset:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Upload offset mismatch: got {requested_offset}, expected {current_offset}.",
+            )
+
+    chunk = await request.body()
+    existing = base64.b64decode(str(session.get("data") or ""), validate=False) if session.get("data") else b""
+    combined = existing + chunk
+    session["data"] = base64.b64encode(combined).decode("ascii")
+    session["offset"] = len(combined)
+    sessions[session_id] = session
+
+    if "finalize" in commands:
+        file_resource = _gemini_store_file(
+            combined,
+            mime_type=session.get("mimeType") or request.headers.get("content-type"),
+            display_name=session.get("displayName"),
+        )
+        sessions.pop(session_id, None)
+        _gemini_save_upload_sessions(sessions)
+        return {"file": file_resource}
+
+    _gemini_save_upload_sessions(sessions)
+    return JSONResponse(
+        {},
+        headers={
+            "X-Goog-Upload-Status": "active",
+            "X-Goog-Upload-Size-Received": str(session["offset"]),
+        },
+    )
 
 
 def _gemini_cached_root() -> Path:
@@ -4682,10 +4749,7 @@ async def gemini_delete_generated_file(generated_file_id: str):
 @app.put("/upload/v1beta/files/{session_id}")
 async def gemini_resumable_upload(session_id: str, request: Request):
     try:
-        command = request.headers.get("x-goog-upload-command", "").lower()
-        if command and "finalize" not in command and "upload" not in command:
-            raise HTTPException(status_code=400, detail=f"Unsupported upload command: {command}")
-        return {"file": await _gemini_finish_resumable_upload(session_id, request)}
+        return await _gemini_resumable_upload_command(session_id, request)
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
