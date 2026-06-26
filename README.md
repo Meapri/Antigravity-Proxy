@@ -656,6 +656,8 @@ Notes:
   and `gemini-image-latest` resolve to matching Antigravity-backed models.
 - Model resources include `supportedGenerationMethods`, token limits, and
   capability metadata for the local Gemini compatibility surface.
+- `models.list` supports Gemini `pageSize` / `pageToken` pagination with the
+  official default page size of 50 and maximum page size of 1000.
 - `countTokens` is approximate because Antigravity's internal endpoint does not
   expose a separate Gemini token-count RPC. Responses include `totalTokens`,
   `promptTokensDetails`, and `cacheTokensDetails` fields for Gemini SDK

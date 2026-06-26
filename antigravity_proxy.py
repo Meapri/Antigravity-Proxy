@@ -4200,14 +4200,18 @@ async def list_models():
 
 
 @app.get("/v1beta/models")
-async def gemini_list_models():
+async def gemini_list_models(pageSize: int = Query(default=50, ge=1, le=1000), pageToken: str | None = None):
     """Gemini-compatible model listing."""
+    models = [
+        _gemini_model_resource(model)
+        for model in _MODELS
+        if not _model_capabilities(model)["internal"]
+    ]
+    start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
+    end = start + pageSize
     return {
-        "models": [
-            _gemini_model_resource(model)
-            for model in _MODELS
-            if not _model_capabilities(model)["internal"]
-        ]
+        "models": models[start:end],
+        "nextPageToken": str(end) if end < len(models) else "",
     }
 
 

@@ -167,6 +167,16 @@ def test_gemini_models_and_count_tokens():
     assert "asyncBatchEmbedContent" in first["supportedGenerationMethods"]
     assert first["inputTokenLimit"] > 0
     assert "capabilities" in first
+    paged = client.get("/v1beta/models?pageSize=1")
+    next_page = client.get(f"/v1beta/models?pageSize=1&pageToken={paged.json()['nextPageToken']}")
+    too_many = client.get("/v1beta/models?pageSize=1001")
+
+    assert paged.status_code == 200
+    assert len(paged.json()["models"]) == 1
+    assert paged.json()["nextPageToken"] == "1"
+    assert next_page.status_code == 200
+    assert len(next_page.json()["models"]) == 1
+    assert too_many.status_code == 422
 
     one = client.get("/v1beta/models/gemini-3-flash-agent")
     assert one.status_code == 200
