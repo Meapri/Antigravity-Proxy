@@ -815,6 +815,54 @@ def test_gemini_batches_create_get_cancel_delete(tmp_path, monkeypatch):
     assert missing.status_code == 404
 
 
+def test_gemini_batches_v1_aliases(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "v1 batch ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    created = client.post("/v1/batches", json={
+        "model": "models/gemini-3-flash-agent",
+        "displayName": "v1 docs batch",
+        "requests": [
+            {"contents": [{"role": "user", "parts": [{"text": "hello"}]}]},
+        ],
+    })
+    assert created.status_code == 200
+    batch_operation = created.json()
+    batch_name = batch_operation["name"]
+
+    listed = client.get("/v1/batches")
+    fetched = client.get(f"/v1/{batch_name}")
+    patched = client.patch(f"/v1/{batch_name}:updateGenerateContentBatch?updateMask=displayName", json={
+        "generateContentBatch": {"displayName": "v1 renamed batch"},
+    })
+    embed_patched = client.post(f"/v1/{batch_name}:updateEmbedContentBatch?updateMask=priority", json={
+        "embedContentBatch": {"priority": "HIGH"},
+    })
+    cancelled = client.post(f"/v1/{batch_name}:cancel")
+    deleted = client.delete(f"/v1/{batch_name}")
+    missing = client.get(f"/v1/{batch_name}")
+
+    assert listed.status_code == 200
+    assert listed.json()["operations"][0]["name"] == batch_name
+    assert listed.json()["batches"][0]["operation"] == batch_operation["metadata"]["batchResource"]["operation"]
+    assert fetched.status_code == 200
+    assert fetched.json()["metadata"]["batchResource"]["displayName"] == "v1 docs batch"
+    assert patched.status_code == 200
+    assert patched.json()["metadata"]["batchResource"]["displayName"] == "v1 renamed batch"
+    assert embed_patched.status_code == 200
+    assert embed_patched.json()["metadata"]["batchResource"]["priority"] == "HIGH"
+    assert cancelled.status_code == 200
+    assert deleted.status_code == 200
+    assert missing.status_code == 404
+
+
 def test_gemini_snake_case_query_aliases(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))

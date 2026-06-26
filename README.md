@@ -384,6 +384,13 @@ Implemented Gemini-compatible routes:
 - `DELETE /v1beta/interactions/{interaction}`
 - `WS /ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`
 - `WS /v1beta/live`
+- `POST /v1/batches`
+- `GET /v1/batches`
+- `GET /v1/batches/{batch}`
+- `POST /v1/batches/{batch}:cancel`
+- `PATCH /v1/batches/{batch}:updateGenerateContentBatch`
+- `PATCH /v1/batches/{batch}:updateEmbedContentBatch`
+- `DELETE /v1/batches/{batch}`
 - `POST /v1beta/batches`
 - `GET /v1beta/batches`
 - `GET /v1beta/batches/{batch}`

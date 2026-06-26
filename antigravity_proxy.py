@@ -1049,8 +1049,10 @@ def _gemini_save_batches_index(index: dict[str, dict[str, Any]]) -> None:
 
 def _gemini_batch_name(name: str) -> str:
     key = name.strip().strip("/")
-    if key.startswith("v1beta/"):
-        key = key[len("v1beta/"):]
+    for prefix in ("v1beta/", "v1/"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+            break
     if key.startswith("batches/"):
         return key
     return "batches/" + key
@@ -2927,7 +2929,6 @@ def _gemini_stable_alias_path(path: str) -> str:
         return path
     suffix = path[len("/v1/"):]
     stable_prefixes = (
-        "batches",
         "corpora",
         "fileSearchStores",
         "tunedModels",
@@ -6061,6 +6062,7 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
     return stored_operation, stored_batch
 
 
+@app.post("/v1/batches")
 @app.post("/v1beta/batches")
 async def gemini_create_batch(request: Request):
     """Gemini-compatible batches.create using immediate local execution."""
@@ -6086,6 +6088,7 @@ async def gemini_create_batch(request: Request):
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
+@app.get("/v1/batches")
 @app.get("/v1beta/batches")
 async def gemini_list_batches(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
     index = _gemini_load_batches_index()
@@ -6101,6 +6104,7 @@ async def gemini_list_batches(pageSize: int = Query(default=100, ge=1, le=1000),
     }
 
 
+@app.get("/v1/batches/{batch_id:path}")
 @app.get("/v1beta/batches/{batch_id:path}")
 async def gemini_get_batch(batch_id: str):
     batch = _gemini_get_batch(batch_id)
@@ -6109,6 +6113,7 @@ async def gemini_get_batch(batch_id: str):
     return _gemini_batch_operation(batch)
 
 
+@app.post("/v1/batches/{batch_id:path}:cancel")
 @app.post("/v1beta/batches/{batch_id:path}:cancel")
 async def gemini_cancel_batch(batch_id: str):
     batch = _gemini_get_batch(batch_id)
@@ -6161,7 +6166,9 @@ def _gemini_patch_batch(batch_id: str, body: dict[str, Any], update_mask: str | 
     return batch
 
 
+@app.patch("/v1/batches/{batch_id:path}:updateGenerateContentBatch")
 @app.patch("/v1beta/batches/{batch_id:path}:updateGenerateContentBatch")
+@app.post("/v1/batches/{batch_id:path}:updateGenerateContentBatch")
 @app.post("/v1beta/batches/{batch_id:path}:updateGenerateContentBatch")
 async def gemini_update_generate_content_batch(batch_id: str, request: Request, updateMask: str | None = None):
     try:
@@ -6174,7 +6181,9 @@ async def gemini_update_generate_content_batch(batch_id: str, request: Request, 
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
 
 
+@app.patch("/v1/batches/{batch_id:path}:updateEmbedContentBatch")
 @app.patch("/v1beta/batches/{batch_id:path}:updateEmbedContentBatch")
+@app.post("/v1/batches/{batch_id:path}:updateEmbedContentBatch")
 @app.post("/v1beta/batches/{batch_id:path}:updateEmbedContentBatch")
 async def gemini_update_embed_content_batch(batch_id: str, request: Request, updateMask: str | None = None):
     try:
@@ -6187,6 +6196,7 @@ async def gemini_update_embed_content_batch(batch_id: str, request: Request, upd
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
 
 
+@app.delete("/v1/batches/{batch_id:path}")
 @app.delete("/v1beta/batches/{batch_id:path}")
 async def gemini_delete_batch(batch_id: str):
     name = _gemini_batch_name(batch_id)
