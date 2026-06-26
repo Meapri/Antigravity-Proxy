@@ -739,6 +739,7 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
     assert webhook["eventTypes"] == ["batches.completed"]
     assert webhook["state"] == "enabled"
     assert webhook["newSigningSecret"]["secret"]
+    assert "secret" not in webhook["signingSecrets"][0]
 
     fetched = client.get(f"/v1/{webhook['name']}")
     listed = client.get("/v1/webhooks?page_size=1&page_token=0")
@@ -768,6 +769,7 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
     assert rotated.status_code == 200
     assert rotated.json()["newSigningSecret"]["secret"]
     assert rotated.json()["newSigningSecret"]["secret"] != webhook["newSigningSecret"]["secret"]
+    assert "secret" not in rotated.json()["signingSecrets"][0]
 
     deleted = client.delete(f"/v1beta/{webhook['name']}")
     missing = client.get(f"/v1beta/{webhook['name']}")

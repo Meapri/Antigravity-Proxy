@@ -1133,6 +1133,12 @@ def _gemini_webhook_public_resource(webhook: dict[str, Any], *, include_new_secr
     resource["targetUri"] = resource["uri"]
     resource["subscribedEvents"] = _gemini_webhook_events(resource)
     resource["eventTypes"] = list(resource["subscribedEvents"])
+    if isinstance(resource.get("signingSecrets"), list):
+        resource["signingSecrets"] = [
+            {key: value for key, value in item.items() if key != "secret"}
+            for item in resource["signingSecrets"]
+            if isinstance(item, dict)
+        ]
     if not include_new_secret:
         resource.pop("newSigningSecret", None)
     return resource
