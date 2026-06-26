@@ -337,6 +337,9 @@ Implemented Gemini-compatible routes:
 - `POST /v1beta/models/{model}:generateContent`
 - `POST /v1beta/models/{model}:streamGenerateContent`
 - `POST /v1beta/models/{model}:countTokens`
+- `POST /v1beta/models/{model}:embedContent`
+- `POST /v1beta/models/{model}:batchEmbedContents`
+- `POST /v1beta/models/{model}:batchGenerateContent`
 - `POST /upload/v1beta/files`
 - `POST /v1beta/files`
 - `GET /v1beta/files`
@@ -347,6 +350,10 @@ Implemented Gemini-compatible routes:
 - `GET /v1beta/cachedContents/{cached_content}`
 - `PATCH /v1beta/cachedContents/{cached_content}`
 - `DELETE /v1beta/cachedContents/{cached_content}`
+- `GET /v1beta/operations`
+- `GET /v1beta/operations/{operation}`
+- `POST /v1beta/operations/{operation}:cancel`
+- `DELETE /v1beta/operations/{operation}`
 
 Example:
 
@@ -421,6 +428,15 @@ Then pass the returned `name` as `cachedContent` in `generateContent`. The proxy
 merges local cached content into the outgoing Antigravity request because the
 upstream internal endpoint does not expose public Gemini cache objects.
 
+Embeddings and batch operations:
+
+- `embedContent` and `batchEmbedContents` return deterministic local embedding
+  vectors for Gemini SDK compatibility. They are stable and shaped like Gemini
+  embeddings, but they are not semantic Google embedding model outputs because
+  Antigravity does not expose a public embedding RPC.
+- `batchGenerateContent` runs requests synchronously through Antigravity and
+  stores an immediately completed `operations/*` result.
+
 Notes:
 
 - Model names are exposed as Gemini resources like
@@ -431,9 +447,11 @@ Notes:
   `ANTIGRAVITY_GEMINI_FILES_DIR`.
 - Cached contents are stored locally under `data/gemini_cached_contents` by
   default; override with `ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR`.
-- Embeddings, tuned models, batch jobs, live API, interactions, permissions,
-  long-running operations, and file search store management are not fully
-  implemented yet.
+- Batch operations are stored locally under `data/gemini_operations` by default;
+  override with `ANTIGRAVITY_GEMINI_OPERATIONS_DIR`.
+- Tuned models, live API, interactions, permissions, true async long-running
+  jobs, semantic Google embeddings, and file search store management are not
+  fully implemented yet.
 
 ## Responses API Compatibility
 

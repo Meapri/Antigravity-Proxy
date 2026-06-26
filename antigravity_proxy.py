@@ -270,7 +270,14 @@ def _gemini_model_name(model: dict[str, Any]) -> str:
 
 def _gemini_model_resource(model: dict[str, Any]) -> dict[str, Any]:
     caps = _model_capabilities(model)
-    methods = ["generateContent", "streamGenerateContent", "countTokens"]
+    methods = [
+        "generateContent",
+        "streamGenerateContent",
+        "countTokens",
+        "embedContent",
+        "batchEmbedContents",
+        "batchGenerateContent",
+    ]
     return {
         "name": _gemini_model_name(model),
         "version": _gemini_model_id(model),
@@ -385,6 +392,113 @@ def _gemini_count_tokens_request(body: dict[str, Any]) -> list[ChatMessage]:
     if isinstance(system_instruction, dict):
         messages.insert(0, ChatMessage(role="system", content=system_instruction.get("parts") or []))
     return messages
+
+
+def _gemini_content_text(content: Any) -> str:
+    if not isinstance(content, dict):
+        return _msg_text(content)
+    parts = content.get("parts") or []
+    texts: list[str] = []
+    if isinstance(parts, list):
+        for part in parts:
+            if isinstance(part, dict):
+                if part.get("text") is not None:
+                    texts.append(str(part["text"]))
+                elif isinstance(part.get("inlineData"), dict):
+                    texts.append(f"[inlineData:{part['inlineData'].get('mimeType', 'application/octet-stream')}]")
+                elif isinstance(part.get("fileData"), dict):
+                    texts.append(f"[fileData:{part['fileData'].get('fileUri') or part['fileData'].get('uri') or ''}]")
+            elif isinstance(part, str):
+                texts.append(part)
+    return "\n".join(texts)
+
+
+def _gemini_embedding_values(text: str, *, dimensions: int = 768) -> list[float]:
+    dimensions = max(1, min(int(dimensions or 768), 3072))
+    values: list[float] = []
+    seed = text.encode("utf-8", errors="ignore")
+    counter = 0
+    while len(values) < dimensions:
+        digest = hashlib.sha256(seed + counter.to_bytes(4, "big")).digest()
+        for i in range(0, len(digest), 4):
+            raw = int.from_bytes(digest[i:i + 4], "big", signed=False)
+            values.append((raw / 2147483647.5) - 1.0)
+            if len(values) >= dimensions:
+                break
+        counter += 1
+    # Unit-normalize for a stable embedding-like vector.
+    norm = sum(v * v for v in values) ** 0.5 or 1.0
+    return [v / norm for v in values]
+
+
+def _gemini_embedding_from_request(body: dict[str, Any]) -> dict[str, Any]:
+    content = body.get("content") or {}
+    output_dim = body.get("outputDimensionality") or body.get("output_dimensionality") or 768
+    text = _gemini_content_text(content)
+    return {"embedding": {"values": _gemini_embedding_values(text, dimensions=int(output_dim))}}
+
+
+def _gemini_batch_embedding_from_request(body: dict[str, Any]) -> dict[str, Any]:
+    requests = body.get("requests")
+    if not isinstance(requests, list):
+        raise HTTPException(status_code=400, detail="batchEmbedContents requires a requests array.")
+    embeddings: list[dict[str, Any]] = []
+    for item in requests:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=400, detail="batchEmbedContents request items must be objects.")
+        embeddings.append(_gemini_embedding_from_request(_gemini_normalize_request(item))["embedding"])
+    return {"embeddings": embeddings}
+
+
+def _gemini_operations_root() -> Path:
+    return Path(os.getenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", "data/gemini_operations")).expanduser()
+
+
+def _gemini_operations_index_path() -> Path:
+    return _gemini_operations_root() / "index.json"
+
+
+def _gemini_load_operations_index() -> dict[str, dict[str, Any]]:
+    path = _gemini_operations_index_path()
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        log.warning("Failed to read Gemini operations index; starting empty.")
+        return {}
+
+
+def _gemini_save_operations_index(index: dict[str, dict[str, Any]]) -> None:
+    root = _gemini_operations_root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = _gemini_operations_index_path()
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _gemini_operation_name(name: str) -> str:
+    key = name.strip().strip("/")
+    if key.startswith("v1beta/"):
+        key = key[len("v1beta/"):]
+    if key.startswith("operations/"):
+        return key
+    return "operations/" + key
+
+
+def _gemini_store_operation(operation: dict[str, Any]) -> dict[str, Any]:
+    index = _gemini_load_operations_index()
+    index[operation["name"]] = operation
+    _gemini_save_operations_index(index)
+    return operation
+
+
+def _gemini_get_operation(name: str) -> dict[str, Any] | None:
+    return _gemini_load_operations_index().get(_gemini_operation_name(name))
 
 
 def _gemini_files_root() -> Path:
@@ -2480,6 +2594,40 @@ async def gemini_count_tokens(model_name: str, request: Request):
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.post("/v1beta/models/{model_name:path}:embedContent")
+async def gemini_embed_content(model_name: str, request: Request):
+    """Gemini-compatible embedContent endpoint with deterministic local vectors."""
+    try:
+        _resolve_gemini_model(model_name)
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        return _gemini_embedding_from_request(body)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini embedContent failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.post("/v1beta/models/{model_name:path}:batchEmbedContents")
+async def gemini_batch_embed_contents(model_name: str, request: Request):
+    """Gemini-compatible batchEmbedContents endpoint with deterministic local vectors."""
+    try:
+        _resolve_gemini_model(model_name)
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        return _gemini_batch_embedding_from_request(body)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini batchEmbedContents failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
 @app.post("/v1beta/models/{model_name:path}:generateContent")
 async def gemini_generate_content(model_name: str, request: Request):
     """Gemini REST-compatible generateContent endpoint backed by Antigravity."""
@@ -2510,6 +2658,51 @@ async def gemini_generate_content(model_name: str, request: Request):
                 pass
         log.error("Gemini generateContent failed: %s | UPSTREAM BODY: %s", exc, _upstream)
         log.exception("Gemini generateContent exception traceback:")
+        return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
+
+
+@app.post("/v1beta/models/{model_name:path}:batchGenerateContent")
+async def gemini_batch_generate_content(model_name: str, request: Request):
+    """Gemini-compatible batchGenerateContent as an immediately completed operation."""
+    try:
+        model = _resolve_gemini_model(model_name)
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        requests = body.get("requests")
+        if not isinstance(requests, list):
+            raise HTTPException(status_code=400, detail="batchGenerateContent requires a requests array.")
+        responses: list[dict[str, Any]] = []
+        for item in requests:
+            if not isinstance(item, dict):
+                raise HTTPException(status_code=400, detail="batchGenerateContent request items must be objects.")
+            req_body = _gemini_inline_local_files(_gemini_apply_cached_content(_gemini_normalize_request(dict(item))))
+            req_body.pop("model", None)
+            data = await asyncio.to_thread(
+                _get_client().generate_raw,
+                request=req_body,
+                model=str(model["antigravity_model"]),
+            )
+            responses.append(_gemini_unwrap_response(data))
+        operation = {
+            "name": "operations/batchGenerateContent-" + uuid.uuid4().hex,
+            "metadata": {
+                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.BatchGenerateContentMetadata",
+                "model": _gemini_model_name(model),
+                "requestCount": len(requests),
+            },
+            "done": True,
+            "response": {
+                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.BatchGenerateContentResponse",
+                "responses": responses,
+            },
+        }
+        return _gemini_store_operation(operation)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini batchGenerateContent failed")
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
@@ -2554,6 +2747,47 @@ async def gemini_stream_generate_content(model_name: str, request: Request):
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
+@app.get("/v1beta/operations")
+async def gemini_list_operations(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+    index = _gemini_load_operations_index()
+    operations = list(index.values())
+    operations.sort(key=lambda item: item.get("name") or "")
+    start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
+    end = start + pageSize
+    return {"operations": operations[start:end], "nextPageToken": str(end) if end < len(operations) else ""}
+
+
+@app.get("/v1beta/operations/{operation_id:path}")
+async def gemini_get_operation(operation_id: str):
+    operation = _gemini_get_operation(operation_id)
+    if not operation:
+        return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    return operation
+
+
+@app.post("/v1beta/operations/{operation_id:path}:cancel")
+async def gemini_cancel_operation(operation_id: str):
+    operation = _gemini_get_operation(operation_id)
+    if not operation:
+        return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    if not operation.get("done"):
+        operation["done"] = True
+        operation["error"] = {"code": 1, "message": "Operation cancelled.", "status": "CANCELLED"}
+        _gemini_store_operation(operation)
+    return JSONResponse({})
+
+
+@app.delete("/v1beta/operations/{operation_id:path}")
+async def gemini_delete_operation(operation_id: str):
+    name = _gemini_operation_name(operation_id)
+    index = _gemini_load_operations_index()
+    if name not in index:
+        return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    index.pop(name, None)
+    _gemini_save_operations_index(index)
+    return JSONResponse({})
 
 
 @app.post("/v1/chat/completions")

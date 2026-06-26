@@ -162,6 +162,7 @@ def test_gemini_models_and_count_tokens():
     first = models.json()["models"][0]
     assert first["name"].startswith("models/")
     assert "generateContent" in first["supportedGenerationMethods"]
+    assert "embedContent" in first["supportedGenerationMethods"]
 
     one = client.get("/v1beta/models/gemini-3-flash-agent")
     assert one.status_code == 200
@@ -172,6 +173,31 @@ def test_gemini_models_and_count_tokens():
     })
     assert counted.status_code == 200
     assert counted.json()["totalTokens"] > 0
+
+
+def test_gemini_embeddings_are_deterministic():
+    client = TestClient(proxy.app)
+
+    payload = {
+        "content": {"parts": [{"text": "embed me"}]},
+        "outputDimensionality": 32,
+    }
+    first = client.post("/v1beta/models/gemini-3-flash-agent:embedContent", json=payload)
+    second = client.post("/v1beta/models/gemini-3-flash-agent:embedContent", json=payload)
+    batch = client.post("/v1beta/models/gemini-3-flash-agent:batchEmbedContents", json={
+        "requests": [
+            {"content": {"parts": [{"text": "one"}]}, "outputDimensionality": 16},
+            {"content": {"parts": [{"text": "two"}]}, "outputDimensionality": 16},
+        ]
+    })
+
+    assert first.status_code == 200
+    values = first.json()["embedding"]["values"]
+    assert len(values) == 32
+    assert values == second.json()["embedding"]["values"]
+    assert batch.status_code == 200
+    assert len(batch.json()["embeddings"]) == 2
+    assert len(batch.json()["embeddings"][0]["values"]) == 16
 
 
 def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
@@ -224,6 +250,39 @@ def test_gemini_stream_generate_content_sse(monkeypatch):
     assert response.status_code == 200
     assert 'data: {"candidates":' in body
     assert "data: [DONE]" in body
+
+
+def test_gemini_batch_generate_content_operation(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            return {"response": {"candidates": [{"content": {"parts": [{"text": request["contents"][0]["parts"][0]["text"]}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    created = client.post("/v1beta/models/gemini-3-flash-agent:batchGenerateContent", json={
+        "requests": [
+            {"contents": [{"role": "user", "parts": [{"text": "first"}]}]},
+            {"contents": [{"role": "user", "parts": [{"text": "second"}]}]},
+        ]
+    })
+
+    assert created.status_code == 200
+    operation = created.json()
+    assert operation["done"] is True
+    assert len(operation["response"]["responses"]) == 2
+
+    fetched = client.get(f"/v1beta/{operation['name']}")
+    listed = client.get("/v1beta/operations")
+    deleted = client.delete(f"/v1beta/{operation['name']}")
+
+    assert fetched.status_code == 200
+    assert fetched.json()["name"] == operation["name"]
+    assert listed.status_code == 200
+    assert listed.json()["operations"][0]["name"] == operation["name"]
+    assert deleted.status_code == 200
 
 
 def test_gemini_files_upload_and_file_data_inline_conversion(tmp_path, monkeypatch):
