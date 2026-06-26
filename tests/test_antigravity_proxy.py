@@ -1756,6 +1756,17 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     official_download = client.get(f"/v1beta/{official_file['name']}:download")
     assert official_download.status_code == 404
 
+    config_created = client.post("/v1beta/files", json={
+        "file": {
+            "displayName": "config-file.txt",
+            "uri": "gs://bucket/config-file.txt",
+        },
+        "config": {"mime_type": "text/markdown", "sizeBytes": "9"},
+    })
+    assert config_created.status_code == 200
+    assert config_created.json()["file"]["mimeType"] == "text/markdown"
+    assert config_created.json()["file"]["sizeBytes"] == "9"
+
     official_registered = client.post("/v1beta/files:register", json={
         "uris": ["gs://bucket/one.txt", "gs://bucket/two.txt"]
     })
@@ -1830,6 +1841,29 @@ def test_gemini_resumable_file_upload(tmp_path, monkeypatch):
     file_resource = finished.json()["file"]
     assert file_resource["displayName"] == "resumable.txt"
     assert file_resource["mimeType"] == "text/plain"
+
+    started_with_config = client.post(
+        "/upload/v1beta/files",
+        json={
+            "file": {"displayName": "sdk-config.txt"},
+            "config": {"mime_type": "text/markdown"},
+        },
+        headers={
+            "X-Goog-Upload-Protocol": "resumable",
+            "X-Goog-Upload-Command": "start",
+        },
+    )
+    assert started_with_config.status_code == 200
+    config_session_path = "/" + started_with_config.headers["x-goog-upload-url"].split("/", 3)[3]
+
+    config_finished = client.post(
+        config_session_path,
+        content=b"# hello",
+        headers={"X-Goog-Upload-Command": "upload, finalize"},
+    )
+    assert config_finished.status_code == 200
+    assert config_finished.json()["file"]["displayName"] == "sdk-config.txt"
+    assert config_finished.json()["file"]["mimeType"] == "text/markdown"
 
 
 def test_gemini_resumable_file_upload_query_offset_and_finalize(tmp_path, monkeypatch):

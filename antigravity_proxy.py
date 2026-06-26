@@ -441,6 +441,10 @@ _GEMINI_KEY_ALIASES = {
     "inlineData": "inlineData",
     "mime_type": "mimeType",
     "mimeType": "mimeType",
+    "size_bytes": "sizeBytes",
+    "download_uri": "downloadUri",
+    "expiration_time": "expirationTime",
+    "sha256_hash": "sha256Hash",
     "file_uri": "fileUri",
     "fileUri": "fileUri",
     "image_url": "imageUrl",
@@ -2137,9 +2141,23 @@ def _gemini_store_file(data: bytes, *, mime_type: str | None = None, display_nam
     return _gemini_file_resource(meta)
 
 
-def _gemini_register_file(body: dict[str, Any]) -> dict[str, Any]:
-    file_meta = body.get("file") if isinstance(body.get("file"), dict) else body
+def _gemini_file_metadata(body: dict[str, Any]) -> dict[str, Any]:
+    normalized = _gemini_normalize_request(body)
+    file_meta = normalized.get("file") if isinstance(normalized.get("file"), dict) else normalized
     if not isinstance(file_meta, dict):
+        return {}
+    merged = dict(file_meta)
+    config = normalized.get("config") if isinstance(normalized.get("config"), dict) else file_meta.get("config")
+    if isinstance(config, dict):
+        for key in ("displayName", "mimeType", "name", "uri", "downloadUri", "sizeBytes", "videoMetadata"):
+            if key in config and key not in merged:
+                merged[key] = config[key]
+    return merged
+
+
+def _gemini_register_file(body: dict[str, Any]) -> dict[str, Any]:
+    file_meta = _gemini_file_metadata(body)
+    if not file_meta:
         raise HTTPException(status_code=400, detail="files.register requires file metadata.")
     root = _gemini_files_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -2303,8 +2321,8 @@ async def _gemini_upload_file_from_request(request: Request) -> dict[str, Any]:
         mime_type = mime_type or media_type
     elif upload_type not in {"", "media"} and request.headers.get("x-goog-upload-protocol", "").lower() != "raw":
         raise HTTPException(status_code=400, detail=f"Unsupported Gemini uploadType: {upload_type}")
-    file_meta = metadata.get("file") if isinstance(metadata.get("file"), dict) else metadata
-    if isinstance(file_meta, dict):
+    file_meta = _gemini_file_metadata(metadata) if isinstance(metadata, dict) else {}
+    if file_meta:
         display_name = file_meta.get("displayName") or file_meta.get("display_name") or display_name
         mime_type = file_meta.get("mimeType") or file_meta.get("mime_type") or mime_type
     return _gemini_store_file(media, mime_type=mime_type or content_type, display_name=display_name)
@@ -2332,7 +2350,7 @@ async def _gemini_start_resumable_upload(request: Request, upload_version: str |
             metadata = decoded if isinstance(decoded, dict) else {}
         except Exception:
             metadata = {}
-    file_meta = metadata.get("file") if isinstance(metadata.get("file"), dict) else metadata
+    file_meta = _gemini_file_metadata(metadata) if isinstance(metadata, dict) else {}
     session_id = "upload_" + uuid.uuid4().hex
     sessions = _gemini_load_upload_sessions()
     sessions[session_id] = {
