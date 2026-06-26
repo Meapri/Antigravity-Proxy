@@ -656,6 +656,7 @@ Notes:
 - Interactions accept Gemini-style content items such as `{"type":"text"}`,
   `{"type":"image","image_url":...}`, `inline_data`, and `file_data`;
   snake_case Gemini SDK fields are normalized to REST casing before forwarding.
+- Interaction cancel endpoints return the updated interaction resource.
 - Remote `http`/`https` media URLs in `file_data` or `image_url` are fetched by
   the proxy and forwarded as `inlineData`; limit with
   `ANTIGRAVITY_GEMINI_REMOTE_FILE_MAX_BYTES` (default 20 MiB).

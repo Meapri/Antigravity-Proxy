@@ -722,6 +722,10 @@ def test_gemini_interactions_cancel_accepts_rest_and_colon_paths(tmp_path, monke
     assert rest.status_code == 200
     assert colon.status_code == 200
     assert missing.status_code == 404
+    assert rest.json()["name"] == "interactions/int_cancel_rest"
+    assert rest.json()["status"] == "cancelled"
+    assert colon.json()["name"] == "interactions/int_cancel_colon"
+    assert colon.json()["status"] == "cancelled"
     assert client.get("/v1beta/interactions/int_cancel_rest").json()["status"] == "cancelled"
     assert client.get("/v1beta/interactions/int_cancel_colon").json()["status"] == "cancelled"
 

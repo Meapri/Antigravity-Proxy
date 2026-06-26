@@ -6020,7 +6020,7 @@ async def gemini_get_interaction(interaction_id: str):
     return interaction
 
 
-def _gemini_cancel_interaction_response(interaction_id: str) -> JSONResponse:
+def _gemini_cancel_interaction_response(interaction_id: str):
     interaction = _gemini_get_interaction(interaction_id)
     if not interaction:
         return _gemini_error_response(f"Interaction '{interaction_id}' not found.", status_code=404, status="NOT_FOUND")
@@ -6028,7 +6028,7 @@ def _gemini_cancel_interaction_response(interaction_id: str) -> JSONResponse:
         interaction["status"] = "cancelled"
         interaction["updateTime"] = _gemini_now_iso()
         _gemini_store_interaction(interaction)
-    return JSONResponse({})
+    return interaction
 
 
 @app.post("/v1beta/interactions/{interaction_id:path}:cancel")
