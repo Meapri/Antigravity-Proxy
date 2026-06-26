@@ -685,9 +685,10 @@ Notes:
   `data/gemini_tuned_models`; override with `ANTIGRAVITY_GEMINI_TUNED_MODELS_DIR`.
 - Webhook configurations are stored locally under `data/gemini_webhooks`;
   override with `ANTIGRAVITY_GEMINI_WEBHOOKS_DIR`. The proxy delivers
-  `webhooks.ping`, `batches.completed`, and `interactions.completed` callback
+  `webhooks.ping`, `batch.succeeded`, and `interaction.completed` callback
   events to enabled webhooks, stores delivery attempts, and signs callbacks
-  with `X-Goog-Webhook-Signature` when a signing secret exists.
+  with `X-Goog-Webhook-Signature` when a signing secret exists. Legacy
+  `batches.*` / `interactions.*` subscriptions are matched as aliases.
 - Native Veo video generation, realtime Live audio/video, real model
   tuning/training, true async long-running jobs, semantic Google embeddings,
   and semantic/vector `tools.file_search` retrieval are not fully implemented

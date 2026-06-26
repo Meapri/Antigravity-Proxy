@@ -1194,6 +1194,27 @@ def _gemini_webhook_events(webhook: dict[str, Any]) -> list[str]:
     return [str(item).strip() for item in raw if str(item).strip()] if isinstance(raw, list) else []
 
 
+_GEMINI_WEBHOOK_EVENT_ALIASES = {
+    "batches.completed": "batch.succeeded",
+    "batch.completed": "batch.succeeded",
+    "interactions.completed": "interaction.completed",
+    "generatedFiles.completed": "video.generated",
+    "generated_files.completed": "video.generated",
+}
+
+
+def _gemini_canonical_webhook_event(event_type: str) -> str:
+    event = str(event_type).strip()
+    return _GEMINI_WEBHOOK_EVENT_ALIASES.get(event, event)
+
+
+def _gemini_webhook_event_candidates(event_type: str) -> set[str]:
+    canonical = _gemini_canonical_webhook_event(event_type)
+    candidates = {canonical, str(event_type).strip()}
+    candidates.update(alias for alias, target in _GEMINI_WEBHOOK_EVENT_ALIASES.items() if target == canonical)
+    return {candidate for candidate in candidates if candidate}
+
+
 def _gemini_webhook_enabled(webhook: dict[str, Any]) -> bool:
     state = str(webhook.get("state") or "enabled").strip().lower()
     return state in {"enabled", "active", "state_enabled"}
@@ -1203,8 +1224,13 @@ def _gemini_webhook_matches_event(webhook: dict[str, Any], event_type: str) -> b
     subscribed = _gemini_webhook_events(webhook)
     if not subscribed:
         return False
-    event_family = event_type.split(".", 1)[0] + ".*" if "." in event_type else event_type + ".*"
-    return "*" in subscribed or event_type in subscribed or event_family in subscribed
+    normalized_subscriptions = {_gemini_canonical_webhook_event(item) for item in subscribed}
+    normalized_subscriptions.update(subscribed)
+    for event in _gemini_webhook_event_candidates(event_type):
+        event_family = event.split(".", 1)[0] + ".*" if "." in event else event + ".*"
+        if "*" in normalized_subscriptions or event in normalized_subscriptions or event_family in normalized_subscriptions:
+            return True
+    return False
 
 
 def _gemini_new_signing_secret() -> dict[str, Any]:
@@ -1282,6 +1308,7 @@ async def _gemini_deliver_webhook(webhook: dict[str, Any], event_type: str, reso
 
 
 async def _gemini_emit_webhook_event(event_type: str, resource: dict[str, Any]) -> None:
+    event_type = _gemini_canonical_webhook_event(event_type)
     index = _gemini_load_webhooks_index()
     changed = False
     for name, webhook in list(index.items()):
@@ -5831,7 +5858,7 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
     }
     stored_operation = _gemini_store_operation(operation)
     stored_batch = _gemini_store_batch(batch)
-    await _gemini_emit_webhook_event("batches.completed", stored_batch)
+    await _gemini_emit_webhook_event("batch.succeeded", stored_batch)
     return stored_operation, stored_batch
 
 
@@ -6161,7 +6188,7 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
         }
         if body.get("store", True) is not False:
             _gemini_store_interaction(interaction)
-            await _gemini_emit_webhook_event("interactions.completed", interaction)
+            await _gemini_emit_webhook_event("interaction.completed", interaction)
         return interaction
 
     request_body = _gemini_apply_cached_content(request_body)
@@ -6204,7 +6231,7 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
     }
     if body.get("store", True) is not False:
         _gemini_store_interaction(interaction)
-        await _gemini_emit_webhook_event("interactions.completed", interaction)
+        await _gemini_emit_webhook_event("interaction.completed", interaction)
     return interaction
 
 

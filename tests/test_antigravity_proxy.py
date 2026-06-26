@@ -944,7 +944,7 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
         "webhook": {
             "display_name": "Batch updates",
             "target_uri": "https://example.test/hook",
-            "event_types": ["batches.completed"],
+            "event_types": ["batch.succeeded"],
         }
     })
     assert created.status_code == 200
@@ -953,8 +953,8 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
     assert webhook["displayName"] == "Batch updates"
     assert webhook["uri"] == "https://example.test/hook"
     assert webhook["targetUri"] == "https://example.test/hook"
-    assert webhook["subscribedEvents"] == ["batches.completed"]
-    assert webhook["eventTypes"] == ["batches.completed"]
+    assert webhook["subscribedEvents"] == ["batch.succeeded"]
+    assert webhook["eventTypes"] == ["batch.succeeded"]
     assert webhook["state"] == "enabled"
     assert webhook["newSigningSecret"]["secret"]
     assert "secret" not in webhook["signingSecrets"][0]
@@ -1030,12 +1030,12 @@ def test_gemini_webhooks_ping_and_batch_delivery(tmp_path, monkeypatch):
         "requests": [{"contents": [{"role": "user", "parts": [{"text": "hello"}]}]}],
     })
     assert batch.status_code == 200
-    assert deliveries[-1]["payload"]["eventType"] == "batches.completed"
+    assert deliveries[-1]["payload"]["eventType"] == "batch.succeeded"
     assert deliveries[-1]["payload"]["resource"]["name"].startswith("batches/")
 
     fetched = client.get(f"/v1beta/{name}")
     attempts = fetched.json()["deliveryAttempts"]
-    assert [item["eventType"] for item in attempts] == ["webhooks.ping", "batches.completed"]
+    assert [item["eventType"] for item in attempts] == ["webhooks.ping", "batch.succeeded"]
     assert all(item["status"] == "delivered" for item in attempts)
 
 
