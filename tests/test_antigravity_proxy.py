@@ -752,6 +752,14 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
     assert patched.json()["displayName"] == "Renamed"
     assert patched.json()["targetUri"] == "https://example.test/hook"
 
+    malformed = client.patch(
+        f"/v1/{webhook['name']}",
+        content="{not json",
+        headers={"Content-Type": "application/json"},
+    )
+    assert malformed.status_code == 400
+    assert malformed.json()["error"]["status"] == "INVALID_ARGUMENT"
+
     deleted = client.delete(f"/v1beta/{webhook['name']}")
     missing = client.get(f"/v1beta/{webhook['name']}")
     assert deleted.status_code == 200

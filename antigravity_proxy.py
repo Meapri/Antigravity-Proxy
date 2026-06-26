@@ -5526,6 +5526,9 @@ async def gemini_create_webhook(request: Request):
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini webhooks create failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
 @app.get("/v1beta/webhooks")
@@ -5573,6 +5576,9 @@ async def gemini_patch_webhook(webhook_id: str, request: Request, updateMask: st
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini webhooks patch failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
 @app.delete("/v1beta/webhooks/{webhook_id:path}")
