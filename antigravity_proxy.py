@@ -509,6 +509,45 @@ def _gemini_string_list(value: Any) -> Any:
     return value
 
 
+def _gemini_int_value(value: Any) -> Any:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if text.lstrip("-").isdigit():
+            return int(text)
+    return value
+
+
+def _gemini_float_value(value: Any) -> Any:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return value
+    return value
+
+
+def _gemini_bool_value(value: Any) -> Any:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"true", "1", "yes", "on"}:
+            return True
+        if text in {"false", "0", "no", "off"}:
+            return False
+    return value
+
+
 def _gemini_normalize_generation_config(value: Any) -> Any:
     if not isinstance(value, dict):
         return value
@@ -516,6 +555,15 @@ def _gemini_normalize_generation_config(value: Any) -> Any:
     for key in ("stopSequences", "responseModalities"):
         if key in out:
             out[key] = _gemini_string_list(out[key])
+    for key in ("topK", "candidateCount", "maxOutputTokens", "logprobs", "seed"):
+        if key in out:
+            out[key] = _gemini_int_value(out[key])
+    for key in ("temperature", "topP", "presencePenalty", "frequencyPenalty"):
+        if key in out:
+            out[key] = _gemini_float_value(out[key])
+    for key in ("responseLogprobs",):
+        if key in out:
+            out[key] = _gemini_bool_value(out[key])
     return out
 
 

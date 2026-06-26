@@ -702,9 +702,12 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
         "request_options": {"timeout": 1},
         "config": {
             "system_instruction": "answer tersely",
-            "max_output_tokens": 17,
-            "temperature": 0.2,
-            "top_p": 0.9,
+            "max_output_tokens": "17",
+            "candidate_count": "1",
+            "temperature": "0.2",
+            "top_p": "0.9",
+            "top_k": "40",
+            "response_logprobs": "true",
             "stop_sequences": "END",
             "response_modalities": "TEXT",
             "response_mime_type": "application/json",
@@ -725,8 +728,11 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
     assert seen["request"]["labels"] == {"source": "sdk"}
     assert seen["request"]["toolConfig"]["functionCallingConfig"] == {"mode": "NONE"}
     assert seen["request"]["generationConfig"]["maxOutputTokens"] == 17
+    assert seen["request"]["generationConfig"]["candidateCount"] == 1
     assert seen["request"]["generationConfig"]["temperature"] == 0.2
     assert seen["request"]["generationConfig"]["topP"] == 0.9
+    assert seen["request"]["generationConfig"]["topK"] == 40
+    assert seen["request"]["generationConfig"]["responseLogprobs"] is True
     assert seen["request"]["generationConfig"]["stopSequences"] == ["END"]
     assert seen["request"]["generationConfig"]["responseModalities"] == ["TEXT"]
     assert seen["request"]["generationConfig"]["responseMimeType"] == "application/json"

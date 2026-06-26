@@ -664,7 +664,9 @@ They also accept the common SDK-style top-level `config` object and merge it
 into Gemini REST fields such as `generationConfig`, `systemInstruction`,
 `toolConfig`, `safetySettings`, `tools`, `cachedContent`, and `labels`.
 String `stopSequences` and `responseModalities` values are normalized to the
-Gemini REST list form.
+Gemini REST list form. Numeric and boolean generation config values such as
+`maxOutputTokens`, `temperature`, `topK`, and `responseLogprobs` are coerced
+from common string forms when possible.
 SDK transport-only options such as `httpOptions`, `requestOptions`,
 `apiVersion`, and `baseUrl` are ignored rather than forwarded as API payload.
 `response_format` / `responseFormat` wrappers are mapped into
