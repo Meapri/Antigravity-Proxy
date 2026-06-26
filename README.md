@@ -630,6 +630,11 @@ Notes:
   override with `ANTIGRAVITY_GEMINI_BATCHES_DIR`.
 - Interactions are stored locally under `data/gemini_interactions` by default;
   override with `ANTIGRAVITY_GEMINI_INTERACTIONS_DIR`.
+- Interactions accept Gemini-style content items such as `{"type":"text"}`,
+  `{"type":"image","image_url":...}`, `inline_data`, and `file_data`;
+  snake_case Gemini SDK fields are normalized to REST casing before forwarding.
+- Image-capable Gemini models can be used through Interactions and return a
+  Gemini candidate containing `inlineData`, plus a local `generatedFile`.
 - Generated files are stored locally under `data/gemini_generated_files` by
   default; override with `ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR`.
 - File search stores are stored locally under `data/gemini_file_search_stores`;

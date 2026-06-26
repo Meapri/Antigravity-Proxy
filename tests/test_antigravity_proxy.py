@@ -659,6 +659,62 @@ def test_gemini_interactions_create_previous_store_and_stream(tmp_path, monkeypa
     assert "data: [DONE]" in body
 
 
+def test_gemini_interactions_accept_content_item_aliases_and_image_model(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", str(tmp_path / "interactions"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR", str(tmp_path / "generated"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            seen["model"] = model
+            return {"response": {"candidates": [{"content": {"role": "model", "parts": [{"text": "aliases ok"}]}}]}}
+
+        def generate_image(self, *, prompt, output_dir, aspect_ratio="", image_size=""):
+            seen["image_prompt"] = prompt
+            output = output_dir / "interaction-image.jpg"
+            output.write_bytes(b"interaction-image")
+            return output
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    text_interaction = client.post("/v1beta/interactions", json={
+        "input": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe"},
+                {"type": "image", "image_url": {"url": "https://example.test/cat.jpg"}, "mime_type": "image/jpeg"},
+            ],
+        }],
+        "generation_config": {
+            "response_modalities": ["TEXT"],
+            "media_resolution": "MEDIA_RESOLUTION_LOW",
+        },
+    })
+
+    assert text_interaction.status_code == 200
+    parts = seen["request"]["contents"][0]["parts"]
+    assert parts[0] == {"text": "describe"}
+    assert parts[1]["fileData"]["fileUri"] == "https://example.test/cat.jpg"
+    assert seen["request"]["generationConfig"]["responseModalities"] == ["TEXT"]
+    assert seen["request"]["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_LOW"
+
+    image_interaction = client.post("/v1beta/interactions", json={
+        "model": "models/gemini-image-latest",
+        "input": [{"type": "text", "text": "draw an icon"}],
+        "store": False,
+    })
+
+    assert image_interaction.status_code == 200
+    body = image_interaction.json()
+    assert seen["image_prompt"] == "draw an icon"
+    assert body["generatedFile"]["name"].startswith("generatedFiles/")
+    assert body["output"]["candidates"][0]["content"]["parts"][0]["inlineData"]["data"]
+    assert client.get(f"/v1beta/{body['name']}").status_code == 404
+
+
 def test_gemini_live_websocket_text_turn(monkeypatch):
     seen = {}
 

@@ -358,6 +358,13 @@ _GEMINI_KEY_ALIASES = {
     "presence_penalty": "presencePenalty",
     "frequency_penalty": "frequencyPenalty",
     "thinking_config": "thinkingConfig",
+    "thinking_budget": "thinkingBudget",
+    "include_thoughts": "includeThoughts",
+    "response_modalities": "responseModalities",
+    "media_resolution": "mediaResolution",
+    "image_config": "imageConfig",
+    "speech_config": "speechConfig",
+    "routing_config": "routingConfig",
     "function_declarations": "functionDeclarations",
     "function_calling_config": "functionCallingConfig",
     "allowed_function_names": "allowedFunctionNames",
@@ -377,6 +384,8 @@ _GEMINI_KEY_ALIASES = {
     "mimeType": "mimeType",
     "file_uri": "fileUri",
     "fileUri": "fileUri",
+    "image_url": "imageUrl",
+    "image_bytes": "imageBytes",
     "video_metadata": "videoMetadata",
     "function_call": "functionCall",
     "functionCall": "functionCall",
@@ -549,32 +558,90 @@ async def _gemini_generate_image_payload(model_name: str, body: dict[str, Any]) 
     }
 
 
+def _gemini_content_item_to_part(item: Any) -> dict[str, Any] | None:
+    if isinstance(item, str):
+        return {"text": item}
+    if not isinstance(item, dict):
+        if item is None:
+            return None
+        return {"text": str(item)}
+    normalized = _gemini_normalize_request(item)
+    if not isinstance(normalized, dict):
+        return {"text": str(normalized)}
+    item_type = str(normalized.get("type") or "").strip()
+    if item_type in {"text", "input_text", "output_text"} and normalized.get("text") is not None:
+        return {"text": str(normalized["text"])}
+    if item_type in {"image", "input_image"}:
+        mime_type = str(normalized.get("mimeType") or "image/jpeg")
+        uri = (
+            normalized.get("fileUri")
+            or normalized.get("uri")
+            or normalized.get("url")
+            or normalized.get("imageUrl")
+        )
+        if isinstance(normalized.get("imageUrl"), dict):
+            uri = normalized["imageUrl"].get("url") or normalized["imageUrl"].get("uri")
+        if uri:
+            return {"fileData": {"mimeType": mime_type, "fileUri": str(uri)}}
+        data = (
+            normalized.get("data")
+            or normalized.get("imageBytes")
+            or normalized.get("base64")
+            or normalized.get("b64_json")
+        )
+        if data is not None:
+            text_data = str(data)
+            if text_data.startswith("data:"):
+                header, _, text_data = text_data.partition(",")
+                mime_type = header.split(";", 1)[0].removeprefix("data:") or mime_type
+            return {"inlineData": {"mimeType": mime_type, "data": text_data}}
+    if item_type in {"file", "input_file"}:
+        uri = normalized.get("fileUri") or normalized.get("uri") or normalized.get("url")
+        if uri:
+            return {
+                "fileData": {
+                    "mimeType": str(normalized.get("mimeType") or "application/octet-stream"),
+                    "fileUri": str(uri),
+                }
+            }
+    for key in ("text", "inlineData", "fileData", "functionCall", "functionResponse", "executableCode", "codeExecutionResult"):
+        if key in normalized:
+            if key == "text":
+                return {"text": str(normalized[key])}
+            return {key: normalized[key]}
+    return None
+
+
 def _gemini_message_to_content(message: Any) -> dict[str, Any] | None:
     if isinstance(message, str):
         return {"role": "user", "parts": [{"text": message}]}
     if not isinstance(message, dict):
         return None
+    message = _gemini_normalize_request(message)
     if isinstance(message.get("parts"), list):
         role = str(message.get("role") or "user")
-        return {"role": "model" if role == "assistant" else role, "parts": message["parts"]}
+        parts = [_gemini_content_item_to_part(part) for part in message["parts"]]
+        return {"role": "model" if role == "assistant" else role, "parts": [part for part in parts if part]}
+    if message.get("type") in {"text", "input_text", "output_text", "image", "input_image", "file", "input_file"}:
+        part = _gemini_content_item_to_part(message)
+        if part is None:
+            return None
+        role = str(message.get("role") or "user")
+        return {"role": "model" if role == "assistant" else role, "parts": [part]}
     role = str(message.get("role") or "user")
     content = message.get("content", message.get("text", message.get("input")))
     parts: list[Any]
     if isinstance(content, list):
         parts = []
         for item in content:
-            if isinstance(item, dict):
-                item_type = item.get("type")
-                if item_type in {"input_text", "output_text", "text"} and item.get("text") is not None:
-                    parts.append({"text": str(item["text"])})
-                elif "text" in item or "inlineData" in item or "fileData" in item:
-                    parts.append(item)
-            elif item is not None:
-                parts.append({"text": str(item)})
+            part = _gemini_content_item_to_part(item)
+            if part is not None:
+                parts.append(part)
     elif content is None:
         parts = []
     else:
-        parts = [{"text": str(content)}]
+        part = _gemini_content_item_to_part(content)
+        parts = [part] if part is not None else []
     if not parts:
         return None
     return {"role": "model" if role == "assistant" else role, "parts": parts}
@@ -5365,6 +5432,52 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
     ):
         if key in body:
             request_body[key] = body[key]
+    if _model_capabilities(model)["image_generation"]:
+        image = await _gemini_generate_image_payload(str(model_name), request_body)
+        response = {
+            "candidates": [{
+                "content": {
+                    "role": "model",
+                    "parts": [{
+                        "inlineData": {
+                            "mimeType": image["mimeType"],
+                            "data": image["base64"],
+                        }
+                    }],
+                },
+                "finishReason": "STOP",
+            }],
+            "generatedFile": image["generatedFile"]["name"],
+        }
+        now = _gemini_now_iso()
+        interaction_name = "interactions/int_" + uuid.uuid4().hex
+        model_content = response["candidates"][0]["content"]
+        interaction = {
+            "name": interaction_name,
+            "id": interaction_name.rsplit("/", 1)[-1],
+            "model": _gemini_model_name(model),
+            "status": "completed",
+            "createTime": now,
+            "updateTime": now,
+            "previousInteractionId": previous_id or None,
+            "input": body.get("input", body.get("messages", body.get("contents"))),
+            "output": response,
+            "outputText": "",
+            "generatedFile": image["generatedFile"],
+            "history": request_body["contents"] + [model_content],
+            "steps": [
+                {
+                    "type": "image_generation",
+                    "status": "completed",
+                    "generatedFile": image["generatedFile"]["name"],
+                }
+            ],
+            "usageMetadata": {},
+        }
+        if body.get("store", True) is not False:
+            _gemini_store_interaction(interaction)
+        return interaction
+
     request_body = _gemini_apply_cached_content(request_body)
     request_body = _gemini_apply_file_search(request_body)
     request_body = _gemini_inline_local_files(request_body)
@@ -5420,6 +5533,9 @@ async def gemini_create_interaction(request: Request):
                 yield f"data: {json.dumps({'type': 'interaction.created', 'interaction': created}, ensure_ascii=False)}\n\n"
                 if interaction.get("outputText"):
                     yield f"data: {json.dumps({'type': 'interaction.output_text.delta', 'delta': interaction['outputText']}, ensure_ascii=False)}\n\n"
+                generated_file = interaction.get("generatedFile")
+                if generated_file:
+                    yield f"data: {json.dumps({'type': 'interaction.output_image.done', 'generatedFile': generated_file}, ensure_ascii=False)}\n\n"
                 yield f"data: {json.dumps({'type': 'interaction.completed', 'interaction': interaction}, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
 
