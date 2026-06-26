@@ -2531,8 +2531,11 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     perm_id = perm.json()["name"].rsplit("/", 1)[-1]
     listed_perms = client.get(f"/v1/corpora/{corpus_id}/permissions")
     fetched_perm = client.get(f"/v1/corpora/{corpus_id}/permissions/{perm_id}")
-    patched_perm = client.patch(f"/v1/corpora/{corpus_id}/permissions/{perm_id}", json={
-        "permission": {"role": "writer"}
+    patched_perm = client.patch(f"/v1/corpora/{corpus_id}/permissions/{perm_id}?updateMask=permission.role", json={
+        "permission": {
+            "role": "writer",
+            "email_address": "ignored@example.com",
+        }
     })
 
     assert perm.status_code == 200
@@ -2542,6 +2545,7 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     assert listed_perms.json()["permissions"][0]["role"] == "READER"
     assert fetched_perm.json()["role"] == "READER"
     assert patched_perm.json()["role"] == "WRITER"
+    assert patched_perm.json()["emailAddress"] == "reader@example.com"
 
     assert client.delete(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks/{chunk_id}").status_code == 200
     assert client.delete(f"/v1/corpora/{corpus_id}/permissions/{perm_id}").status_code == 200
@@ -2804,16 +2808,21 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     perm_id = perm.json()["name"].rsplit("/", 1)[-1]
     listed_perms = client.get("/v1/tunedModels/my_tuned/permissions")
     patched_perm = client.patch(f"/v1/tunedModels/my_tuned/permissions/{perm_id}", json={
-        "permission": {"role": "writer"}
+        "permission": {
+            "role": "writer",
+            "email_address": "ignored@example.com",
+        },
+        "update_mask": "permission.role",
     })
     promoted = client.post(f"/v1/tunedModels/my_tuned/permissions/{perm_id}:transferOwnership")
-    fetched_perm = client.get(f"/v1/tunedModels/my_tuned/permissions/{perm_id}")
+    fetched_perm = client.get(f"/v1/tunedModels/my_tuned/permissions/{perm.json()['name']}")
     assert listed_perms.status_code == 200
     assert listed_perms.json()["permissions"][0]["emailAddress"] == "user@example.com"
     assert listed_perms.json()["permissions"][0]["granteeType"] == "USER"
     assert listed_perms.json()["permissions"][0]["role"] == "READER"
     assert patched_perm.status_code == 200
     assert patched_perm.json()["role"] == "WRITER"
+    assert patched_perm.json()["emailAddress"] == "user@example.com"
     assert promoted.status_code == 200
     assert fetched_perm.json()["role"] == "OWNER"
 

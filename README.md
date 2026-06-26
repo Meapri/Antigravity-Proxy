@@ -858,7 +858,10 @@ Tuned models and permissions:
 - `permissions` are stored locally for Gemini SDK compatibility; corpus and
   tuned-model permission create/patch accept `permission` wrappers plus
   snake_case aliases such as `email_address` and `grantee_type`, normalizing
-  role/grantee enums to Gemini-style uppercase values.
+  role/grantee enums to Gemini-style uppercase values. Permission patch honors
+  `updateMask` / `update_mask` for `role`, `granteeType`, and `emailAddress`,
+  and tuned-model permission routes also accept full permission resource names
+  in the `{permission}` path segment.
 
 Generated files:
 

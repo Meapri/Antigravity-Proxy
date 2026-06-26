@@ -3149,6 +3149,36 @@ def _gemini_permission_public_resource(name: str, body: dict[str, Any]) -> dict[
     }
 
 
+def _gemini_permission_update_fields(update_mask: str | None, body: dict[str, Any]) -> set[str]:
+    aliases = {
+        "role": "role",
+        "permission.role": "role",
+        "grantee_type": "granteeType",
+        "granteeType": "granteeType",
+        "permission.grantee_type": "granteeType",
+        "permission.granteeType": "granteeType",
+        "email_address": "emailAddress",
+        "emailAddress": "emailAddress",
+        "permission.email_address": "emailAddress",
+        "permission.emailAddress": "emailAddress",
+    }
+    if not update_mask:
+        return {key for key in ("role", "granteeType", "emailAddress") if key in body}
+    fields: set[str] = set()
+    for raw in update_mask.split(","):
+        key = raw.strip()
+        if not key:
+            continue
+        fields.add(aliases.get(key, aliases.get(key.rsplit(".", 1)[-1], key)))
+    unsupported = fields - {"role", "granteeType", "emailAddress"}
+    if unsupported:
+        raise HTTPException(
+            status_code=400,
+            detail="permissions.patch supports updateMask fields: role, granteeType, emailAddress.",
+        )
+    return fields
+
+
 def _gemini_document_resource(doc: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in doc.items() if k not in {"chunks"} and v is not None}
 
@@ -3614,7 +3644,17 @@ def _gemini_tuned_base_model(name: str) -> dict[str, Any]:
 
 
 def _gemini_permission_name(parent: str, permission_id: str) -> str:
-    return f"{_gemini_tuned_name(parent)}/permissions/{permission_id.strip().strip('/')}"
+    parent_name = _gemini_tuned_name(parent)
+    key = permission_id.strip().strip("/")
+    for prefix in ("v1beta/", "v1/"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+            break
+    if key.startswith(parent_name + "/permissions/"):
+        return key
+    if "/permissions/" in key:
+        key = key.rsplit("/permissions/", 1)[-1]
+    return f"{parent_name}/permissions/{key}"
 
 
 def _gemini_permission_resource(parent: str, perm: dict[str, Any]) -> dict[str, Any]:
@@ -6166,7 +6206,7 @@ async def gemini_get_corpus_permission(corpus_id: str, permission_id: str):
 
 @app.patch("/v1/corpora/{corpus_id}/permissions/{permission_id:path}")
 @app.patch("/v1beta/corpora/{corpus_id}/permissions/{permission_id:path}")
-async def gemini_patch_corpus_permission(corpus_id: str, permission_id: str, request: Request):
+async def gemini_patch_corpus_permission(corpus_id: str, permission_id: str, request: Request, updateMask: str | None = None):
     index = _gemini_load_corpora_index()
     corpus_name = _gemini_corpus_name(corpus_id)
     meta = index.get(corpus_name)
@@ -6176,11 +6216,17 @@ async def gemini_patch_corpus_permission(corpus_id: str, permission_id: str, req
     perm = (meta.get("permissions") or {}).get(perm_name)
     if not perm:
         return _gemini_error_response(f"Permission '{permission_id}' not found.", status_code=404, status="NOT_FOUND")
-    body = _gemini_permission_body(await request.json())
+    raw_body = await request.json()
+    body = _gemini_permission_body(raw_body)
+    if isinstance(raw_body, dict):
+        updateMask = updateMask or raw_body.get("updateMask")
     if isinstance(body, dict):
-        for key in ("role", "granteeType", "emailAddress"):
+        updateMask = updateMask or body.pop("updateMask", None)
+        fields = _gemini_permission_update_fields(updateMask, body)
+        for key in fields:
             if key in body:
                 perm[key] = body[key]
+    meta["updateTime"] = _gemini_now_iso()
     meta.setdefault("permissions", {})[perm_name] = perm
     index[corpus_name] = meta
     _gemini_save_corpora_index(index)
@@ -6714,8 +6760,8 @@ async def gemini_create_tuned_model_permission(tuned_model_id: str, request: Req
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
 
 
-@app.get("/v1/tunedModels/{tuned_model_id}/permissions/{permission_id}")
-@app.get("/v1beta/tunedModels/{tuned_model_id}/permissions/{permission_id}")
+@app.get("/v1/tunedModels/{tuned_model_id}/permissions/{permission_id:path}")
+@app.get("/v1beta/tunedModels/{tuned_model_id}/permissions/{permission_id:path}")
 async def gemini_get_tuned_model_permission(tuned_model_id: str, permission_id: str):
     meta = _gemini_get_tuned_meta(tuned_model_id)
     if not meta:
@@ -6726,9 +6772,9 @@ async def gemini_get_tuned_model_permission(tuned_model_id: str, permission_id: 
     return perm
 
 
-@app.patch("/v1/tunedModels/{tuned_model_id}/permissions/{permission_id}")
-@app.patch("/v1beta/tunedModels/{tuned_model_id}/permissions/{permission_id}")
-async def gemini_patch_tuned_model_permission(tuned_model_id: str, permission_id: str, request: Request):
+@app.patch("/v1/tunedModels/{tuned_model_id}/permissions/{permission_id:path}")
+@app.patch("/v1beta/tunedModels/{tuned_model_id}/permissions/{permission_id:path}")
+async def gemini_patch_tuned_model_permission(tuned_model_id: str, permission_id: str, request: Request, updateMask: str | None = None):
     index = _gemini_load_tuned_index()
     name = _gemini_tuned_name(tuned_model_id)
     meta = index.get(name)
@@ -6738,19 +6784,25 @@ async def gemini_patch_tuned_model_permission(tuned_model_id: str, permission_id
     perm = (meta.get("permissions") or {}).get(perm_name)
     if not perm:
         return _gemini_error_response(f"Permission '{permission_id}' not found.", status_code=404, status="NOT_FOUND")
-    body = _gemini_permission_body(await request.json())
+    raw_body = await request.json()
+    body = _gemini_permission_body(raw_body)
+    if isinstance(raw_body, dict):
+        updateMask = updateMask or raw_body.get("updateMask")
     if isinstance(body, dict):
-        for key in ("role", "granteeType", "emailAddress"):
+        updateMask = updateMask or body.pop("updateMask", None)
+        fields = _gemini_permission_update_fields(updateMask, body)
+        for key in fields:
             if key in body:
                 perm[key] = body[key]
+    meta["updateTime"] = _gemini_now_iso()
     meta.setdefault("permissions", {})[perm_name] = perm
     index[name] = meta
     _gemini_save_tuned_index(index)
     return perm
 
 
-@app.post("/v1/tunedModels/{tuned_model_id}/permissions/{permission_id}:transferOwnership")
-@app.post("/v1beta/tunedModels/{tuned_model_id}/permissions/{permission_id}:transferOwnership")
+@app.post("/v1/tunedModels/{tuned_model_id}/permissions/{permission_id:path}:transferOwnership")
+@app.post("/v1beta/tunedModels/{tuned_model_id}/permissions/{permission_id:path}:transferOwnership")
 async def gemini_transfer_tuned_model_permission(tuned_model_id: str, permission_id: str):
     index = _gemini_load_tuned_index()
     name = _gemini_tuned_name(tuned_model_id)
@@ -6762,14 +6814,15 @@ async def gemini_transfer_tuned_model_permission(tuned_model_id: str, permission
     if not perm:
         return _gemini_error_response(f"Permission '{permission_id}' not found.", status_code=404, status="NOT_FOUND")
     perm["role"] = "OWNER"
+    meta["updateTime"] = _gemini_now_iso()
     meta.setdefault("permissions", {})[perm_name] = perm
     index[name] = meta
     _gemini_save_tuned_index(index)
     return JSONResponse({})
 
 
-@app.delete("/v1/tunedModels/{tuned_model_id}/permissions/{permission_id}")
-@app.delete("/v1beta/tunedModels/{tuned_model_id}/permissions/{permission_id}")
+@app.delete("/v1/tunedModels/{tuned_model_id}/permissions/{permission_id:path}")
+@app.delete("/v1beta/tunedModels/{tuned_model_id}/permissions/{permission_id:path}")
 async def gemini_delete_tuned_model_permission(tuned_model_id: str, permission_id: str):
     index = _gemini_load_tuned_index()
     name = _gemini_tuned_name(tuned_model_id)
