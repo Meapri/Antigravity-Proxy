@@ -7344,10 +7344,18 @@ async def gemini_live_websocket(websocket: WebSocket):
             try:
                 message = _gemini_normalize_request(json.loads(raw))
             except json.JSONDecodeError:
-                await websocket.send_json({"error": {"code": 400, "message": "Live API messages must be JSON.", "status": "INVALID_ARGUMENT"}})
+                await websocket.send_json(_gemini_error_payload(
+                    "Live API messages must be JSON.",
+                    status_code=400,
+                    status="INVALID_ARGUMENT",
+                ))
                 continue
             if not isinstance(message, dict):
-                await websocket.send_json({"error": {"code": 400, "message": "Live API message must be an object.", "status": "INVALID_ARGUMENT"}})
+                await websocket.send_json(_gemini_error_payload(
+                    "Live API message must be an object.",
+                    status_code=400,
+                    status="INVALID_ARGUMENT",
+                ))
                 continue
 
             setup_msg = message.get("setup")
@@ -7358,13 +7366,11 @@ async def gemini_live_websocket(websocket: WebSocket):
                 continue
 
             if isinstance(message.get("realtimeInput"), dict) or isinstance(message.get("realtime_input"), dict):
-                await websocket.send_json({
-                    "error": {
-                        "code": 400,
-                        "message": "Realtime audio/video input is not supported by this Antigravity-backed Live shim.",
-                        "status": "UNIMPLEMENTED",
-                    }
-                })
+                await websocket.send_json(_gemini_error_payload(
+                    "Realtime audio/video input is not supported by this Antigravity-backed Live shim.",
+                    status_code=501,
+                    status="UNIMPLEMENTED",
+                ))
                 continue
 
             if isinstance(message.get("toolResponse"), dict) or isinstance(message.get("tool_response"), dict):
@@ -7373,7 +7379,11 @@ async def gemini_live_websocket(websocket: WebSocket):
 
             turns, turn_complete = _gemini_live_turns_from_message(message)
             if not turns:
-                await websocket.send_json({"error": {"code": 400, "message": "Unsupported Live API message.", "status": "INVALID_ARGUMENT"}})
+                await websocket.send_json(_gemini_error_payload(
+                    "Unsupported Live API message.",
+                    status_code=400,
+                    status="INVALID_ARGUMENT",
+                ))
                 continue
             history.extend(turns)
             if not turn_complete:
@@ -7383,12 +7393,16 @@ async def gemini_live_websocket(websocket: WebSocket):
             try:
                 response, model_turn = await _gemini_live_generate(model_name=str(model_name), history=history, setup=setup)
             except HTTPException as exc:
-                status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
-                await websocket.send_json({"error": {"code": exc.status_code, "message": str(exc.detail), "status": status}})
+                status = _gemini_status_for_http(exc.status_code)
+                await websocket.send_json(_gemini_error_payload(exc.detail, status_code=exc.status_code, status=status))
                 continue
             except Exception as exc:
                 log.exception("Gemini Live generate failed")
-                await websocket.send_json({"error": {"code": 502, "message": f"Antigravity upstream error: {exc}", "status": "UNAVAILABLE"}})
+                await websocket.send_json(_gemini_error_payload(
+                    f"Antigravity upstream error: {exc}",
+                    status_code=502,
+                    status="UNAVAILABLE",
+                ))
                 continue
 
             server_content: dict[str, Any] = {"turnComplete": True}

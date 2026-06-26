@@ -834,6 +834,8 @@ Live API:
 - Realtime audio/video `realtimeInput` is explicitly rejected with
   `UNIMPLEMENTED` because the current Antigravity backend is request/response
   oriented and does not expose native bidirectional media streaming.
+- Live protocol errors use the same Gemini `error` payload and `google.rpc`
+  details as the REST and SSE compatibility routes.
 
 Notes:
 

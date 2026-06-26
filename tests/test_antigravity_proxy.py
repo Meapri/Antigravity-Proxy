@@ -1592,6 +1592,28 @@ def test_gemini_live_websocket_rejects_realtime_media(monkeypatch):
         response = ws.receive_json()
 
     assert response["error"]["status"] == "UNIMPLEMENTED"
+    assert response["error"]["code"] == 501
+    assert response["error"]["details"][0]["@type"] == "type.googleapis.com/google.rpc.ErrorInfo"
+
+
+def test_gemini_live_websocket_errors_use_gemini_error_details(monkeypatch):
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            raise RuntimeError("live down")
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    with client.websocket_connect("/v1beta/live") as ws:
+        ws.send_text("{not json")
+        malformed = ws.receive_json()
+        ws.send_json({"clientContent": {"turns": [{"role": "user", "parts": [{"text": "hello"}]}], "turnComplete": True}})
+        failed = ws.receive_json()
+
+    assert malformed["error"]["status"] == "INVALID_ARGUMENT"
+    assert malformed["error"]["details"][0]["@type"] == "type.googleapis.com/google.rpc.BadRequest"
+    assert failed["error"]["status"] == "UNAVAILABLE"
+    assert failed["error"]["details"][0]["@type"] == "type.googleapis.com/google.rpc.ErrorInfo"
 
 
 def test_gemini_files_upload_and_file_data_inline_conversion(tmp_path, monkeypatch):
