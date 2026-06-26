@@ -175,6 +175,54 @@ def test_gemini_models_and_count_tokens():
     assert counted.json()["totalTokens"] > 0
 
 
+def test_gemini_auth_accepts_google_api_key_styles(monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_PROXY_API_KEY", "secret")
+    client = TestClient(proxy.app)
+
+    header_response = client.get("/v1beta/models", headers={"x-goog-api-key": "secret"})
+    query_response = client.get("/v1beta/models?key=secret")
+    rejected = client.get("/v1beta/models?key=wrong")
+
+    assert header_response.status_code == 200
+    assert query_response.status_code == 200
+    assert rejected.status_code == 401
+
+
+def test_gemini_v1_stable_aliases_do_not_break_openai_models(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "files"))
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "stable ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    openai_models = client.get("/v1/models")
+    generated = client.post("/v1/models/gemini-3-flash-agent:generateContent", json={
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+    })
+    registered = client.post("/v1/files:register", json={
+        "file": {"displayName": "stable.txt", "uri": "gs://bucket/stable.txt"}
+    })
+    uploaded = client.post(
+        "/upload/v1/files?uploadType=media&displayName=stable-upload.txt",
+        content=b"stable upload",
+        headers={"Content-Type": "text/plain"},
+    )
+
+    assert openai_models.status_code == 200
+    assert openai_models.json()["object"] == "list"
+    assert generated.status_code == 200
+    assert generated.json()["candidates"][0]["content"]["parts"][0]["text"] == "stable ok"
+    assert registered.status_code == 200
+    assert registered.json()["file"]["uri"] == "gs://bucket/stable.txt"
+    assert uploaded.status_code == 200
+    assert uploaded.json()["file"]["displayName"] == "stable-upload.txt"
+
+
 def test_gemini_embeddings_are_deterministic():
     client = TestClient(proxy.app)
 
@@ -468,6 +516,30 @@ def test_gemini_live_websocket_text_turn(monkeypatch):
     assert seen["request"]["contents"][0]["parts"][0]["text"] == "hello live"
     assert response["serverContent"]["turnComplete"] is True
     assert response["serverContent"]["modelTurn"]["parts"][0]["text"] == "live ok"
+
+
+def test_gemini_live_websocket_accepts_query_api_key(monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_PROXY_API_KEY", "secret")
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            return {"response": {"candidates": [{"content": {"role": "model", "parts": [{"text": "auth live"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    with client.websocket_connect("/v1/live?key=secret") as ws:
+        ws.send_json({"setup": {"model": "models/gemini-3-flash-agent"}})
+        assert ws.receive_json() == {"setupComplete": {}}
+        ws.send_json({
+            "clientContent": {
+                "turns": [{"role": "user", "parts": [{"text": "hello"}]}],
+                "turnComplete": True,
+            }
+        })
+        response = ws.receive_json()
+
+    assert response["serverContent"]["modelTurn"]["parts"][0]["text"] == "auth live"
 
 
 def test_gemini_live_websocket_rejects_realtime_media(monkeypatch):

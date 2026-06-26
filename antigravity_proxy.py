@@ -2050,8 +2050,52 @@ def _request_api_key_valid(request: Request) -> bool:
         return False
     auth = request.headers.get("authorization", "").strip()
     bearer = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-    api_key = request.headers.get("x-api-key", "").strip()
-    return secrets.compare_digest(bearer, expected) or secrets.compare_digest(api_key, expected)
+    candidates = [
+        bearer,
+        request.headers.get("x-api-key", "").strip(),
+        request.headers.get("x-goog-api-key", "").strip(),
+        request.query_params.get("key", "").strip(),
+    ]
+    return any(candidate and secrets.compare_digest(candidate, expected) for candidate in candidates)
+
+
+def _websocket_api_key_valid(websocket: WebSocket) -> bool:
+    expected = _proxy_api_key()
+    if not expected:
+        return True
+    auth = websocket.headers.get("authorization", "").strip()
+    bearer = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    candidates = [
+        bearer,
+        websocket.headers.get("x-api-key", "").strip(),
+        websocket.headers.get("x-goog-api-key", "").strip(),
+        websocket.query_params.get("key", "").strip(),
+    ]
+    return any(candidate and secrets.compare_digest(candidate, expected) for candidate in candidates)
+
+
+def _gemini_stable_alias_path(path: str) -> str:
+    if path.startswith("/upload/v1/"):
+        return "/upload/v1beta/" + path[len("/upload/v1/"):]
+    if not path.startswith("/v1/"):
+        return path
+    suffix = path[len("/v1/"):]
+    stable_prefixes = (
+        "batches",
+        "cachedContents",
+        "corpora",
+        "fileSearchStores",
+        "files",
+        "generatedFiles",
+        "interactions",
+        "operations",
+        "tunedModels",
+    )
+    if suffix.startswith(stable_prefixes):
+        return "/v1beta/" + suffix
+    if suffix.startswith("models/") and (":" in suffix or "/operations/" in suffix):
+        return "/v1beta/" + suffix
+    return path
 
 
 def _openai_error_type(status_code: int) -> str:
@@ -2413,6 +2457,10 @@ def _responses_sse(response: dict[str, Any]):
 
 @app.middleware("http")
 async def _optional_api_key_auth(request: Request, call_next):
+    aliased_path = _gemini_stable_alias_path(request.scope.get("path", ""))
+    if aliased_path != request.scope.get("path"):
+        request.scope["path"] = aliased_path
+        request.scope["raw_path"] = aliased_path.encode("ascii", errors="ignore")
     expected = _proxy_api_key()
     if not expected or request.url.path == "/health":
         return await call_next(request)
@@ -4899,6 +4947,7 @@ async def gemini_delete_interaction(interaction_id: str):
 
 @app.websocket("/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent")
 @app.websocket("/v1beta/live")
+@app.websocket("/v1/live")
 async def gemini_live_websocket(websocket: WebSocket):
     """Gemini Live API-compatible WebSocket for text turn flows.
 
@@ -4906,6 +4955,9 @@ async def gemini_live_websocket(websocket: WebSocket):
     the Live protocol envelope for setup and text clientContent turns. Realtime
     audio/video chunks are rejected explicitly instead of being silently ignored.
     """
+    if not _websocket_api_key_valid(websocket):
+        await websocket.close(code=1008, reason="Invalid API key")
+        return
     await websocket.accept()
     setup: dict[str, Any] = {}
     model_name = websocket.query_params.get("model") or "models/gemini-3-flash-agent"

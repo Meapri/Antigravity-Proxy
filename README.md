@@ -113,7 +113,10 @@ ANTIGRAVITY_PROJECT_ID=
 ### Optional API Key Protection
 
 If this variable is set, every route except `/health` requires either
-`Authorization: Bearer <key>` or `X-API-Key: <key>`.
+`Authorization: Bearer <key>`, `X-API-Key: <key>`,
+`X-Goog-API-Key: <key>`, or a Gemini-style `?key=<key>` query parameter.
+Gemini Live WebSocket endpoints also accept `?key=<key>` and
+`X-Goog-API-Key`.
 
 ```bash
 ANTIGRAVITY_PROXY_API_KEY=change-this-long-random-value
@@ -329,6 +332,13 @@ Remote Tailscale example:
 ```text
 http://your-host.ts.net:8765/v1beta
 ```
+
+Gemini stable-version aliases are also accepted for Gemini-specific routes,
+such as `/v1/models/{model}:generateContent`, `/v1/files:register`,
+`/v1/cachedContents`, `/v1/batches`, and `/v1/live`. OpenAI-compatible routes
+that already live under `/v1` keep their OpenAI behavior, so `/v1/models`,
+`/v1/chat/completions`, `/v1/responses`, and `/v1/images/generations` are not
+rewritten.
 
 Implemented Gemini-compatible routes:
 
