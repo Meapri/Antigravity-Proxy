@@ -347,6 +347,30 @@ as streaming Gemini SSE responses.
 
 Implemented Gemini-compatible routes:
 
+- `GET /v1/models/{model}`
+- `GET /v1/models/{model}/operations`
+- `GET /v1/models/{model}/operations/{operation}`
+- `POST /v1/models/{model}/operations/{operation}:wait`
+- `POST /v1/models/{model}/operations/{operation}:cancel`
+- `DELETE /v1/models/{model}/operations/{operation}`
+- `POST /v1/models/{model}:generateContent`
+- `POST /v1/models/{model}:streamGenerateContent`
+- `POST /v1/models/{model}:countTokens`
+- `POST /v1/models/{model}:countTextTokens`
+- `POST /v1/models/{model}:countMessageTokens`
+- `POST /v1/models/{model}:embedContent`
+- `POST /v1/models/{model}:batchEmbedContents`
+- `POST /v1/models/{model}:embedText`
+- `POST /v1/models/{model}:batchEmbedText`
+- `POST /v1/models/{model}:asyncBatchEmbedContent`
+- `POST /v1/models/{model}:batchGenerateContent`
+- `POST /v1/models/{model}:generateText`
+- `POST /v1/models/{model}:generateMessage`
+- `POST /v1/models/{model}:generateAnswer`
+- `POST /v1/models/{model}:generateImages`
+- `POST /v1/models/{model}:generateVideos`
+- `POST /v1/models/{model}:predict`
+- `POST /v1/models/{model}:predictLongRunning`
 - `GET /v1beta/models`
 - `GET /v1beta/models/{model}`
 - `GET /v1beta/models/{model}/operations`

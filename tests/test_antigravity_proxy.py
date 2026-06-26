@@ -311,7 +311,7 @@ def test_gemini_auth_accepts_google_api_key_styles(monkeypatch):
     assert rejected.status_code == 401
 
 
-def test_gemini_v1_stable_aliases_do_not_break_openai_models(monkeypatch, tmp_path):
+def test_gemini_v1_model_routes_do_not_break_openai_models(monkeypatch, tmp_path):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "files"))
     seen = {}
 
@@ -324,8 +324,16 @@ def test_gemini_v1_stable_aliases_do_not_break_openai_models(monkeypatch, tmp_pa
     client = TestClient(proxy.app)
 
     openai_models = client.get("/v1/models")
+    fetched_model = client.get("/v1/models/gemini-3-flash-agent")
     generated = client.post("/v1/models/gemini-3-flash-agent:generateContent", json={
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+    })
+    counted = client.post("/v1/models/gemini-3-flash-agent:countTokens", json={
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+    })
+    embedded = client.post("/v1/models/gemini-3-flash-agent:embedContent", json={
+        "content": {"parts": [{"text": "embed me"}]},
+        "outputDimensionality": 8,
     })
     registered = client.post("/v1/files:register", json={
         "file": {"displayName": "stable.txt", "uri": "gs://bucket/stable.txt"}
@@ -338,8 +346,14 @@ def test_gemini_v1_stable_aliases_do_not_break_openai_models(monkeypatch, tmp_pa
 
     assert openai_models.status_code == 200
     assert openai_models.json()["object"] == "list"
+    assert fetched_model.status_code == 200
+    assert fetched_model.json()["name"] == "models/gemini-3-flash-agent"
     assert generated.status_code == 200
     assert generated.json()["candidates"][0]["content"]["parts"][0]["text"] == "stable ok"
+    assert counted.status_code == 200
+    assert counted.json()["totalTokens"] > 0
+    assert embedded.status_code == 200
+    assert len(embedded.json()["embedding"]["values"]) == 8
     assert registered.status_code == 200
     assert registered.json()["file"]["uri"] == "gs://bucket/stable.txt"
     assert uploaded.status_code == 200

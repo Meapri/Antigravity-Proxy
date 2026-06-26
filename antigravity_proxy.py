@@ -2945,8 +2945,6 @@ def _gemini_stable_alias_path(path: str) -> str:
     stable_prefixes: tuple[str, ...] = ()
     if suffix.startswith(stable_prefixes):
         return "/v1beta/" + suffix
-    if suffix.startswith("models/") and (":" in suffix or "/operations/" in suffix):
-        return "/v1beta/" + suffix
     return path
 
 
@@ -4270,6 +4268,7 @@ async def gemini_list_models(pageSize: int = Query(default=50, ge=1, le=1000), p
     }
 
 
+@app.get("/v1/models/{model_name:path}/operations")
 @app.get("/v1beta/models/{model_name:path}/operations")
 async def gemini_list_model_operations(model_name: str, pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
     if _is_gemini_video_model_id(model_name):
@@ -4284,6 +4283,7 @@ async def gemini_list_model_operations(model_name: str, pageSize: int = Query(de
     )
 
 
+@app.get("/v1/models/{model_name:path}/operations/{operation_id:path}")
 @app.get("/v1beta/models/{model_name:path}/operations/{operation_id:path}")
 async def gemini_get_model_operation(model_name: str, operation_id: str):
     operation = _gemini_get_operation(f"models/{model_name}/operations/{operation_id}")
@@ -4292,6 +4292,7 @@ async def gemini_get_model_operation(model_name: str, operation_id: str):
     return operation
 
 
+@app.post("/v1/models/{model_name:path}/operations/{operation_id:path}:wait")
 @app.post("/v1beta/models/{model_name:path}/operations/{operation_id:path}:wait")
 async def gemini_wait_model_operation(model_name: str, operation_id: str):
     operation = _gemini_get_operation(f"models/{model_name}/operations/{operation_id}")
@@ -4300,6 +4301,7 @@ async def gemini_wait_model_operation(model_name: str, operation_id: str):
     return operation
 
 
+@app.post("/v1/models/{model_name:path}/operations/{operation_id:path}:cancel")
 @app.post("/v1beta/models/{model_name:path}/operations/{operation_id:path}:cancel")
 async def gemini_cancel_model_operation(model_name: str, operation_id: str):
     operation = _gemini_get_operation(f"models/{model_name}/operations/{operation_id}")
@@ -4308,6 +4310,7 @@ async def gemini_cancel_model_operation(model_name: str, operation_id: str):
     return JSONResponse({})
 
 
+@app.delete("/v1/models/{model_name:path}/operations/{operation_id:path}")
 @app.delete("/v1beta/models/{model_name:path}/operations/{operation_id:path}")
 async def gemini_delete_model_operation(model_name: str, operation_id: str):
     operation = _gemini_get_operation(f"models/{model_name}/operations/{operation_id}")
@@ -4319,6 +4322,7 @@ async def gemini_delete_model_operation(model_name: str, operation_id: str):
     return JSONResponse({})
 
 
+@app.get("/v1/models/{model_name:path}")
 @app.get("/v1beta/models/{model_name:path}")
 async def gemini_get_model(model_name: str):
     """Gemini-compatible model retrieval."""
@@ -5556,6 +5560,7 @@ async def gemini_delete_tuned_model_permission(tuned_model_id: str, permission_i
     return JSONResponse({})
 
 
+@app.post("/v1/models/{model_name:path}:countTokens")
 @app.post("/v1beta/models/{model_name:path}:countTokens")
 async def gemini_count_tokens(model_name: str, request: Request):
     """Gemini-compatible approximate countTokens endpoint."""
@@ -5574,6 +5579,7 @@ async def gemini_count_tokens(model_name: str, request: Request):
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.post("/v1/models/{model_name:path}:embedContent")
 @app.post("/v1beta/models/{model_name:path}:embedContent")
 async def gemini_embed_content(model_name: str, request: Request):
     """Gemini-compatible embedContent endpoint with deterministic local vectors."""
@@ -5591,6 +5597,7 @@ async def gemini_embed_content(model_name: str, request: Request):
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.post("/v1/models/{model_name:path}:batchEmbedContents")
 @app.post("/v1beta/models/{model_name:path}:batchEmbedContents")
 async def gemini_batch_embed_contents(model_name: str, request: Request):
     """Gemini-compatible batchEmbedContents endpoint with deterministic local vectors."""
@@ -5608,6 +5615,7 @@ async def gemini_batch_embed_contents(model_name: str, request: Request):
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.post("/v1/models/{model_name:path}:embedText")
 @app.post("/v1beta/models/{model_name:path}:embedText")
 async def gemini_embed_text(model_name: str, request: Request):
     """Legacy Gemini embedText endpoint mapped to deterministic local vectors."""
@@ -5632,6 +5640,7 @@ async def gemini_embed_text(model_name: str, request: Request):
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.post("/v1/models/{model_name:path}:batchEmbedText")
 @app.post("/v1beta/models/{model_name:path}:batchEmbedText")
 async def gemini_batch_embed_text(model_name: str, request: Request):
     """Legacy Gemini batchEmbedText endpoint mapped to deterministic local vectors."""
@@ -5667,6 +5676,7 @@ async def gemini_batch_embed_text(model_name: str, request: Request):
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.post("/v1/models/{model_name:path}:asyncBatchEmbedContent")
 @app.post("/v1beta/models/{model_name:path}:asyncBatchEmbedContent")
 async def gemini_async_batch_embed_content(model_name: str, request: Request):
     """Gemini-compatible asyncBatchEmbedContent as an immediately completed operation."""
@@ -5736,6 +5746,7 @@ def _gemini_create_completed_embed_batch(model: dict[str, Any], body: dict[str, 
     return stored_operation, stored_batch
 
 
+@app.post("/v1/models/{model_name:path}:predict")
 @app.post("/v1beta/models/{model_name:path}:predict")
 async def gemini_predict(model_name: str, request: Request):
     """Gemini/Vertex-compatible predict endpoint mapped to generateContent."""
@@ -5773,6 +5784,7 @@ async def gemini_predict(model_name: str, request: Request):
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
+@app.post("/v1/models/{model_name:path}:generateImages")
 @app.post("/v1beta/models/{model_name:path}:generateImages")
 async def gemini_generate_images(model_name: str, request: Request):
     """Gemini/Imagen-compatible generateImages endpoint backed by Antigravity image generation."""
@@ -5819,6 +5831,7 @@ def _gemini_video_unimplemented_operation(model_name: str, body: dict[str, Any])
     })
 
 
+@app.post("/v1/models/{model_name:path}:generateVideos")
 @app.post("/v1beta/models/{model_name:path}:generateVideos")
 async def gemini_generate_videos(model_name: str, request: Request):
     """Gemini/Veo-compatible video generation operation placeholder."""
@@ -5837,6 +5850,7 @@ async def gemini_generate_videos(model_name: str, request: Request):
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.post("/v1/models/{model_name:path}:predictLongRunning")
 @app.post("/v1beta/models/{model_name:path}:predictLongRunning")
 async def gemini_predict_long_running(model_name: str, request: Request):
     """Gemini/Vertex-compatible predictLongRunning as a completed operation."""
@@ -5870,6 +5884,7 @@ async def gemini_predict_long_running(model_name: str, request: Request):
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
+@app.post("/v1/models/{model_name:path}:countTextTokens")
 @app.post("/v1beta/models/{model_name:path}:countTextTokens")
 async def gemini_count_text_tokens(model_name: str, request: Request):
     """Legacy Gemini countTextTokens endpoint mapped to local token estimation."""
@@ -5885,12 +5900,14 @@ async def gemini_count_text_tokens(model_name: str, request: Request):
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
 
 
+@app.post("/v1/models/{model_name:path}:countMessageTokens")
 @app.post("/v1beta/models/{model_name:path}:countMessageTokens")
 async def gemini_count_message_tokens(model_name: str, request: Request):
     """Legacy Gemini countMessageTokens endpoint mapped to local token estimation."""
     return await gemini_count_text_tokens(model_name, request)
 
 
+@app.post("/v1/models/{model_name:path}:generateText")
 @app.post("/v1beta/models/{model_name:path}:generateText")
 async def gemini_generate_text(model_name: str, request: Request):
     """Legacy Gemini generateText endpoint mapped to generateContent."""
@@ -5917,6 +5934,7 @@ async def gemini_generate_text(model_name: str, request: Request):
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
+@app.post("/v1/models/{model_name:path}:generateMessage")
 @app.post("/v1beta/models/{model_name:path}:generateMessage")
 async def gemini_generate_message(model_name: str, request: Request):
     """Legacy Gemini generateMessage endpoint mapped to generateContent."""
@@ -5938,6 +5956,7 @@ async def gemini_generate_message(model_name: str, request: Request):
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
+@app.post("/v1/models/{model_name:path}:generateAnswer")
 @app.post("/v1beta/models/{model_name:path}:generateAnswer")
 async def gemini_generate_answer(model_name: str, request: Request):
     """Legacy Semantic Retriever generateAnswer endpoint mapped to generateContent."""
@@ -5961,6 +5980,7 @@ async def gemini_generate_answer(model_name: str, request: Request):
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
+@app.post("/v1/models/{model_name:path}:generateContent")
 @app.post("/v1beta/models/{model_name:path}:generateContent")
 async def gemini_generate_content(model_name: str, request: Request):
     """Gemini REST-compatible generateContent endpoint backed by Antigravity."""
@@ -6044,6 +6064,7 @@ def _gemini_streaming_response(*, body: dict[str, Any], antigravity_model: str) 
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
+@app.post("/v1/models/{model_name:path}:batchGenerateContent")
 @app.post("/v1beta/models/{model_name:path}:batchGenerateContent")
 async def gemini_batch_generate_content(model_name: str, request: Request):
     """Gemini-compatible batchGenerateContent as an immediately completed operation."""
@@ -6708,6 +6729,7 @@ async def gemini_live_websocket(websocket: WebSocket):
         return
 
 
+@app.post("/v1/models/{model_name:path}:streamGenerateContent")
 @app.post("/v1beta/models/{model_name:path}:streamGenerateContent")
 async def gemini_stream_generate_content(model_name: str, request: Request):
     """Gemini REST-compatible SSE streamGenerateContent endpoint."""
