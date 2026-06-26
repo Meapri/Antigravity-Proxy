@@ -508,7 +508,8 @@ snake_case SDK spellings for fields such as `generation_config`,
 `google_search`, and local `file_search` tools are converted into retrieved
 context. `urlContext` and `codeExecution` are recognized but return
 `UNIMPLEMENTED` because the current Antigravity backend does not expose those
-hosted tools.
+hosted tools. `toolConfig.functionCallingConfig.mode` and
+`allowedFunctionNames` are normalized from common SDK spellings.
 
 Files API example:
 

@@ -434,6 +434,7 @@ def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "generation_config": {"response_mime_type": "application/json", "max_output_tokens": 32},
         "tools": [{"googleSearch": {}}],
+        "tool_config": {"function_calling_config": {"mode": "any", "allowed_function_names": "lookup"}},
     })
 
     assert response.status_code == 200
@@ -442,6 +443,10 @@ def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
     assert seen["request"]["generationConfig"]["responseMimeType"] == "application/json"
     assert seen["request"]["generationConfig"]["maxOutputTokens"] == 32
     assert seen["request"]["tools"] == [{"google_search": {}}]
+    assert seen["request"]["toolConfig"]["functionCallingConfig"] == {
+        "mode": "ANY",
+        "allowedFunctionNames": ["lookup"],
+    }
 
 
 def test_gemini_generate_content_rejects_unsupported_builtin_tools():

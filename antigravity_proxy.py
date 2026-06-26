@@ -433,6 +433,25 @@ _GEMINI_KEY_ALIASES = {
 }
 
 
+def _gemini_normalize_function_calling_config(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    out = dict(value)
+    mode = out.get("mode")
+    if isinstance(mode, str):
+        normalized = mode.strip().upper().replace("-", "_")
+        if normalized.startswith("MODE_"):
+            normalized = normalized[len("MODE_"):]
+        if normalized in {"AUTO", "ANY", "NONE", "VALIDATED", "UNSPECIFIED"}:
+            out["mode"] = "MODE_UNSPECIFIED" if normalized == "UNSPECIFIED" else normalized
+    names = out.get("allowedFunctionNames")
+    if isinstance(names, str):
+        out["allowedFunctionNames"] = [names]
+    elif isinstance(names, tuple):
+        out["allowedFunctionNames"] = list(names)
+    return out
+
+
 def _gemini_normalize_request(value: Any) -> Any:
     if isinstance(value, list):
         return [_gemini_normalize_request(item) for item in value]
@@ -442,6 +461,12 @@ def _gemini_normalize_request(value: Any) -> Any:
     for key, child in value.items():
         mapped = _GEMINI_KEY_ALIASES.get(str(key), key)
         out[mapped] = _gemini_normalize_request(child)
+    if isinstance(out.get("functionCallingConfig"), dict):
+        out["functionCallingConfig"] = _gemini_normalize_function_calling_config(out["functionCallingConfig"])
+    if isinstance(out.get("toolConfig"), dict) and isinstance(out["toolConfig"].get("functionCallingConfig"), dict):
+        out["toolConfig"]["functionCallingConfig"] = _gemini_normalize_function_calling_config(
+            out["toolConfig"]["functionCallingConfig"]
+        )
     return out
 
 
