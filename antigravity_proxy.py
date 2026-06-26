@@ -1046,6 +1046,18 @@ def _gemini_apply_file_search(body: dict[str, Any]) -> dict[str, Any]:
     merged = dict(body)
     contents = merged.get("contents") if isinstance(merged.get("contents"), list) else []
     merged["contents"] = [{"role": "user", "parts": [{"text": context}]}] + contents
+    tools = merged.get("tools") if isinstance(merged.get("tools"), list) else []
+    remaining_tools = [
+        tool for tool in tools
+        if not (
+            isinstance(tool, dict)
+            and any(key in tool for key in ("file_search", "fileSearch", "fileSearchRetrieval", "file_search_retrieval"))
+        )
+    ]
+    if remaining_tools:
+        merged["tools"] = remaining_tools
+    else:
+        merged.pop("tools", None)
     return merged
 
 

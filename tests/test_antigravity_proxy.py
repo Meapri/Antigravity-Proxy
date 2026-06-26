@@ -484,6 +484,7 @@ def test_gemini_file_search_tool_injects_local_context(tmp_path, monkeypatch):
     assert "Local Gemini file_search results" in injected
     assert "Project Atlas launch window is October" in injected
     assert seen["request"]["contents"][1]["parts"][0]["text"] == "When is Project Atlas launch?"
+    assert "tools" not in seen["request"]
 
 
 def test_admin_refresh_requires_configured_api_key(monkeypatch):
