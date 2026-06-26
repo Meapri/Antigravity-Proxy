@@ -1196,9 +1196,12 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     assert operation.status_code == 200
     assert operation.json()["done"] is True
 
+    uploaded_op_id = uploaded_doc.json()["name"].split("/", 1)[1]
     nested_operation = client.get(f"/v1beta/fileSearchStores/{store_id}/{imported.json()['name']}")
     nested_operations = client.get(f"/v1beta/fileSearchStores/{store_id}/operations")
     waited_operation = client.post(f"/v1beta/fileSearchStores/{store_id}/{imported.json()['name']}:wait")
+    upload_operation = client.get(f"/v1beta/fileSearchStores/{store_id}/upload/operations/{uploaded_op_id}")
+    waited_upload_operation = client.post(f"/v1beta/fileSearchStores/{store_id}/upload/operations/{uploaded_op_id}:wait")
     media = client.get(f"/v1beta/fileSearchStores/{store_id}/media/{imported_doc['name'].rsplit('/', 1)[-1]}")
     assert nested_operation.status_code == 200
     assert nested_operation.json()["name"] == imported.json()["name"]
@@ -1206,6 +1209,10 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     assert nested_operations.json()["operations"][0]["name"] == imported.json()["name"]
     assert waited_operation.status_code == 200
     assert waited_operation.json()["name"] == imported.json()["name"]
+    assert upload_operation.status_code == 200
+    assert upload_operation.json()["name"] == uploaded_doc.json()["name"]
+    assert waited_upload_operation.status_code == 200
+    assert waited_upload_operation.json()["name"] == uploaded_doc.json()["name"]
     assert media.status_code == 200
     assert media.content == b"source document"
 

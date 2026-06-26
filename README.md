@@ -455,9 +455,13 @@ Implemented Gemini-compatible routes:
 - `GET /v1beta/fileSearchStores/{store}/media/{document}`
 - `GET /v1beta/fileSearchStores/{store}/operations`
 - `GET /v1beta/fileSearchStores/{store}/operations/{operation}`
+- `GET /v1beta/fileSearchStores/{store}/upload/operations/{operation}`
 - `POST /v1beta/fileSearchStores/{store}/operations/{operation}:wait`
+- `POST /v1beta/fileSearchStores/{store}/upload/operations/{operation}:wait`
 - `POST /v1beta/fileSearchStores/{store}/operations/{operation}:cancel`
+- `POST /v1beta/fileSearchStores/{store}/upload/operations/{operation}:cancel`
 - `DELETE /v1beta/fileSearchStores/{store}/operations/{operation}`
+- `DELETE /v1beta/fileSearchStores/{store}/upload/operations/{operation}`
 - `DELETE /v1beta/fileSearchStores/{store}/documents/{document}`
 - `POST /v1beta/tunedModels`
 - `GET /v1beta/tunedModels`

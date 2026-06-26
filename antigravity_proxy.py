@@ -4759,6 +4759,11 @@ async def gemini_get_file_search_operation(store_id: str, operation_id: str):
     return operation
 
 
+@app.get("/v1beta/fileSearchStores/{store_id}/upload/operations/{operation_id:path}")
+async def gemini_get_file_search_upload_operation(store_id: str, operation_id: str):
+    return await gemini_get_file_search_operation(store_id, operation_id)
+
+
 @app.post("/v1beta/fileSearchStores/{store_id}/operations/{operation_id:path}:wait")
 async def gemini_wait_file_search_operation(store_id: str, operation_id: str):
     operation = _gemini_get_operation(f"fileSearchStores/{store_id}/operations/{operation_id}")
@@ -4767,12 +4772,22 @@ async def gemini_wait_file_search_operation(store_id: str, operation_id: str):
     return operation
 
 
+@app.post("/v1beta/fileSearchStores/{store_id}/upload/operations/{operation_id:path}:wait")
+async def gemini_wait_file_search_upload_operation(store_id: str, operation_id: str):
+    return await gemini_wait_file_search_operation(store_id, operation_id)
+
+
 @app.post("/v1beta/fileSearchStores/{store_id}/operations/{operation_id:path}:cancel")
 async def gemini_cancel_file_search_operation(store_id: str, operation_id: str):
     operation = _gemini_get_operation(f"fileSearchStores/{store_id}/operations/{operation_id}")
     if not operation:
         return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
     return JSONResponse({})
+
+
+@app.post("/v1beta/fileSearchStores/{store_id}/upload/operations/{operation_id:path}:cancel")
+async def gemini_cancel_file_search_upload_operation(store_id: str, operation_id: str):
+    return await gemini_cancel_file_search_operation(store_id, operation_id)
 
 
 @app.delete("/v1beta/fileSearchStores/{store_id}/operations/{operation_id:path}")
@@ -4785,6 +4800,11 @@ async def gemini_delete_file_search_operation(store_id: str, operation_id: str):
     index.pop(name, None)
     _gemini_save_operations_index(index)
     return JSONResponse({})
+
+
+@app.delete("/v1beta/fileSearchStores/{store_id}/upload/operations/{operation_id:path}")
+async def gemini_delete_file_search_upload_operation(store_id: str, operation_id: str):
+    return await gemini_delete_file_search_operation(store_id, operation_id)
 
 
 @app.get("/v1beta/fileSearchStores/{store_id}/documents/{document_id:path}")
