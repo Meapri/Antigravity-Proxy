@@ -834,6 +834,10 @@ Embeddings and batch operations:
   such as `done`, `displayName`, `state`, `model`, and
   `metadata.batchResource.*`; `returnPartialSuccess` /
   `return_partial_success` returns an empty `unreachable` list for local stores.
+- Scoped operation routes under models, generated files, file search stores,
+  and tuned models validate that the operation belongs to the requested parent.
+  `:cancel` on scoped routes stores a Gemini-style `CANCELLED` operation state
+  for pending operations before returning the empty cancel response.
 - `predict` and `predictLongRunning` are mapped to Gemini `generateContent`
   requests and return prediction/operation-shaped compatibility responses.
   Vertex-style `instances` requests preserve the same SDK `config`,

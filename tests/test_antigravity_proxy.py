@@ -1328,6 +1328,11 @@ def test_gemini_operations_v1_aliases(tmp_path, monkeypatch):
         "metadata": {"model": "models/other"},
         "done": True,
     })
+    scoped_operation = proxy._gemini_store_operation({
+        "name": "operations/op_scoped_cancel",
+        "metadata": {"model": "models/gemini-3-flash-agent"},
+        "done": False,
+    })
 
     listed = client.get("/v1/operations")
     filtered = client.get(
@@ -1341,13 +1346,16 @@ def test_gemini_operations_v1_aliases(tmp_path, monkeypatch):
     waited = client.post(f"/v1/{operation['name']}:wait")
     cancelled = client.post(f"/v1/{operation['name']}:cancel")
     cancelled_fetched = client.get(f"/v1/{operation['name']}")
+    scoped_cancelled = client.post("/v1/models/gemini-3-flash-agent/operations/op_scoped_cancel:cancel")
+    scoped_cancelled_fetched = client.get(f"/v1/{scoped_operation['name']}")
+    wrong_scoped = client.get("/v1/models/gemini-3-flash-agent/operations/op_other_model")
     deleted = client.delete(f"/v1/{operation['name']}")
     missing = client.get(f"/v1/{operation['name']}")
 
     assert listed.status_code == 200
     assert operation["name"] in {item["name"] for item in listed.json()["operations"]}
     assert filtered.status_code == 200
-    assert [item["name"] for item in filtered.json()["operations"]] == [operation["name"]]
+    assert {item["name"] for item in filtered.json()["operations"]} == {operation["name"], scoped_operation["name"]}
     assert filtered.json()["unreachable"] == []
     assert fetched.status_code == 200
     assert fetched.json()["done"] is False
@@ -1358,6 +1366,11 @@ def test_gemini_operations_v1_aliases(tmp_path, monkeypatch):
     assert cancelled_fetched.status_code == 200
     assert cancelled_fetched.json()["done"] is True
     assert cancelled_fetched.json()["error"]["status"] == "CANCELLED"
+    assert scoped_cancelled.status_code == 200
+    assert scoped_cancelled_fetched.json()["done"] is True
+    assert scoped_cancelled_fetched.json()["error"]["status"] == "CANCELLED"
+    assert scoped_cancelled_fetched.json()["metadata"]["endTime"]
+    assert wrong_scoped.status_code == 404
     assert deleted.status_code == 200
     assert missing.status_code == 404
 

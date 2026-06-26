@@ -1912,6 +1912,17 @@ def _gemini_get_operation(name: str) -> dict[str, Any] | None:
     return None
 
 
+def _gemini_cancel_operation(operation: dict[str, Any]) -> None:
+    if operation.get("done"):
+        return
+    operation["done"] = True
+    operation["error"] = {"code": 1, "message": "Operation cancelled.", "status": "CANCELLED"}
+    metadata = operation.get("metadata")
+    if isinstance(metadata, dict):
+        metadata["endTime"] = _gemini_now_iso()
+    _gemini_store_operation(operation)
+
+
 def _gemini_resolve_operation_key(index: dict[str, dict[str, Any]], name: str) -> str | None:
     normalized = _gemini_operation_name(name)
     if normalized in index:
@@ -1932,6 +1943,23 @@ def _gemini_operation_scope_value(operation: dict[str, Any], key: str) -> str:
     if value is None and key == "generatedFile":
         value = metadata.get("generated_file") or response.get("name")
     return str(value or "")
+
+
+def _gemini_operation_scope_matches(operation: dict[str, Any], scope_key: str, scope_name: str | None = None) -> bool:
+    if scope_key == "generatedFile":
+        return bool(_gemini_operation_scope_value(operation, "generatedFile"))
+    target = scope_name or ""
+    value = _gemini_operation_scope_value(operation, scope_key)
+    return value == target or value.endswith("/" + target.strip("/"))
+
+
+def _gemini_get_scoped_operation(scope_key: str, scope_name: str | None, operation_id: str) -> dict[str, Any] | None:
+    operation = _gemini_get_operation(operation_id)
+    if not operation:
+        operation = _gemini_get_operation(f"{scope_name or ''}/operations/{operation_id}")
+    if operation and _gemini_operation_scope_matches(operation, scope_key, scope_name):
+        return operation
+    return None
 
 
 def _gemini_operations_for_scope(scope_key: str, scope_name: str | None = None) -> list[dict[str, Any]]:
@@ -5902,7 +5930,8 @@ async def gemini_list_model_operations(model_name: str, request: Request):
 @app.get("/v1/models/{model_name:path}/operations/{operation_id:path}")
 @app.get("/v1beta/models/{model_name:path}/operations/{operation_id:path}")
 async def gemini_get_model_operation(model_name: str, operation_id: str):
-    operation = _gemini_get_operation(f"models/{model_name}/operations/{operation_id}")
+    model_resource = "models/" + _gemini_resource_model_id(model_name) if _is_gemini_video_model_id(model_name) else _gemini_model_name(_resolve_gemini_model(model_name))
+    operation = _gemini_get_scoped_operation("model", model_resource, operation_id)
     if not operation:
         return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
     return operation
@@ -5911,7 +5940,8 @@ async def gemini_get_model_operation(model_name: str, operation_id: str):
 @app.post("/v1/models/{model_name:path}/operations/{operation_id:path}:wait")
 @app.post("/v1beta/models/{model_name:path}/operations/{operation_id:path}:wait")
 async def gemini_wait_model_operation(model_name: str, operation_id: str):
-    operation = _gemini_get_operation(f"models/{model_name}/operations/{operation_id}")
+    model_resource = "models/" + _gemini_resource_model_id(model_name) if _is_gemini_video_model_id(model_name) else _gemini_model_name(_resolve_gemini_model(model_name))
+    operation = _gemini_get_scoped_operation("model", model_resource, operation_id)
     if not operation:
         return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
     return operation
@@ -5920,16 +5950,19 @@ async def gemini_wait_model_operation(model_name: str, operation_id: str):
 @app.post("/v1/models/{model_name:path}/operations/{operation_id:path}:cancel")
 @app.post("/v1beta/models/{model_name:path}/operations/{operation_id:path}:cancel")
 async def gemini_cancel_model_operation(model_name: str, operation_id: str):
-    operation = _gemini_get_operation(f"models/{model_name}/operations/{operation_id}")
+    model_resource = "models/" + _gemini_resource_model_id(model_name) if _is_gemini_video_model_id(model_name) else _gemini_model_name(_resolve_gemini_model(model_name))
+    operation = _gemini_get_scoped_operation("model", model_resource, operation_id)
     if not operation:
         return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    _gemini_cancel_operation(operation)
     return JSONResponse({})
 
 
 @app.delete("/v1/models/{model_name:path}/operations/{operation_id:path}")
 @app.delete("/v1beta/models/{model_name:path}/operations/{operation_id:path}")
 async def gemini_delete_model_operation(model_name: str, operation_id: str):
-    operation = _gemini_get_operation(f"models/{model_name}/operations/{operation_id}")
+    model_resource = "models/" + _gemini_resource_model_id(model_name) if _is_gemini_video_model_id(model_name) else _gemini_model_name(_resolve_gemini_model(model_name))
+    operation = _gemini_get_scoped_operation("model", model_resource, operation_id)
     if not operation:
         return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
     index = _gemini_load_operations_index()
@@ -6092,7 +6125,7 @@ async def gemini_download_generated_file(generated_file_id: str):
 @app.get("/v1/generatedFiles/operations/{operation_id:path}")
 @app.get("/v1beta/generatedFiles/operations/{operation_id:path}")
 async def gemini_get_generated_file_operation(operation_id: str):
-    operation = _gemini_get_operation(f"generatedFiles/operations/{operation_id}")
+    operation = _gemini_get_scoped_operation("generatedFile", None, operation_id)
     if not operation:
         return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
     return operation
@@ -6101,7 +6134,7 @@ async def gemini_get_generated_file_operation(operation_id: str):
 @app.post("/v1/generatedFiles/operations/{operation_id:path}:wait")
 @app.post("/v1beta/generatedFiles/operations/{operation_id:path}:wait")
 async def gemini_wait_generated_file_operation(operation_id: str):
-    operation = _gemini_get_operation(f"generatedFiles/operations/{operation_id}")
+    operation = _gemini_get_scoped_operation("generatedFile", None, operation_id)
     if not operation:
         return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
     return operation
@@ -6110,16 +6143,17 @@ async def gemini_wait_generated_file_operation(operation_id: str):
 @app.post("/v1/generatedFiles/operations/{operation_id:path}:cancel")
 @app.post("/v1beta/generatedFiles/operations/{operation_id:path}:cancel")
 async def gemini_cancel_generated_file_operation(operation_id: str):
-    operation = _gemini_get_operation(f"generatedFiles/operations/{operation_id}")
+    operation = _gemini_get_scoped_operation("generatedFile", None, operation_id)
     if not operation:
         return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    _gemini_cancel_operation(operation)
     return JSONResponse({})
 
 
 @app.delete("/v1/generatedFiles/operations/{operation_id:path}")
 @app.delete("/v1beta/generatedFiles/operations/{operation_id:path}")
 async def gemini_delete_generated_file_operation(operation_id: str):
-    operation = _gemini_get_operation(f"generatedFiles/operations/{operation_id}")
+    operation = _gemini_get_scoped_operation("generatedFile", None, operation_id)
     if not operation:
         return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
     index = _gemini_load_operations_index()
@@ -7022,7 +7056,7 @@ async def gemini_list_file_search_operations(store_id: str, request: Request):
 @app.get("/v1/fileSearchStores/{store_id}/operations/{operation_id:path}")
 @app.get("/v1beta/fileSearchStores/{store_id}/operations/{operation_id:path}")
 async def gemini_get_file_search_operation(store_id: str, operation_id: str):
-    operation = _gemini_get_operation(f"fileSearchStores/{store_id}/operations/{operation_id}")
+    operation = _gemini_get_scoped_operation("fileSearchStore", _gemini_fss_name(store_id), operation_id)
     if not operation:
         return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
     return operation
@@ -7037,7 +7071,7 @@ async def gemini_get_file_search_upload_operation(store_id: str, operation_id: s
 @app.post("/v1/fileSearchStores/{store_id}/operations/{operation_id:path}:wait")
 @app.post("/v1beta/fileSearchStores/{store_id}/operations/{operation_id:path}:wait")
 async def gemini_wait_file_search_operation(store_id: str, operation_id: str):
-    operation = _gemini_get_operation(f"fileSearchStores/{store_id}/operations/{operation_id}")
+    operation = _gemini_get_scoped_operation("fileSearchStore", _gemini_fss_name(store_id), operation_id)
     if not operation:
         return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
     return operation
@@ -7052,9 +7086,10 @@ async def gemini_wait_file_search_upload_operation(store_id: str, operation_id: 
 @app.post("/v1/fileSearchStores/{store_id}/operations/{operation_id:path}:cancel")
 @app.post("/v1beta/fileSearchStores/{store_id}/operations/{operation_id:path}:cancel")
 async def gemini_cancel_file_search_operation(store_id: str, operation_id: str):
-    operation = _gemini_get_operation(f"fileSearchStores/{store_id}/operations/{operation_id}")
+    operation = _gemini_get_scoped_operation("fileSearchStore", _gemini_fss_name(store_id), operation_id)
     if not operation:
         return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    _gemini_cancel_operation(operation)
     return JSONResponse({})
 
 
@@ -7067,7 +7102,7 @@ async def gemini_cancel_file_search_upload_operation(store_id: str, operation_id
 @app.delete("/v1/fileSearchStores/{store_id}/operations/{operation_id:path}")
 @app.delete("/v1beta/fileSearchStores/{store_id}/operations/{operation_id:path}")
 async def gemini_delete_file_search_operation(store_id: str, operation_id: str):
-    operation = _gemini_get_operation(f"fileSearchStores/{store_id}/operations/{operation_id}")
+    operation = _gemini_get_scoped_operation("fileSearchStore", _gemini_fss_name(store_id), operation_id)
     if not operation:
         return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
     name = operation["name"]
@@ -7167,7 +7202,7 @@ async def gemini_list_tuned_model_operations(tuned_model_id: str, request: Reque
 @app.get("/v1/tunedModels/{tuned_model_id:path}/operations/{operation_id:path}")
 @app.get("/v1beta/tunedModels/{tuned_model_id:path}/operations/{operation_id:path}")
 async def gemini_get_tuned_model_operation(tuned_model_id: str, operation_id: str):
-    operation = _gemini_get_operation(f"tunedModels/{tuned_model_id}/operations/{operation_id}")
+    operation = _gemini_get_scoped_operation("tunedModel", _gemini_tuned_name(tuned_model_id), operation_id)
     if not operation:
         return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
     return operation
@@ -7176,7 +7211,7 @@ async def gemini_get_tuned_model_operation(tuned_model_id: str, operation_id: st
 @app.post("/v1/tunedModels/{tuned_model_id:path}/operations/{operation_id:path}:wait")
 @app.post("/v1beta/tunedModels/{tuned_model_id:path}/operations/{operation_id:path}:wait")
 async def gemini_wait_tuned_model_operation(tuned_model_id: str, operation_id: str):
-    operation = _gemini_get_operation(f"tunedModels/{tuned_model_id}/operations/{operation_id}")
+    operation = _gemini_get_scoped_operation("tunedModel", _gemini_tuned_name(tuned_model_id), operation_id)
     if not operation:
         return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
     return operation
@@ -7185,16 +7220,17 @@ async def gemini_wait_tuned_model_operation(tuned_model_id: str, operation_id: s
 @app.post("/v1/tunedModels/{tuned_model_id:path}/operations/{operation_id:path}:cancel")
 @app.post("/v1beta/tunedModels/{tuned_model_id:path}/operations/{operation_id:path}:cancel")
 async def gemini_cancel_tuned_model_operation(tuned_model_id: str, operation_id: str):
-    operation = _gemini_get_operation(f"tunedModels/{tuned_model_id}/operations/{operation_id}")
+    operation = _gemini_get_scoped_operation("tunedModel", _gemini_tuned_name(tuned_model_id), operation_id)
     if not operation:
         return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    _gemini_cancel_operation(operation)
     return JSONResponse({})
 
 
 @app.delete("/v1/tunedModels/{tuned_model_id:path}/operations/{operation_id:path}")
 @app.delete("/v1beta/tunedModels/{tuned_model_id:path}/operations/{operation_id:path}")
 async def gemini_delete_tuned_model_operation(tuned_model_id: str, operation_id: str):
-    operation = _gemini_get_operation(f"tunedModels/{tuned_model_id}/operations/{operation_id}")
+    operation = _gemini_get_scoped_operation("tunedModel", _gemini_tuned_name(tuned_model_id), operation_id)
     if not operation:
         return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
     index = _gemini_load_operations_index()
@@ -8814,10 +8850,7 @@ async def gemini_cancel_operation(operation_id: str):
     operation = _gemini_get_operation(operation_id)
     if not operation:
         return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
-    if not operation.get("done"):
-        operation["done"] = True
-        operation["error"] = {"code": 1, "message": "Operation cancelled.", "status": "CANCELLED"}
-        _gemini_store_operation(operation)
+    _gemini_cancel_operation(operation)
     return JSONResponse({})
 
 
