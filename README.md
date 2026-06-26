@@ -860,6 +860,9 @@ Tuned models and permissions:
   wrappers and preserve Gemini tuning metadata such as `tuningTask`,
   `hyperparameters`, `trainingData`, `validationData`, `readerProjectNumbers`,
   and `tunedModelSource`.
+- `tunedModels.patch` honors `updateMask` / `update_mask` from either the query
+  string or SDK wrapper body for mutable metadata fields such as `displayName`,
+  `description`, `baseModel`, `tuningTask`, and `readerProjectNumbers`.
 - `tunedModels/{id}:generateContent` forwards to the configured `baseModel`.
 - `permissions` are stored locally for Gemini SDK compatibility; corpus and
   tuned-model permission create/patch accept `permission` wrappers plus

@@ -2831,6 +2831,34 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert cancelled_operation.json() == {}
     assert patched.json()["description"] == "updated"
     assert patched.json()["tuningTask"]["hyperparameters"]["epochCount"] == 3
+    masked_description = client.patch(
+        "/v1/tunedModels/my_tuned?updateMask=tunedModel.description",
+        json={
+            "tuned_model": {
+                "description": "masked update",
+                "display_name": "Ignored display",
+                "tuning_task": {"hyperparameters": {"epoch_count": 7}},
+            }
+        },
+    )
+    masked_reader_projects = client.patch("/v1/tunedModels/my_tuned", json={
+        "tuned_model": {
+            "reader_project_numbers": ["456", "789"],
+            "description": "ignored by body mask",
+        },
+        "update_mask": "reader_project_numbers",
+    })
+    unsupported_mask = client.patch("/v1/tunedModels/my_tuned?updateMask=unsupportedField", json={
+        "unsupportedField": "value",
+    })
+    assert masked_description.status_code == 200
+    assert masked_description.json()["description"] == "masked update"
+    assert masked_description.json()["displayName"] == "My tuned"
+    assert masked_description.json()["tuningTask"]["hyperparameters"]["epochCount"] == 3
+    assert masked_reader_projects.status_code == 200
+    assert masked_reader_projects.json()["readerProjectNumbers"] == ["456", "789"]
+    assert masked_reader_projects.json()["description"] == "masked update"
+    assert unsupported_mask.status_code == 400
 
     perm = client.post("/v1/tunedModels/my_tuned/permissions", json={
         "permission": {

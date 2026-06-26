@@ -3657,6 +3657,83 @@ def _gemini_tuned_scalar_fields(meta: dict[str, Any]) -> None:
             meta[key] = _gemini_int_value(meta[key])
 
 
+def _gemini_tuned_update_fields(update_mask: str | None, body: dict[str, Any]) -> set[str]:
+    allowed = {
+        "displayName",
+        "description",
+        "temperature",
+        "topP",
+        "topK",
+        "baseModel",
+        "tunedModelSource",
+        "tuningTask",
+        "readerProjectNumbers",
+        "hyperparameters",
+        "trainingData",
+        "validationData",
+    }
+    aliases = {
+        "display_name": "displayName",
+        "tunedModel.displayName": "displayName",
+        "tunedModel.display_name": "displayName",
+        "tuned_model.display_name": "displayName",
+        "tuned_model.displayName": "displayName",
+        "base_model": "baseModel",
+        "tunedModel.baseModel": "baseModel",
+        "tunedModel.base_model": "baseModel",
+        "tuned_model.base_model": "baseModel",
+        "tuned_model.baseModel": "baseModel",
+        "top_p": "topP",
+        "top_k": "topK",
+        "tuned_model_source": "tunedModelSource",
+        "tunedModel.tunedModelSource": "tunedModelSource",
+        "tunedModel.tuned_model_source": "tunedModelSource",
+        "tuned_model.tuned_model_source": "tunedModelSource",
+        "tuned_model.tunedModelSource": "tunedModelSource",
+        "tuning_task": "tuningTask",
+        "tunedModel.tuningTask": "tuningTask",
+        "tunedModel.tuning_task": "tuningTask",
+        "tuned_model.tuning_task": "tuningTask",
+        "tuned_model.tuningTask": "tuningTask",
+        "reader_project_numbers": "readerProjectNumbers",
+        "tunedModel.readerProjectNumbers": "readerProjectNumbers",
+        "tunedModel.reader_project_numbers": "readerProjectNumbers",
+        "tuned_model.reader_project_numbers": "readerProjectNumbers",
+        "tuned_model.readerProjectNumbers": "readerProjectNumbers",
+        "training_data": "trainingData",
+        "tunedModel.trainingData": "trainingData",
+        "tunedModel.training_data": "trainingData",
+        "tuned_model.training_data": "trainingData",
+        "tuned_model.trainingData": "trainingData",
+        "validation_data": "validationData",
+        "tunedModel.validationData": "validationData",
+        "tunedModel.validation_data": "validationData",
+        "tuned_model.validation_data": "validationData",
+        "tuned_model.validationData": "validationData",
+    }
+    if not update_mask:
+        return {key for key in allowed if key in body}
+    fields: set[str] = set()
+    for raw in update_mask.split(","):
+        key = raw.strip()
+        if not key:
+            continue
+        suffix = key.rsplit(".", 1)[-1]
+        normalized = aliases.get(key, aliases.get(suffix, suffix if suffix in allowed else key))
+        if normalized.startswith("tuningTask."):
+            normalized = "tuningTask"
+        fields.add(normalized)
+    unsupported = fields - allowed
+    if unsupported:
+        raise HTTPException(
+            status_code=400,
+            detail="tunedModels.patch supports updateMask fields: baseModel, description, displayName, "
+            "hyperparameters, readerProjectNumbers, temperature, topK, topP, trainingData, "
+            "tunedModelSource, tuningTask, validationData.",
+        )
+    return fields
+
+
 def _gemini_create_tuned_model(body: dict[str, Any]) -> dict[str, Any]:
     body = _gemini_normalize_request(body)
     tuned_model = body.get("tunedModel") if isinstance(body.get("tunedModel"), dict) else body
@@ -6776,32 +6853,29 @@ async def gemini_get_tuned_model(tuned_model_id: str):
 
 @app.patch("/v1/tunedModels/{tuned_model_id}")
 @app.patch("/v1beta/tunedModels/{tuned_model_id}")
-async def gemini_patch_tuned_model(tuned_model_id: str, request: Request):
+async def gemini_patch_tuned_model(tuned_model_id: str, request: Request, updateMask: str | None = None):
     index = _gemini_load_tuned_index()
     name = _gemini_tuned_name(tuned_model_id)
     meta = index.get(name)
     if not meta:
         return _gemini_error_response(f"Tuned model '{tuned_model_id}' not found.", status_code=404, status="NOT_FOUND")
-    body = _gemini_normalize_request(await request.json())
+    raw_body = await request.json()
+    body = _gemini_normalize_request(raw_body)
     if isinstance(body, dict):
         patch_body = body.get("tunedModel") if isinstance(body.get("tunedModel"), dict) else body
         patch_config = body.get("config") if isinstance(body.get("config"), dict) else {}
         merged_patch = dict(patch_config)
         merged_patch.update(patch_body)
-        for key in (
-            "displayName",
-            "description",
-            "temperature",
-            "topP",
-            "topK",
-            "baseModel",
-            "tunedModelSource",
-            "tuningTask",
-            "readerProjectNumbers",
-            "hyperparameters",
-            "trainingData",
-            "validationData",
-        ):
+        if isinstance(raw_body, dict):
+            updateMask = updateMask or raw_body.get("updateMask") or raw_body.get("update_mask")
+            raw_patch_body = raw_body.get("tunedModel") or raw_body.get("tuned_model")
+            if isinstance(raw_patch_body, dict):
+                updateMask = updateMask or raw_patch_body.get("updateMask") or raw_patch_body.get("update_mask")
+        updateMask = updateMask or body.pop("updateMask", None) or merged_patch.pop("updateMask", None)
+        fields = _gemini_tuned_update_fields(updateMask, merged_patch)
+        for key in fields:
+            if updateMask and key not in merged_patch:
+                raise HTTPException(status_code=400, detail=f"{key} is required by updateMask.")
             if key in merged_patch:
                 meta[key] = merged_patch[key]
         _gemini_tuned_scalar_fields(meta)
