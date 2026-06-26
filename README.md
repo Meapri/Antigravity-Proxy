@@ -192,6 +192,31 @@ curl http://127.0.0.1:8765/v1/responses \
   }'
 ```
 
+Responses with Gemini-grounded web search and JSON schema output:
+
+```bash
+curl http://127.0.0.1:8765/v1/responses \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Gemini 3.5 Flash (High)",
+    "input": "Find the latest supported Gemini API output schema controls.",
+    "tools": [{"type": "web_search_preview"}],
+    "text": {
+      "format": {
+        "type": "json_schema",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "summary": {"type": "string"}
+          },
+          "required": ["summary"]
+        }
+      }
+    },
+    "reasoning": {"effort": "low"}
+  }'
+```
+
 Retrieve stored response:
 
 ```bash
@@ -305,10 +330,15 @@ Implemented:
 - `previous_response_id`
 - `store=false`
 - text, image input, custom function tools, and streaming response events
+- `text.format` / chat `response_format` mapped to Gemini JSON output controls
+- `reasoning` mapped to Gemini thinking configuration when the selected model supports it
+- Responses `web_search_preview` mapped to Gemini Google Search grounding
 
 Unsupported OpenAI-hosted tools are rejected with an OpenAI-style 400 error,
-including file search, hosted web search, code interpreter, computer use, MCP,
-shell, and apply-patch style tools. Use custom function tools instead.
+including file search, code interpreter, computer use, MCP, shell, and
+apply-patch style tools. `web_search_preview` is supported through Gemini
+grounding, so its result shape is compatible for text output but not a byte-for-
+byte OpenAI hosted web-search transcript.
 
 ## Hermes Custom Provider Example
 

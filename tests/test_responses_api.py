@@ -95,7 +95,7 @@ def test_responses_rejects_unsupported_input_and_tools(tmp_path, monkeypatch):
     bad_tool = client.post("/v1/responses", json={
         "model": "Gemini 3.5 Flash (High)",
         "input": "hello",
-        "tools": [{"type": "web_search_preview"}],
+        "tools": [{"type": "file_search"}],
     })
 
     assert bad_input.status_code == 400
@@ -130,6 +130,42 @@ def test_responses_function_call_output_shape(tmp_path, monkeypatch):
     assert response["output"][0]["name"] == "weather"
     assert seen["tools"][0]["function"]["name"] == "weather"
     assert seen["tool_choice"]["function"]["name"] == "weather"
+
+
+def test_responses_maps_web_search_text_format_and_reasoning(tmp_path, monkeypatch):
+    seen = {}
+
+    async def fake_chat(req):
+        seen["tools"] = req.tools
+        seen["text"] = req.model_extra.get("text")
+        seen["reasoning"] = req.reasoning
+        return JSONResponse(_chat_payload("{\"answer\":\"grounded\"}"))
+
+    monkeypatch.setattr(proxy, "chat_completions", fake_chat)
+    client = _client(tmp_path, monkeypatch)
+
+    response = client.post("/v1/responses", json={
+        "model": "Gemini 3.5 Flash (High)",
+        "input": "latest docs?",
+        "tools": [{"type": "web_search_preview"}],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                    "required": ["answer"],
+                },
+            }
+        },
+        "reasoning": {"effort": "low"},
+    }).json()
+
+    assert seen["tools"] == [{"type": "web_search_preview"}]
+    assert seen["text"]["format"]["type"] == "json_schema"
+    assert seen["reasoning"] == {"effort": "low"}
+    assert response["text"]["format"]["type"] == "json_schema"
+    assert response["reasoning"] == {"effort": "low"}
 
 
 def test_responses_input_items_delete_and_previous_response(tmp_path, monkeypatch):

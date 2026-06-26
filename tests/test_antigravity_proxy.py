@@ -92,6 +92,68 @@ def test_openai_error_response_shape():
     assert payload["error"]["code"] == "not_found"
 
 
+def test_chat_raw_path_maps_structured_output_thinking_and_grounding(monkeypatch):
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            seen["model"] = model
+            return {
+                "response": {
+                    "candidates": [{
+                        "content": {"parts": [{"text": "{\"answer\":\"ok\"}"}]}
+                    }],
+                    "usageMetadata": {
+                        "promptTokenCount": 5,
+                        "candidatesTokenCount": 3,
+                        "totalTokenCount": 8,
+                    },
+                }
+            }
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    response = client.post("/v1/chat/completions", json={
+        "model": "Gemini 3.5 Flash (High)",
+        "messages": [{"role": "user", "content": "answer as json"}],
+        "tools": [{"type": "web_search_preview"}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "answer",
+                "schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                    "required": ["answer"],
+                },
+            },
+        },
+        "reasoning": {"effort": "low"},
+    })
+
+    assert response.status_code == 200
+    gen = seen["request"]["generationConfig"]
+    assert gen["responseMimeType"] == "application/json"
+    assert gen["responseSchema"]["properties"]["answer"]["type"] == "string"
+    assert gen["thinkingConfig"] == {"thinkingLevel": "low"}
+    assert seen["request"]["tools"] == [{"google_search": {}}]
+
+
+def test_chat_rejects_unsupported_hosted_tool():
+    client = TestClient(proxy.app)
+
+    response = client.post("/v1/chat/completions", json={
+        "model": "Gemini 3.5 Flash (High)",
+        "messages": [{"role": "user", "content": "hello"}],
+        "tools": [{"type": "file_search"}],
+    })
+
+    assert response.status_code == 400
+    assert response.json()["error"]["message"] == "Unsupported tool type: file_search"
+
+
 def test_admin_refresh_requires_configured_api_key(monkeypatch):
     monkeypatch.delenv("ANTIGRAVITY_PROXY_API_KEY", raising=False)
     client = TestClient(proxy.app)

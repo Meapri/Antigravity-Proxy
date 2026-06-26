@@ -277,6 +277,8 @@ class ChatCompletionRequest(BaseModel):
     # responses back into OpenAI tool_calls.
     tools: list[dict[str, Any]] | None = None
     tool_choice: Any | None = None
+    response_format: Any | None = None
+    reasoning: Any | None = None
 
     model_config = {"extra": "allow"}
 
@@ -321,6 +323,8 @@ class ResponseCreateRequest(BaseModel):
     top_p: float | None = Field(default=None, ge=0.0, le=1.0)
     tools: list[dict[str, Any]] | None = None
     tool_choice: Any | None = None
+    text: Any | None = None
+    reasoning: Any | None = None
     parallel_tool_calls: bool | None = True
     truncation: str | None = "disabled"
     user: str | None = None
@@ -781,7 +785,12 @@ def _responses_validate_tools(tools: list[dict[str, Any]] | None) -> list[dict[s
         return None
     normalized: list[dict[str, Any]] = []
     for tool in tools:
-        if not isinstance(tool, dict) or tool.get("type") != "function":
+        if not isinstance(tool, dict):
+            raise HTTPException(status_code=400, detail=f"Unsupported Responses tool type: {tool}")
+        if _is_grounding_tool(tool):
+            normalized.append(tool)
+            continue
+        if tool.get("type") != "function":
             raise HTTPException(
                 status_code=400,
                 detail=f"Unsupported Responses tool type: {tool.get('type') if isinstance(tool, dict) else tool}",
@@ -881,8 +890,10 @@ def _responses_build_object(
         "output_text": output_text,
         "parallel_tool_calls": bool(req.parallel_tool_calls),
         "previous_response_id": req.previous_response_id,
+        "reasoning": req.reasoning,
         "store": bool(req.store),
         "temperature": req.temperature,
+        "text": req.text,
         "tool_choice": req.tool_choice,
         "tools": req.tools or [],
         "top_p": req.top_p,
@@ -907,6 +918,8 @@ async def _responses_generate(req: ResponseCreateRequest) -> tuple[dict[str, Any
         user=req.user,
         tools=tools,
         tool_choice=_responses_tool_choice(req.tool_choice),
+        text=req.text,
+        reasoning=req.reasoning,
     )
     chat = _chat_response_to_dict(await chat_completions(chat_req))
     response = _responses_build_object(
@@ -1280,6 +1293,124 @@ def _sanitize_schema(schema: Any) -> Any:
         out["items"] = {"type": "string"}
 
     return out
+
+
+def _extra_value(req: Any, name: str, default: Any = None) -> Any:
+    value = getattr(req, name, default)
+    if value is not default:
+        return value
+    extra = getattr(req, "model_extra", None)
+    if isinstance(extra, dict):
+        return extra.get(name, default)
+    return default
+
+
+def _structured_format(req: Any) -> dict[str, Any] | None:
+    text_cfg = _extra_value(req, "text")
+    if isinstance(text_cfg, dict):
+        fmt = text_cfg.get("format")
+        if isinstance(fmt, dict):
+            return fmt
+    response_format = _extra_value(req, "response_format")
+    if isinstance(response_format, dict):
+        if isinstance(response_format.get("json_schema"), dict):
+            js = response_format["json_schema"]
+            return {
+                "type": "json_schema",
+                "name": js.get("name"),
+                "schema": js.get("schema"),
+                "strict": js.get("strict"),
+            }
+        return response_format
+    return None
+
+
+def _apply_structured_output(gen: dict[str, Any], req: Any) -> None:
+    fmt = _structured_format(req)
+    if not fmt:
+        return
+    fmt_type = str(fmt.get("type") or "").strip().lower()
+    if fmt_type in {"text", "plain_text"}:
+        return
+    if fmt_type in {"json_object", "json_schema"}:
+        gen["responseMimeType"] = "application/json"
+        schema = fmt.get("schema")
+        if isinstance(schema, dict):
+            gen["responseSchema"] = _sanitize_schema(dict(schema))
+        return
+    raise HTTPException(status_code=400, detail=f"Unsupported structured output format: {fmt.get('type')}")
+
+
+def _thinking_config(req: Any) -> dict[str, Any] | None:
+    reasoning = _extra_value(req, "reasoning")
+    if reasoning in (None, False):
+        return None
+    if isinstance(reasoning, str):
+        effort = reasoning.strip().lower()
+        return {"thinkingLevel": effort} if effort else None
+    if not isinstance(reasoning, dict):
+        raise HTTPException(status_code=400, detail="reasoning must be an object or string.")
+
+    cfg: dict[str, Any] = {}
+    effort = reasoning.get("effort") or reasoning.get("thinking_level") or reasoning.get("thinkingLevel")
+    if isinstance(effort, str) and effort.strip():
+        cfg["thinkingLevel"] = effort.strip().lower()
+    budget = reasoning.get("budget", reasoning.get("thinking_budget", reasoning.get("thinkingBudget")))
+    if budget is not None:
+        try:
+            cfg["thinkingBudget"] = int(budget)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="reasoning budget must be an integer.")
+    include_thoughts = reasoning.get("include_thoughts", reasoning.get("includeThoughts"))
+    if include_thoughts is not None:
+        cfg["includeThoughts"] = bool(include_thoughts)
+    return cfg or None
+
+
+def _generation_config(req: Any, *, max_tokens_attr: str = "max_tokens") -> dict[str, Any]:
+    max_tokens = _extra_value(req, max_tokens_attr)
+    gen: dict[str, Any] = {"maxOutputTokens": min(max_tokens or 4096, 65536)}
+    temperature = _extra_value(req, "temperature")
+    if temperature is not None:
+        gen["temperature"] = temperature
+    top_p = _extra_value(req, "top_p")
+    if top_p is not None:
+        gen["topP"] = top_p
+    thinking = _thinking_config(req)
+    if thinking:
+        gen["thinkingConfig"] = thinking
+    _apply_structured_output(gen, req)
+    return gen
+
+
+_RESPONSES_GROUNDING_TOOL_TYPES = {"web_search_preview", "web_search_preview_2025_03_11", "google_search"}
+
+
+def _is_grounding_tool(tool: dict[str, Any]) -> bool:
+    return str(tool.get("type") or "").strip().lower() in _RESPONSES_GROUNDING_TOOL_TYPES
+
+
+def _uses_grounding_tool(tools: list[dict[str, Any]] | None) -> bool:
+    return any(isinstance(tool, dict) and _is_grounding_tool(tool) for tool in tools or [])
+
+
+def _validate_chat_tools(tools: list[dict[str, Any]] | None) -> None:
+    for tool in tools or []:
+        if not isinstance(tool, dict):
+            raise HTTPException(status_code=400, detail=f"Unsupported tool type: {tool}")
+        if tool.get("type") == "function" or _is_grounding_tool(tool):
+            continue
+        raise HTTPException(status_code=400, detail=f"Unsupported tool type: {tool.get('type')}")
+
+
+def _gemini_tools(function_tools: list[dict[str, Any]] | None, *, grounding: bool = False) -> list[dict[str, Any]] | None:
+    gemini_tools: list[dict[str, Any]] = []
+    if grounding:
+        gemini_tools.append({"google_search": {}})
+    converted = _tools_to_gemini(function_tools)
+    if converted:
+        gemini_tools.extend(converted)
+    return gemini_tools or None
 
 
 def _tools_to_gemini(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
@@ -1724,23 +1855,23 @@ async def chat_completions(req: ChatCompletionRequest):
         )
     antigravity_model: str = model_info["antigravity_model"]
     client = _get_client()
+    _validate_chat_tools(req.tools)
 
     # ── Function-calling path (the Hermes agent) ──
     # When the request carries tool definitions, forward them to Antigravity as
     # Gemini functionDeclarations and translate functionCall responses back into
     # OpenAI tool_calls — this is what makes the agent able to actually run tools.
-    if req.tools:
+    function_tools = [t for t in (req.tools or []) if isinstance(t, dict) and t.get("type") == "function"]
+    grounding = _uses_grounding_tool(req.tools)
+    raw_features = bool(req.tools) or _structured_format(req) is not None or _extra_value(req, "reasoning") is not None
+    if raw_features:
         response_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
         created = int(time.time())
         system_text, contents = _messages_to_gemini(req.messages)
-        gemini_tools = None if _tool_choice_is_none(req.tool_choice) else _tools_to_gemini(req.tools)
+        gemini_tools = None if _tool_choice_is_none(req.tool_choice) else _gemini_tools(function_tools, grounding=grounding)
         # Accept large client requests but cap to what Gemini accepts (3.x flash
         # supports up to 65536 output tokens).
-        gen: dict[str, Any] = {"maxOutputTokens": min(req.max_tokens or 4096, 65536)}
-        if req.temperature is not None:
-            gen["temperature"] = req.temperature
-        if req.top_p is not None:
-            gen["topP"] = req.top_p
+        gen = _generation_config(req, max_tokens_attr="max_tokens")
         request_body: dict[str, Any] = {
             "contents": contents,
             "generationConfig": gen,
@@ -1756,7 +1887,9 @@ async def chat_completions(req: ChatCompletionRequest):
             request_body["systemInstruction"] = {"role": "system", "parts": [{"text": system_text}]}
         if gemini_tools:
             request_body["tools"] = gemini_tools
-        tool_config = None if _tool_choice_is_none(req.tool_choice) else _tool_choice_to_gemini(req.tool_choice, req.tools)
+        tool_config = None
+        if function_tools and not _tool_choice_is_none(req.tool_choice):
+            tool_config = _tool_choice_to_gemini(req.tool_choice, function_tools)
         if tool_config:
             request_body["toolConfig"] = tool_config
         try:
@@ -1997,8 +2130,10 @@ async def create_response(req: ResponseCreateRequest):
             "output_text": "",
             "parallel_tool_calls": bool(req.parallel_tool_calls),
             "previous_response_id": req.previous_response_id,
+            "reasoning": req.reasoning,
             "store": bool(req.store),
             "temperature": req.temperature,
+            "text": req.text,
             "tool_choice": req.tool_choice,
             "tools": req.tools or [],
             "top_p": req.top_p,
