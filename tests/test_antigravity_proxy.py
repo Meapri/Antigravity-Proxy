@@ -318,6 +318,8 @@ def test_gemini_auth_accepts_google_api_key_styles(monkeypatch):
     assert header_response.status_code == 200
     assert query_response.status_code == 200
     assert rejected.status_code == 401
+    assert rejected.json()["error"]["status"] == "UNAUTHENTICATED"
+    assert rejected.json()["error"]["details"][0]["@type"] == "type.googleapis.com/google.rpc.ErrorInfo"
 
 
 def test_gemini_v1_model_routes_do_not_break_openai_models(monkeypatch, tmp_path):

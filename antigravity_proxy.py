@@ -3522,6 +3522,28 @@ def _websocket_api_key_valid(websocket: WebSocket) -> bool:
     return any(candidate and secrets.compare_digest(candidate, expected) for candidate in candidates)
 
 
+def _is_gemini_http_path(path: str) -> bool:
+    if path.startswith(("/v1beta/", "/upload/v1beta/", "/upload/v1/")):
+        return True
+    if not path.startswith("/v1/"):
+        return False
+    suffix = path[len("/v1/"):]
+    if ":" in suffix:
+        return True
+    gemini_prefixes = (
+        "cachedContents",
+        "corpora",
+        "fileSearchStores",
+        "files",
+        "generatedFiles",
+        "interactions",
+        "operations",
+        "tunedModels",
+        "webhooks",
+    )
+    return suffix.startswith(gemini_prefixes)
+
+
 def _gemini_stable_alias_path(path: str) -> str:
     if path.startswith("/upload/v1/files") or path.startswith("/upload/v1/fileSearchStores"):
         return path
@@ -3922,6 +3944,12 @@ async def _optional_api_key_auth(request: Request, call_next):
         return await call_next(request)
     if _request_api_key_valid(request):
         return await call_next(request)
+    if _is_gemini_http_path(str(request.scope.get("path") or request.url.path)):
+        return _gemini_error_response(
+            "Invalid or missing API key.",
+            status_code=401,
+            status="UNAUTHENTICATED",
+        )
     return _openai_error_response(
         "Invalid or missing API key.",
         status_code=401,

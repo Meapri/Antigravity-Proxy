@@ -117,6 +117,8 @@ If this variable is set, every route except `/health` requires either
 `X-Goog-API-Key: <key>`, or a Gemini-style `?key=<key>` query parameter.
 Gemini Live WebSocket endpoints also accept `?key=<key>` and
 `X-Goog-API-Key`.
+Gemini REST routes return Gemini-style `UNAUTHENTICATED` errors on failed auth,
+while OpenAI/admin routes keep OpenAI-compatible authentication errors.
 
 ```bash
 ANTIGRAVITY_PROXY_API_KEY=change-this-long-random-value
