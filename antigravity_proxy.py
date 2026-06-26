@@ -2456,8 +2456,10 @@ def _gemini_save_tuned_index(index: dict[str, dict[str, Any]]) -> None:
 
 def _gemini_tuned_name(name: str) -> str:
     key = name.strip().strip("/")
-    if key.startswith("v1beta/"):
-        key = key[len("v1beta/"):]
+    for prefix in ("v1beta/", "v1/"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+            break
     if key.startswith("tunedModels/"):
         return key
     return "tunedModels/" + key
@@ -2933,7 +2935,6 @@ def _gemini_stable_alias_path(path: str) -> str:
     stable_prefixes = (
         "corpora",
         "fileSearchStores",
-        "tunedModels",
     )
     if suffix.startswith(stable_prefixes):
         return "/v1beta/" + suffix
@@ -5248,6 +5249,7 @@ async def gemini_delete_file_search_document(store_id: str, document_id: str):
     return JSONResponse({})
 
 
+@app.post("/v1/tunedModels")
 @app.post("/v1beta/tunedModels")
 async def gemini_create_tuned_model(request: Request):
     try:
@@ -5275,6 +5277,7 @@ async def gemini_create_tuned_model(request: Request):
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.get("/v1/tunedModels")
 @app.get("/v1beta/tunedModels")
 async def gemini_list_tuned_models(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
     models = [_gemini_tuned_resource(meta) for meta in _gemini_load_tuned_index().values()]
@@ -5284,6 +5287,7 @@ async def gemini_list_tuned_models(pageSize: int = Query(default=100, ge=1, le=1
     return {"tunedModels": models[start:end], "nextPageToken": str(end) if end < len(models) else ""}
 
 
+@app.get("/v1/tunedModels/{tuned_model_id:path}/operations")
 @app.get("/v1beta/tunedModels/{tuned_model_id:path}/operations")
 async def gemini_list_tuned_model_operations(tuned_model_id: str, pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
     tuned_name = _gemini_tuned_name(tuned_model_id)
@@ -5294,6 +5298,7 @@ async def gemini_list_tuned_model_operations(tuned_model_id: str, pageSize: int 
     )
 
 
+@app.get("/v1/tunedModels/{tuned_model_id:path}/operations/{operation_id:path}")
 @app.get("/v1beta/tunedModels/{tuned_model_id:path}/operations/{operation_id:path}")
 async def gemini_get_tuned_model_operation(tuned_model_id: str, operation_id: str):
     operation = _gemini_get_operation(f"tunedModels/{tuned_model_id}/operations/{operation_id}")
@@ -5302,6 +5307,7 @@ async def gemini_get_tuned_model_operation(tuned_model_id: str, operation_id: st
     return operation
 
 
+@app.post("/v1/tunedModels/{tuned_model_id:path}/operations/{operation_id:path}:wait")
 @app.post("/v1beta/tunedModels/{tuned_model_id:path}/operations/{operation_id:path}:wait")
 async def gemini_wait_tuned_model_operation(tuned_model_id: str, operation_id: str):
     operation = _gemini_get_operation(f"tunedModels/{tuned_model_id}/operations/{operation_id}")
@@ -5310,6 +5316,7 @@ async def gemini_wait_tuned_model_operation(tuned_model_id: str, operation_id: s
     return operation
 
 
+@app.post("/v1/tunedModels/{tuned_model_id:path}/operations/{operation_id:path}:cancel")
 @app.post("/v1beta/tunedModels/{tuned_model_id:path}/operations/{operation_id:path}:cancel")
 async def gemini_cancel_tuned_model_operation(tuned_model_id: str, operation_id: str):
     operation = _gemini_get_operation(f"tunedModels/{tuned_model_id}/operations/{operation_id}")
@@ -5318,6 +5325,7 @@ async def gemini_cancel_tuned_model_operation(tuned_model_id: str, operation_id:
     return JSONResponse({})
 
 
+@app.delete("/v1/tunedModels/{tuned_model_id:path}/operations/{operation_id:path}")
 @app.delete("/v1beta/tunedModels/{tuned_model_id:path}/operations/{operation_id:path}")
 async def gemini_delete_tuned_model_operation(tuned_model_id: str, operation_id: str):
     operation = _gemini_get_operation(f"tunedModels/{tuned_model_id}/operations/{operation_id}")
@@ -5329,6 +5337,7 @@ async def gemini_delete_tuned_model_operation(tuned_model_id: str, operation_id:
     return JSONResponse({})
 
 
+@app.get("/v1/tunedModels/{tuned_model_id}")
 @app.get("/v1beta/tunedModels/{tuned_model_id}")
 async def gemini_get_tuned_model(tuned_model_id: str):
     meta = _gemini_get_tuned_meta(tuned_model_id)
@@ -5337,6 +5346,7 @@ async def gemini_get_tuned_model(tuned_model_id: str):
     return _gemini_tuned_resource(meta)
 
 
+@app.patch("/v1/tunedModels/{tuned_model_id}")
 @app.patch("/v1beta/tunedModels/{tuned_model_id}")
 async def gemini_patch_tuned_model(tuned_model_id: str, request: Request):
     index = _gemini_load_tuned_index()
@@ -5355,6 +5365,7 @@ async def gemini_patch_tuned_model(tuned_model_id: str, request: Request):
     return _gemini_tuned_resource(meta)
 
 
+@app.delete("/v1/tunedModels/{tuned_model_id}")
 @app.delete("/v1beta/tunedModels/{tuned_model_id}")
 async def gemini_delete_tuned_model(tuned_model_id: str):
     index = _gemini_load_tuned_index()
@@ -5366,6 +5377,7 @@ async def gemini_delete_tuned_model(tuned_model_id: str):
     return JSONResponse({})
 
 
+@app.post("/v1/tunedModels/{tuned_model_id}:generateContent")
 @app.post("/v1beta/tunedModels/{tuned_model_id}:generateContent")
 async def gemini_tuned_generate_content(tuned_model_id: str, request: Request):
     try:
@@ -5385,6 +5397,7 @@ async def gemini_tuned_generate_content(tuned_model_id: str, request: Request):
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
+@app.post("/v1/tunedModels/{tuned_model_id}:countTokens")
 @app.post("/v1beta/tunedModels/{tuned_model_id}:countTokens")
 async def gemini_tuned_count_tokens(tuned_model_id: str, request: Request):
     try:
@@ -5398,6 +5411,7 @@ async def gemini_tuned_count_tokens(tuned_model_id: str, request: Request):
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
 
 
+@app.get("/v1/tunedModels/{tuned_model_id}/permissions")
 @app.get("/v1beta/tunedModels/{tuned_model_id}/permissions")
 async def gemini_list_tuned_model_permissions(tuned_model_id: str):
     meta = _gemini_get_tuned_meta(tuned_model_id)
@@ -5406,6 +5420,7 @@ async def gemini_list_tuned_model_permissions(tuned_model_id: str):
     return {"permissions": list((meta.get("permissions") or {}).values())}
 
 
+@app.post("/v1/tunedModels/{tuned_model_id}/permissions")
 @app.post("/v1beta/tunedModels/{tuned_model_id}/permissions")
 async def gemini_create_tuned_model_permission(tuned_model_id: str, request: Request):
     try:
@@ -5418,6 +5433,7 @@ async def gemini_create_tuned_model_permission(tuned_model_id: str, request: Req
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
 
 
+@app.get("/v1/tunedModels/{tuned_model_id}/permissions/{permission_id}")
 @app.get("/v1beta/tunedModels/{tuned_model_id}/permissions/{permission_id}")
 async def gemini_get_tuned_model_permission(tuned_model_id: str, permission_id: str):
     meta = _gemini_get_tuned_meta(tuned_model_id)
@@ -5429,6 +5445,7 @@ async def gemini_get_tuned_model_permission(tuned_model_id: str, permission_id: 
     return perm
 
 
+@app.patch("/v1/tunedModels/{tuned_model_id}/permissions/{permission_id}")
 @app.patch("/v1beta/tunedModels/{tuned_model_id}/permissions/{permission_id}")
 async def gemini_patch_tuned_model_permission(tuned_model_id: str, permission_id: str, request: Request):
     index = _gemini_load_tuned_index()
@@ -5451,6 +5468,7 @@ async def gemini_patch_tuned_model_permission(tuned_model_id: str, permission_id
     return perm
 
 
+@app.post("/v1/tunedModels/{tuned_model_id}/permissions/{permission_id}:transferOwnership")
 @app.post("/v1beta/tunedModels/{tuned_model_id}/permissions/{permission_id}:transferOwnership")
 async def gemini_transfer_tuned_model_permission(tuned_model_id: str, permission_id: str):
     index = _gemini_load_tuned_index()
@@ -5469,6 +5487,7 @@ async def gemini_transfer_tuned_model_permission(tuned_model_id: str, permission
     return JSONResponse({})
 
 
+@app.delete("/v1/tunedModels/{tuned_model_id}/permissions/{permission_id}")
 @app.delete("/v1beta/tunedModels/{tuned_model_id}/permissions/{permission_id}")
 async def gemini_delete_tuned_model_permission(tuned_model_id: str, permission_id: str):
     index = _gemini_load_tuned_index()

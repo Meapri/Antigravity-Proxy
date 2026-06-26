@@ -1753,7 +1753,7 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
     client = TestClient(proxy.app)
 
-    created = client.post("/v1beta/tunedModels", json={
+    created = client.post("/v1/tunedModels", json={
         "tunedModelId": "my_tuned",
         "tunedModel": {
             "displayName": "My tuned",
@@ -1765,12 +1765,13 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert tuned["name"] == "tunedModels/my_tuned"
     created_op_id = created.json()["name"].split("/", 1)[1]
 
-    listed = client.get("/v1beta/tunedModels")
-    fetched = client.get("/v1beta/tunedModels/my_tuned")
-    listed_operations = client.get("/v1beta/tunedModels/my_tuned/operations")
-    fetched_operation = client.get(f"/v1beta/tunedModels/my_tuned/operations/{created_op_id}")
-    waited_operation = client.post(f"/v1beta/tunedModels/my_tuned/operations/{created_op_id}:wait")
-    patched = client.patch("/v1beta/tunedModels/my_tuned", json={"description": "updated"})
+    listed = client.get("/v1/tunedModels")
+    fetched = client.get("/v1/tunedModels/my_tuned")
+    listed_operations = client.get("/v1/tunedModels/my_tuned/operations")
+    fetched_operation = client.get(f"/v1/tunedModels/my_tuned/operations/{created_op_id}")
+    waited_operation = client.post(f"/v1/tunedModels/my_tuned/operations/{created_op_id}:wait")
+    cancelled_operation = client.post(f"/v1/tunedModels/my_tuned/operations/{created_op_id}:cancel")
+    patched = client.patch("/v1/tunedModels/my_tuned", json={"description": "updated"})
     assert listed.status_code == 200
     assert fetched.json()["displayName"] == "My tuned"
     assert listed_operations.status_code == 200
@@ -1779,27 +1780,35 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert fetched_operation.json()["name"] == created.json()["name"]
     assert waited_operation.status_code == 200
     assert waited_operation.json()["name"] == created.json()["name"]
+    assert cancelled_operation.status_code == 200
+    assert cancelled_operation.json() == {}
     assert patched.json()["description"] == "updated"
 
-    perm = client.post("/v1beta/tunedModels/my_tuned/permissions", json={
+    perm = client.post("/v1/tunedModels/my_tuned/permissions", json={
         "emailAddress": "user@example.com",
         "role": "READER",
     })
     assert perm.status_code == 200
     perm_id = perm.json()["name"].rsplit("/", 1)[-1]
-    promoted = client.post(f"/v1beta/tunedModels/my_tuned/permissions/{perm_id}:transferOwnership")
-    fetched_perm = client.get(f"/v1beta/tunedModels/my_tuned/permissions/{perm_id}")
+    listed_perms = client.get("/v1/tunedModels/my_tuned/permissions")
+    patched_perm = client.patch(f"/v1/tunedModels/my_tuned/permissions/{perm_id}", json={"role": "WRITER"})
+    promoted = client.post(f"/v1/tunedModels/my_tuned/permissions/{perm_id}:transferOwnership")
+    fetched_perm = client.get(f"/v1/tunedModels/my_tuned/permissions/{perm_id}")
+    assert listed_perms.status_code == 200
+    assert listed_perms.json()["permissions"][0]["role"] == "READER"
+    assert patched_perm.status_code == 200
+    assert patched_perm.json()["role"] == "WRITER"
     assert promoted.status_code == 200
     assert fetched_perm.json()["role"] == "OWNER"
 
-    generated = client.post("/v1beta/tunedModels/my_tuned:generateContent", json={
+    generated = client.post("/v1/tunedModels/my_tuned:generateContent", json={
         "contents": [{"role": "user", "parts": [{"text": "hello tuned"}]}]
     })
     assert generated.status_code == 200
     assert seen["model"] == "gemini-3-flash-agent"
     assert seen["request"]["contents"][0]["parts"][0]["text"] == "hello tuned"
 
-    counted = client.post("/v1beta/tunedModels/my_tuned:countTokens", json={
+    counted = client.post("/v1/tunedModels/my_tuned:countTokens", json={
         "contents": [{"role": "user", "parts": [{"text": "hello tuned"}]}]
     })
     assert counted.status_code == 200
@@ -1807,9 +1816,11 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert counted.json()["promptTokensDetails"][0]["modality"] == "TEXT"
     assert counted.json()["cacheTokensDetails"] == []
 
-    deleted_perm = client.delete(f"/v1beta/tunedModels/my_tuned/permissions/{perm_id}")
-    deleted_model = client.delete("/v1beta/tunedModels/my_tuned")
+    deleted_perm = client.delete(f"/v1/tunedModels/my_tuned/permissions/{perm_id}")
+    deleted_operation = client.delete(f"/v1/tunedModels/my_tuned/operations/{created_op_id}")
+    deleted_model = client.delete("/v1/tunedModels/my_tuned")
     assert deleted_perm.status_code == 200
+    assert deleted_operation.status_code == 200
     assert deleted_model.status_code == 200
 
 
