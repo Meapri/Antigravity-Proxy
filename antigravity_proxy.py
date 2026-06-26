@@ -2017,6 +2017,31 @@ def _gemini_webhook_name(name: str) -> str:
     return "webhooks/" + key
 
 
+def _gemini_webhook_body(body: Any) -> dict[str, Any]:
+    normalized = _gemini_normalize_request(body)
+    if not isinstance(normalized, dict):
+        return {}
+    config = normalized.get("config") if isinstance(normalized.get("config"), dict) else {}
+    webhook = normalized.get("webhook") if isinstance(normalized.get("webhook"), dict) else {}
+    if webhook:
+        merged = dict(config)
+        merged.update(webhook)
+        for key, value in normalized.items():
+            if key not in {"config", "webhook"} and key not in merged:
+                merged[key] = value
+        normalized = merged
+    elif config:
+        merged = dict(config)
+        for key, value in normalized.items():
+            if key != "config":
+                merged[key] = value
+        normalized = merged
+    state = normalized.get("state")
+    if isinstance(state, str):
+        normalized["state"] = state.strip().lower().replace("_", "-")
+    return normalized
+
+
 def _gemini_store_webhook(webhook: dict[str, Any]) -> dict[str, Any]:
     index = _gemini_load_webhooks_index()
     index[webhook["name"]] = webhook
@@ -7454,7 +7479,7 @@ async def gemini_create_webhook(request: Request):
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
-        webhook = body.get("webhook") if isinstance(body.get("webhook"), dict) else body
+        webhook = _gemini_webhook_body(body)
         name = webhook.get("name")
         if isinstance(name, str) and name.strip():
             resource_name = _gemini_webhook_name(name)
@@ -7473,7 +7498,7 @@ async def gemini_create_webhook(request: Request):
         resource["subscribedEvents"] = _gemini_webhook_events(resource)
         resource["eventTypes"] = list(resource["subscribedEvents"])
         resource.setdefault("state", "enabled")
-        if body.get("newSigningSecret", body.get("new_signing_secret", True)) is not False:
+        if webhook.get("newSigningSecret", True) is not False:
             secret = _gemini_new_signing_secret()
             resource["newSigningSecret"] = secret
             resource["signingSecrets"] = [secret]
@@ -7515,7 +7540,7 @@ async def gemini_patch_webhook(webhook_id: str, request: Request, updateMask: st
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
-        patch = body.get("webhook") if isinstance(body.get("webhook"), dict) else body
+        patch = _gemini_webhook_body(body)
         name = _gemini_webhook_name(webhook_id)
         index = _gemini_load_webhooks_index()
         webhook = index.get(name)
@@ -7524,13 +7549,17 @@ async def gemini_patch_webhook(webhook_id: str, request: Request, updateMask: st
         updateMask = updateMask or patch.pop("updateMask", None) or body.pop("updateMask", None)
         field_aliases = {
             "display_name": "displayName",
+            "uri": "uri",
             "target_uri": "targetUri",
             "event_types": "eventTypes",
             "subscribed_events": "subscribedEvents",
+            "state": "state",
             "webhook.display_name": "displayName",
+            "webhook.uri": "uri",
             "webhook.target_uri": "targetUri",
             "webhook.event_types": "eventTypes",
             "webhook.subscribed_events": "subscribedEvents",
+            "webhook.state": "state",
         }
         fields = []
         for raw_field in (updateMask or "").split(","):

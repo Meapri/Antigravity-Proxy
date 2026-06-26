@@ -1635,9 +1635,12 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
     client = TestClient(proxy.app)
 
     created = client.post("/v1/webhooks", json={
+        "config": {
+            "target_uri": "https://example.test/hook",
+            "new_signing_secret": True,
+        },
         "webhook": {
             "display_name": "Batch updates",
-            "target_uri": "https://example.test/hook",
             "event_types": ["batch.succeeded"],
         }
     })
@@ -1664,6 +1667,10 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
         "display_name": "Ignored by mask",
         "target_uri": "https://example.test/body-mask",
     })
+    state_masked = client.patch(f"/v1/{webhook['name']}?updateMask=webhook.state", json={
+        "config": {"state": "DISABLED"},
+        "webhook": {"target_uri": "https://example.test/ignored-state-mask"},
+    })
 
     assert fetched.status_code == 200
     assert fetched.json()["name"] == webhook["name"]
@@ -1676,6 +1683,9 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
     assert body_masked.status_code == 200
     assert body_masked.json()["displayName"] == "Renamed"
     assert body_masked.json()["targetUri"] == "https://example.test/body-mask"
+    assert state_masked.status_code == 200
+    assert state_masked.json()["state"] == "disabled"
+    assert state_masked.json()["targetUri"] == "https://example.test/body-mask"
 
     malformed = client.patch(
         f"/v1/{webhook['name']}",

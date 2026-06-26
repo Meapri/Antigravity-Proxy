@@ -951,6 +951,9 @@ Notes:
   events to enabled webhooks, stores delivery attempts, and signs callbacks
   with `X-Goog-Webhook-Signature` when a signing secret exists. Legacy
   `batches.*` / `interactions.*` subscriptions are matched as aliases.
+- `webhooks.create` and patch accept SDK-style `config` / `webhook` wrappers,
+  snake_case aliases, and update masks for `displayName`, `uri`, `targetUri`,
+  `eventTypes`, `subscribedEvents`, and `state`.
 - Native Veo video generation, realtime Live audio/video, real model
   tuning/training, true async long-running jobs, semantic Google embeddings,
   and semantic/vector `tools.file_search` retrieval are not fully implemented
