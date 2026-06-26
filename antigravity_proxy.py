@@ -380,6 +380,10 @@ _GEMINI_KEY_ALIASES = {
     "cached_content": "cachedContent",
     "response_mime_type": "responseMimeType",
     "response_schema": "responseSchema",
+    "response_format": "responseFormat",
+    "responseFormat": "responseFormat",
+    "json_schema": "jsonSchema",
+    "jsonSchema": "jsonSchema",
     "max_output_tokens": "maxOutputTokens",
     "candidate_count": "candidateCount",
     "stop_sequences": "stopSequences",
@@ -467,6 +471,53 @@ def _gemini_normalize_request(value: Any) -> Any:
         out["toolConfig"]["functionCallingConfig"] = _gemini_normalize_function_calling_config(
             out["toolConfig"]["functionCallingConfig"]
         )
+    return out
+
+
+def _gemini_apply_response_format(body: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(body, dict):
+        return body
+    out = dict(body)
+    gen = dict(out.get("generationConfig") or {}) if isinstance(out.get("generationConfig"), dict) else {}
+    fmt = out.pop("responseFormat", None)
+
+    if out.get("responseMimeType") is not None:
+        gen["responseMimeType"] = out.pop("responseMimeType")
+    if out.get("responseSchema") is not None:
+        schema = out.pop("responseSchema")
+        gen["responseSchema"] = _sanitize_schema(dict(schema)) if isinstance(schema, dict) else schema
+
+    if isinstance(fmt, dict):
+        nested_json_schema = fmt.get("jsonSchema") if isinstance(fmt.get("jsonSchema"), dict) else None
+        fmt_type = str(fmt.get("type") or "").strip().lower()
+        mime = (
+            fmt.get("mimeType")
+            or fmt.get("responseMimeType")
+            or (nested_json_schema or {}).get("mimeType")
+            or (nested_json_schema or {}).get("responseMimeType")
+        )
+        if mime:
+            gen["responseMimeType"] = mime
+        elif fmt_type in {"json_object", "json_schema"} or nested_json_schema:
+            gen["responseMimeType"] = "application/json"
+
+        schema = (
+            fmt.get("schema")
+            or fmt.get("responseSchema")
+            or (nested_json_schema or {}).get("schema")
+            or (nested_json_schema or {}).get("responseSchema")
+        )
+        if isinstance(schema, dict):
+            gen["responseSchema"] = _sanitize_schema(dict(schema))
+    elif isinstance(fmt, str) and fmt.strip():
+        fmt_type = fmt.strip().lower()
+        if "/" in fmt_type:
+            gen["responseMimeType"] = fmt.strip()
+        elif fmt_type in {"json", "json_object", "json_schema"}:
+            gen["responseMimeType"] = "application/json"
+
+    if gen:
+        out["generationConfig"] = gen
     return out
 
 
@@ -5490,6 +5541,7 @@ async def gemini_tuned_generate_content(tuned_model_id: str, request: Request):
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body = _gemini_apply_response_format(body)
         body = _gemini_inline_local_files(_gemini_apply_file_search(_gemini_apply_cached_content(body)))
         body.pop("model", None)
         data = await asyncio.to_thread(_get_client().generate_raw, request=body, model=str(model["antigravity_model"]))
@@ -5804,6 +5856,7 @@ async def gemini_predict(model_name: str, request: Request):
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body = _gemini_apply_response_format(body)
         if _model_capabilities(model)["image_generation"]:
             image = await _gemini_generate_image_payload(model_name, body)
             return {
@@ -5815,6 +5868,7 @@ async def gemini_predict(model_name: str, request: Request):
                 "deployedModelId": _gemini_model_name(model),
             }
         request_body = _gemini_predict_to_generate_body(body)
+        request_body = _gemini_apply_response_format(request_body)
         request_body = _gemini_apply_cached_content(request_body)
         request_body = _gemini_apply_file_search(request_body)
         request_body = _gemini_inline_local_files(request_body)
@@ -6038,6 +6092,7 @@ async def gemini_generate_content(model_name: str, request: Request):
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body = _gemini_apply_response_format(body)
         if _model_capabilities(model)["image_generation"]:
             image = await _gemini_generate_image_payload(model_name, body)
             return JSONResponse({
@@ -6144,6 +6199,7 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
         if not isinstance(item, dict):
             raise HTTPException(status_code=400, detail="batchGenerateContent request items must be objects.")
         req_body = _gemini_normalize_request(dict(item))
+        req_body = _gemini_apply_response_format(req_body)
         req_body = _gemini_apply_cached_content(req_body)
         req_body = _gemini_apply_file_search(req_body)
         req_body = _gemini_inline_local_files(req_body)
@@ -6523,6 +6579,7 @@ def _gemini_interaction_model_output_step(text: str, response: dict[str, Any] | 
 async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+    body = _gemini_apply_response_format(body)
     model_name = body.get("model") or body.get("modelName") or body.get("model_name") or "models/gemini-3-flash-agent"
     model = _resolve_gemini_model(str(model_name))
     contents = _gemini_interaction_contents(body)
@@ -6805,6 +6862,7 @@ async def gemini_stream_generate_content(model_name: str, request: Request):
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body = _gemini_apply_response_format(body)
         body = _gemini_apply_cached_content(body)
         body = _gemini_apply_file_search(body)
         _gemini_reject_unsupported_builtin_tools(body)

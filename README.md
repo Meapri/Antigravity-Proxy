@@ -642,6 +642,8 @@ context. `urlContext` and `codeExecution` are recognized but return
 `UNIMPLEMENTED` because the current Antigravity backend does not expose those
 hosted tools. `toolConfig.functionCallingConfig.mode` and
 `allowedFunctionNames` are normalized from common SDK spellings.
+`response_format` / `responseFormat` wrappers are mapped into
+`generationConfig.responseMimeType` and `generationConfig.responseSchema`.
 
 Files API example:
 

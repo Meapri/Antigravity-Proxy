@@ -487,6 +487,13 @@ def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
     response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "generation_config": {"response_mime_type": "application/json", "max_output_tokens": 32},
+        "response_format": {
+            "type": "json_schema",
+            "schema": {
+                "properties": {"answer": {"type": "string"}},
+                "required": ["answer"],
+            },
+        },
         "tools": [{"googleSearch": {}}],
         "tool_config": {"function_calling_config": {"mode": "any", "allowed_function_names": "lookup"}},
     })
@@ -495,6 +502,11 @@ def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
     assert response.json()["candidates"][0]["content"]["parts"][0]["text"] == "hello"
     assert seen["model"] == "gemini-3-flash-agent"
     assert seen["request"]["generationConfig"]["responseMimeType"] == "application/json"
+    assert seen["request"]["generationConfig"]["responseSchema"] == {
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+        "type": "object",
+    }
     assert seen["request"]["generationConfig"]["maxOutputTokens"] == 32
     assert seen["request"]["tools"] == [{"google_search": {}}]
     assert seen["request"]["toolConfig"]["functionCallingConfig"] == {
@@ -1093,6 +1105,22 @@ def test_gemini_interactions_accept_content_item_aliases_and_image_model(tmp_pat
     assert parts[1]["inlineData"] == {"mimeType": "image/jpeg", "data": "aW1hZ2U="}
     assert seen["request"]["generationConfig"]["responseModalities"] == ["TEXT"]
     assert seen["request"]["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_LOW"
+
+    structured_interaction = client.post("/v1/interactions", json={
+        "input": "return json",
+        "response_format": {
+            "mime_type": "application/json",
+            "schema": {"properties": {"ok": {"type": "boolean"}}},
+        },
+        "store": False,
+    })
+
+    assert structured_interaction.status_code == 200
+    assert seen["request"]["generationConfig"]["responseMimeType"] == "application/json"
+    assert seen["request"]["generationConfig"]["responseSchema"] == {
+        "properties": {"ok": {"type": "boolean"}},
+        "type": "object",
+    }
 
     image_interaction = client.post("/v1beta/interactions", json={
         "model": "models/gemini-image-latest",
