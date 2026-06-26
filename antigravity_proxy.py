@@ -1205,6 +1205,21 @@ def _gemini_normalize_usage_metadata(value: Any, *, request_body: dict[str, Any]
     return usage
 
 
+def _gemini_interaction_usage(value: Any) -> dict[str, Any]:
+    usage = dict(value) if isinstance(value, dict) else {}
+    aliases = {
+        "promptTokenCount": "inputTokens",
+        "candidatesTokenCount": "outputTokens",
+        "totalTokenCount": "totalTokens",
+        "cachedContentTokenCount": "cachedTokens",
+        "thoughtsTokenCount": "reasoningTokens",
+    }
+    for old, new in aliases.items():
+        if usage.get(new) is None and usage.get(old) is not None:
+            usage[new] = usage[old]
+    return usage
+
+
 def _gemini_normalize_candidate(candidate: dict[str, Any], index: int) -> dict[str, Any]:
     out = dict(candidate)
     aliases = {
@@ -1479,6 +1494,23 @@ def _gemini_interaction_contents(body: dict[str, Any]) -> list[dict[str, Any]]:
     if not contents:
         raise HTTPException(status_code=400, detail="Interaction input did not contain any supported content.")
     return contents
+
+
+def _gemini_interaction_body(body: Any) -> dict[str, Any]:
+    normalized = _gemini_normalize_request(body)
+    if not isinstance(normalized, dict):
+        return {}
+    config = normalized.get("config") if isinstance(normalized.get("config"), dict) else {}
+    interaction = normalized.get("interaction") if isinstance(normalized.get("interaction"), dict) else {}
+    if interaction:
+        merged = dict(interaction)
+        if config and "config" not in merged:
+            merged["config"] = config
+        for key, value in normalized.items():
+            if key not in {"config", "interaction"} and key not in merged:
+                merged[key] = value
+        return merged
+    return normalized
 
 
 def _gemini_live_turns_from_message(message: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
@@ -7685,9 +7717,42 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
         "tools",
         "toolConfig",
         "cachedContent",
+        "agent",
+        "agentConfig",
+        "environment",
+        "webhookConfig",
     ):
         if key in body:
             request_body[key] = body[key]
+
+    now = _gemini_now_iso()
+    interaction_name = "interactions/int_" + uuid.uuid4().hex
+    if body.get("background") is True:
+        usage = _gemini_interaction_usage({})
+        interaction = {
+            "name": interaction_name,
+            "id": interaction_name.rsplit("/", 1)[-1],
+            "model": _gemini_model_name(model),
+            "agent": body.get("agent"),
+            "status": "in_progress",
+            "created": now,
+            "updated": now,
+            "createTime": now,
+            "updateTime": now,
+            "previousInteractionId": previous_id or None,
+            "input": body.get("input", body.get("messages", body.get("contents"))),
+            "request": request_body,
+            "output": {},
+            "outputText": "",
+            "history": request_body["contents"],
+            "steps": [],
+            "usage": usage,
+            "usageMetadata": usage,
+            "background": True,
+        }
+        if body.get("store", True) is not False:
+            _gemini_store_interaction(interaction)
+        return interaction
 
     if _model_capabilities(model)["image_generation"]:
         image = await _gemini_generate_image_payload(str(model_name), request_body)
@@ -7706,14 +7771,16 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
             }],
             "generatedFile": image["generatedFile"]["name"],
         }, model_name=str(model_name), request_body=request_body)
-        now = _gemini_now_iso()
-        interaction_name = "interactions/int_" + uuid.uuid4().hex
         model_content = response["candidates"][0]["content"]
+        usage = _gemini_interaction_usage({})
         interaction = {
             "name": interaction_name,
             "id": interaction_name.rsplit("/", 1)[-1],
             "model": _gemini_model_name(model),
+            "agent": body.get("agent"),
             "status": "completed",
+            "created": now,
+            "updated": now,
             "createTime": now,
             "updateTime": now,
             "previousInteractionId": previous_id or None,
@@ -7730,7 +7797,8 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
                 },
                 _gemini_interaction_model_output_step("", response),
             ],
-            "usageMetadata": {},
+            "usage": usage,
+            "usageMetadata": usage,
         }
         if body.get("store", True) is not False:
             _gemini_store_interaction(interaction)
@@ -7751,18 +7819,20 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
         request_body=request_body,
     )
     text = _gemini_response_text(response)
-    now = _gemini_now_iso()
-    interaction_name = "interactions/int_" + uuid.uuid4().hex
     model_content = None
     candidates = response.get("candidates") or []
     if candidates and isinstance(candidates[0], dict) and isinstance(candidates[0].get("content"), dict):
         model_content = candidates[0]["content"]
     new_history = request_body["contents"] + ([model_content] if model_content else [])
+    usage = _gemini_interaction_usage(response.get("usageMetadata") or response.get("usage_metadata") or {})
     interaction = {
         "name": interaction_name,
         "id": interaction_name.rsplit("/", 1)[-1],
         "model": _gemini_model_name(model),
+        "agent": body.get("agent"),
         "status": "completed",
+        "created": now,
+        "updated": now,
         "createTime": now,
         "updateTime": now,
         "previousInteractionId": previous_id or None,
@@ -7778,7 +7848,8 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
                 "outputText": text,
             }
         ],
-        "usageMetadata": response.get("usageMetadata") or response.get("usage_metadata") or {},
+        "usage": usage,
+        "usageMetadata": response.get("usageMetadata") or response.get("usage_metadata") or usage,
     }
     if body.get("store", True) is not False:
         _gemini_store_interaction(interaction)
@@ -7790,7 +7861,7 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
 @app.post("/v1beta/interactions")
 async def gemini_create_interaction(request: Request):
     try:
-        body = _gemini_normalize_request(await request.json())
+        body = _gemini_interaction_body(await request.json())
         interaction = await _gemini_create_interaction(body)
         if isinstance(body, dict) and body.get("stream"):
             async def _gen():
@@ -7818,6 +7889,29 @@ async def gemini_create_interaction(request: Request):
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
+@app.get("/v1/interactions")
+@app.get("/v1beta/interactions")
+async def gemini_list_interactions(request: Request):
+    query = request.query_params
+    page_size_raw = query.get("pageSize") or query.get("page_size") or "100"
+    try:
+        page_size = max(1, min(1000, int(page_size_raw)))
+    except (TypeError, ValueError):
+        page_size = 100
+    page_token = query.get("pageToken") or query.get("page_token") or "0"
+    try:
+        start = max(0, int(page_token))
+    except (TypeError, ValueError):
+        start = 0
+    interactions = list(_gemini_load_interactions_index().values())
+    interactions.sort(key=lambda item: item.get("createTime") or item.get("created") or item.get("name") or "")
+    end = start + page_size
+    return {
+        "interactions": interactions[start:end],
+        "nextPageToken": str(end) if end < len(interactions) else "",
+    }
+
+
 @app.get("/v1/interactions/{interaction_id:path}")
 @app.get("/v1beta/interactions/{interaction_id:path}")
 async def gemini_get_interaction(interaction_id: str):
@@ -7833,7 +7927,9 @@ def _gemini_cancel_interaction_response(interaction_id: str):
         return _gemini_error_response(f"Interaction '{interaction_id}' not found.", status_code=404, status="NOT_FOUND")
     if interaction.get("status") not in {"completed", "failed", "cancelled"}:
         interaction["status"] = "cancelled"
-        interaction["updateTime"] = _gemini_now_iso()
+        now = _gemini_now_iso()
+        interaction["updated"] = now
+        interaction["updateTime"] = now
         _gemini_store_interaction(interaction)
     return interaction
 

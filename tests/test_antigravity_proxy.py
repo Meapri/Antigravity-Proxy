@@ -1388,9 +1388,12 @@ def test_gemini_interactions_create_previous_store_and_stream(tmp_path, monkeypa
     assert first.status_code == 200
     first_body = first.json()
     assert first_body["name"].startswith("interactions/")
+    assert first_body["created"] == first_body["createTime"]
+    assert first_body["updated"] == first_body["updateTime"]
     assert first_body["outputText"] == "echo:first"
     assert first_body["output"]["modelVersion"] == "gemini-3-flash-agent"
     assert first_body["output"]["responseId"].startswith("resp_")
+    assert first_body["usage"]["totalTokens"] > 0
     assert first_body["usageMetadata"]["totalTokenCount"] > 0
     assert first_body["steps"][0]["type"] == "model_output"
     assert first_body["steps"][0]["content"][0]["type"] == "text"
@@ -1408,12 +1411,16 @@ def test_gemini_interactions_create_previous_store_and_stream(tmp_path, monkeypa
     assert seen[-1]["contents"][1]["parts"][0]["text"] == "echo:first"
 
     fetched = client.get(f"/v1beta/{first_body['name']}")
+    listed = client.get("/v1beta/interactions?page_size=2&page_token=0")
     no_store = client.post("/v1beta/interactions", json={"input": "transient", "store": False})
     missing = client.get(f"/v1beta/{no_store.json()['name']}")
     cancelled = client.post(f"/v1beta/{first_body['name']}:cancel")
     deleted = client.delete(f"/v1beta/{first_body['name']}")
 
     assert fetched.status_code == 200
+    assert listed.status_code == 200
+    assert first_body["name"] in {item["name"] for item in listed.json()["interactions"]}
+    assert listed.json()["nextPageToken"] == ""
     assert missing.status_code == 404
     assert cancelled.status_code == 200
     assert deleted.status_code == 200
@@ -1478,15 +1485,43 @@ def test_gemini_interactions_v1_aliases(tmp_path, monkeypatch):
     body = created.json()
     assert body["outputText"] == "v1:hello"
 
+    wrapped = client.post("/v1/interactions", json={
+        "config": {"temperature": 0.1},
+        "interaction": {
+            "model": "models/gemini-3-flash-agent",
+            "input": "wrapped",
+            "store": False,
+        },
+    })
+    background = client.post("/v1/interactions", json={
+        "interaction": {
+            "input": "async later",
+            "background": True,
+        }
+    })
+
     fetched = client.get(f"/v1/{body['name']}")
+    listed = client.get("/v1/interactions?pageSize=2&pageToken=0")
     colon_cancelled = client.post(f"/v1/{body['name']}:cancel")
     rest_cancelled = client.post(f"/v1/{body['name']}/cancel")
+    background_cancelled = client.post(f"/v1/{background.json()['name']}:cancel")
     deleted = client.delete(f"/v1/{body['name']}")
     missing = client.get(f"/v1/{body['name']}")
 
+    assert wrapped.status_code == 200
+    assert wrapped.json()["outputText"] == "v1:wrapped"
+    assert background.status_code == 200
+    assert background.json()["status"] == "in_progress"
+    assert background.json()["background"] is True
+    assert background.json()["usage"] == {}
     assert fetched.status_code == 200
+    assert listed.status_code == 200
+    assert {item["name"] for item in listed.json()["interactions"]} >= {body["name"], background.json()["name"]}
     assert colon_cancelled.status_code == 200
     assert rest_cancelled.status_code == 200
+    assert background_cancelled.status_code == 200
+    assert background_cancelled.json()["status"] == "cancelled"
+    assert background_cancelled.json()["updated"] == background_cancelled.json()["updateTime"]
     assert deleted.status_code == 200
     assert missing.status_code == 404
 

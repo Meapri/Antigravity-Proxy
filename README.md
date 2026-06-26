@@ -933,6 +933,11 @@ Notes:
   snake_case Gemini SDK fields are normalized to REST casing before forwarding.
 - Interaction responses include `steps` with `model_output` content blocks, and
   streaming emits `interaction.step.completed` events for step-aware clients.
+- Interaction create accepts SDK-style `config` / `interaction` wrappers,
+  exposes both `created` / `updated` / `usage` and legacy
+  `createTime` / `updateTime` / `usageMetadata`, and supports list pagination.
+- `background=true` creates a stored `in_progress` interaction resource without
+  starting generation; it can be retrieved or cancelled by name.
 - Interaction cancel endpoints return the updated interaction resource.
 - Remote `http`/`https` media URLs in `file_data` or `image_url` are fetched by
   the proxy and forwarded as `inlineData`; limit with
