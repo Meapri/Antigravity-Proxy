@@ -613,14 +613,14 @@ def _gemini_unwrap_response(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def _gemini_error_response(
+def _gemini_error_payload(
     message: Any,
     *,
     status_code: int,
     status: str | None = None,
     field: str | None = None,
     reason: str | None = None,
-) -> JSONResponse:
+) -> dict[str, Any]:
     if not isinstance(message, str):
         message = json.dumps(message, ensure_ascii=False)
     error_status = status or _gemini_status_for_http(status_code)
@@ -642,8 +642,19 @@ def _gemini_error_response(
         })
     if details:
         error["details"] = details
+    return {"error": error}
+
+
+def _gemini_error_response(
+    message: Any,
+    *,
+    status_code: int,
+    status: str | None = None,
+    field: str | None = None,
+    reason: str | None = None,
+) -> JSONResponse:
     return JSONResponse(
-        {"error": error},
+        _gemini_error_payload(message, status_code=status_code, status=status, field=field, reason=reason),
         status_code=status_code,
     )
 
@@ -6684,7 +6695,11 @@ def _gemini_streaming_response(*, body: dict[str, Any], antigravity_model: str) 
                 )
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
             except Exception as inner:
-                payload = {"error": {"code": 502, "message": f"Antigravity upstream error: {inner}", "status": "UNAVAILABLE"}}
+                payload = _gemini_error_payload(
+                    f"Antigravity upstream error: {inner}",
+                    status_code=502,
+                    status="UNAVAILABLE",
+                )
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
 

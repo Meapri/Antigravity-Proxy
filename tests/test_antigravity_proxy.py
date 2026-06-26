@@ -815,6 +815,29 @@ def test_gemini_generate_content_alt_sse_falls_back_on_empty_stream(monkeypatch)
     assert "data: [DONE]" in body
 
 
+def test_gemini_generate_content_alt_sse_error_uses_gemini_error_details(monkeypatch):
+    class FakeClient:
+        async def generate_raw_stream_async(self, *, request, model=""):
+            raise RuntimeError("stream down")
+            yield {}
+
+        def generate_raw(self, *, request, model=""):
+            raise RuntimeError("fallback down")
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    with client.stream("POST", "/v1beta/models/gemini-3-flash-agent:generateContent?alt=sse", json={
+        "contents": "hi",
+    }) as response:
+        body = response.read().decode()
+
+    assert response.status_code == 200
+    assert '"status": "UNAVAILABLE"' in body
+    assert '"@type": "type.googleapis.com/google.rpc.ErrorInfo"' in body
+    assert "data: [DONE]" in body
+
+
 def test_gemini_predict_and_predict_long_running(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
 
