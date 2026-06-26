@@ -1089,6 +1089,41 @@ def _gemini_get_batch(name: str) -> dict[str, Any] | None:
     return _gemini_load_batches_index().get(_gemini_batch_name(name))
 
 
+def _gemini_batch_operation(batch: dict[str, Any]) -> dict[str, Any]:
+    operation = _gemini_get_operation(str(batch.get("operation") or "")) or {
+        "name": batch.get("operation") or batch["name"],
+        "done": batch.get("state") in {
+            "BATCH_STATE_SUCCEEDED",
+            "BATCH_STATE_FAILED",
+            "BATCH_STATE_CANCELLED",
+            "BATCH_STATE_EXPIRED",
+            "JOB_STATE_SUCCEEDED",
+            "JOB_STATE_FAILED",
+            "JOB_STATE_CANCELLED",
+        },
+    }
+    out = dict(operation)
+    metadata = dict(out.get("metadata") if isinstance(out.get("metadata"), dict) else {})
+    metadata.update({
+        "batch": batch["name"],
+        "batchResource": batch,
+        "displayName": batch.get("displayName"),
+        "model": batch.get("model"),
+        "state": batch.get("state"),
+        "stats": batch.get("stats"),
+        "createTime": batch.get("createTime"),
+        "updateTime": batch.get("updateTime"),
+        "endTime": batch.get("endTime"),
+        "operation": batch.get("operation"),
+    })
+    out["name"] = batch["name"]
+    out["metadata"] = {key: value for key, value in metadata.items() if value is not None}
+    out["done"] = bool(out.get("done"))
+    if "response" not in out and isinstance(batch.get("response"), dict):
+        out["response"] = batch["response"]
+    return out
+
+
 def _gemini_interactions_root() -> Path:
     return Path(os.getenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", "data/gemini_interactions")).expanduser()
 
@@ -5896,7 +5931,7 @@ async def gemini_create_batch(request: Request):
             _operation, batch = _gemini_create_completed_embed_batch(model, body)
         else:
             _operation, batch = await _gemini_create_completed_batch(model_name, body)
-        return batch
+        return _gemini_batch_operation(batch)
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
@@ -5912,7 +5947,12 @@ async def gemini_list_batches(pageSize: int = Query(default=100, ge=1, le=1000),
     batches.sort(key=lambda item: item.get("name") or "")
     start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
     end = start + pageSize
-    return {"batches": batches[start:end], "nextPageToken": str(end) if end < len(batches) else ""}
+    page = batches[start:end]
+    return {
+        "operations": [_gemini_batch_operation(batch) for batch in page],
+        "batches": page,
+        "nextPageToken": str(end) if end < len(batches) else "",
+    }
 
 
 @app.get("/v1beta/batches/{batch_id:path}")
@@ -5920,7 +5960,7 @@ async def gemini_get_batch(batch_id: str):
     batch = _gemini_get_batch(batch_id)
     if not batch:
         return _gemini_error_response(f"Batch '{batch_id}' not found.", status_code=404, status="NOT_FOUND")
-    return batch
+    return _gemini_batch_operation(batch)
 
 
 @app.post("/v1beta/batches/{batch_id:path}:cancel")
@@ -5943,6 +5983,11 @@ async def gemini_cancel_batch(batch_id: str):
         batch["updateTime"] = now
         batch["endTime"] = now
         _gemini_store_batch(batch)
+        operation = _gemini_get_operation(str(batch.get("operation") or ""))
+        if operation and not operation.get("done"):
+            operation["done"] = True
+            operation["error"] = {"code": 1, "message": "Operation cancelled.", "status": "CANCELLED"}
+            _gemini_store_operation(operation)
     return JSONResponse({})
 
 
@@ -5995,8 +6040,13 @@ async def gemini_delete_batch(batch_id: str):
     index = _gemini_load_batches_index()
     if name not in index:
         return _gemini_error_response(f"Batch '{batch_id}' not found.", status_code=404, status="NOT_FOUND")
+    operation_name = index[name].get("operation")
     index.pop(name, None)
     _gemini_save_batches_index(index)
+    if operation_name:
+        operations = _gemini_load_operations_index()
+        operations.pop(str(operation_name), None)
+        _gemini_save_operations_index(operations)
     return JSONResponse({})
 
 

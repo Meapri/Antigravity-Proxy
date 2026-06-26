@@ -433,7 +433,9 @@ def test_gemini_async_batch_embed_and_batch_update(tmp_path, monkeypatch):
 
     assert updated.status_code == 200
     assert updated.json()["displayName"] == "renamed"
-    assert fetched.json()["operation"] == operation["name"]
+    assert fetched.json()["name"] == batch_name
+    assert fetched.json()["metadata"]["operation"] == operation["name"]
+    assert fetched.json()["metadata"]["batchResource"]["displayName"] == "renamed"
 
 
 def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
@@ -657,10 +659,13 @@ def test_gemini_batch_generate_content_operation(tmp_path, monkeypatch):
     assert waited.json()["name"] == operation["name"]
     assert batch.status_code == 200
     assert batch.json()["name"] == batch_name
-    assert batch.json()["state"] == "BATCH_STATE_SUCCEEDED"
-    assert batch.json()["stats"]["requestCount"] == "2"
+    assert batch.json()["done"] is True
+    assert batch.json()["metadata"]["state"] == "BATCH_STATE_SUCCEEDED"
+    assert batch.json()["metadata"]["stats"]["requestCount"] == "2"
+    assert batch.json()["metadata"]["batchResource"]["name"] == batch_name
     assert operation["metadata"]["stats"]["successfulRequestCount"] == "2"
     assert batches.status_code == 200
+    assert batches.json()["operations"][0]["name"] == batch_name
     assert batches.json()["batches"][0]["operation"] == operation["name"]
     assert deleted.status_code == 200
 
@@ -706,17 +711,17 @@ def test_gemini_batch_wrapped_request_bodies(tmp_path, monkeypatch):
     })
 
     assert created.status_code == 200
-    assert created.json()["displayName"] == "wrapped batch"
-    assert created.json()["requestCount"] == 1
-    assert created.json()["stats"]["requestCount"] == "1"
+    assert created.json()["done"] is True
+    assert created.json()["metadata"]["batchResource"]["displayName"] == "wrapped batch"
+    assert created.json()["metadata"]["stats"]["requestCount"] == "1"
     assert generated.status_code == 200
     assert generated.json()["metadata"]["requestCount"] == 1
     assert generated.json()["metadata"]["stats"]["successfulRequestCount"] == "1"
     assert generated.json()["response"]["responses"][0]["candidates"][0]["content"]["parts"][0]["text"] == "method"
     assert embedded.status_code == 200
-    assert embedded.json()["displayName"] == "wrapped embed"
-    assert embedded.json()["state"] == "BATCH_STATE_SUCCEEDED"
-    assert embedded.json()["stats"]["successfulRequestCount"] == "1"
+    assert embedded.json()["metadata"]["batchResource"]["displayName"] == "wrapped embed"
+    assert embedded.json()["metadata"]["state"] == "BATCH_STATE_SUCCEEDED"
+    assert embedded.json()["metadata"]["stats"]["successfulRequestCount"] == "1"
     assert embedded.json()["response"]["embeddings"][0]["values"]
     assert len(embedded.json()["response"]["embeddings"][0]["values"]) == 8
     assert wrong_method.status_code == 400
@@ -742,23 +747,25 @@ def test_gemini_batches_create_get_cancel_delete(tmp_path, monkeypatch):
     })
 
     assert created.status_code == 200
-    batch = created.json()
-    assert batch["name"].startswith("batches/")
-    assert batch["displayName"] == "docs batch"
-    assert batch["state"] == "BATCH_STATE_SUCCEEDED"
-    assert batch["requestCount"] == 1
-    assert batch["stats"]["requestCount"] == "1"
+    batch_operation = created.json()
+    batch_resource = batch_operation["metadata"]["batchResource"]
+    assert batch_operation["name"].startswith("batches/")
+    assert batch_operation["done"] is True
+    assert batch_resource["displayName"] == "docs batch"
+    assert batch_operation["metadata"]["state"] == "BATCH_STATE_SUCCEEDED"
+    assert batch_resource["requestCount"] == 1
+    assert batch_operation["metadata"]["stats"]["requestCount"] == "1"
 
-    fetched = client.get(f"/v1beta/{batch['name']}")
-    operation = client.get(f"/v1beta/{batch['operation']}")
-    cancelled = client.post(f"/v1beta/{batch['name']}:cancel")
-    deleted = client.delete(f"/v1beta/{batch['name']}")
-    missing = client.get(f"/v1beta/{batch['name']}")
+    fetched = client.get(f"/v1beta/{batch_operation['name']}")
+    operation = client.get(f"/v1beta/{batch_resource['operation']}")
+    cancelled = client.post(f"/v1beta/{batch_operation['name']}:cancel")
+    deleted = client.delete(f"/v1beta/{batch_operation['name']}")
+    missing = client.get(f"/v1beta/{batch_operation['name']}")
 
     assert fetched.status_code == 200
-    assert fetched.json()["name"] == batch["name"]
+    assert fetched.json()["name"] == batch_operation["name"]
     assert operation.status_code == 200
-    assert operation.json()["metadata"]["batch"] == batch["name"]
+    assert operation.json()["metadata"]["batch"] == batch_operation["name"]
     assert cancelled.status_code == 200
     assert deleted.status_code == 200
     assert missing.status_code == 404
