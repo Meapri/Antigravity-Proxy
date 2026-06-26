@@ -1782,6 +1782,16 @@ def test_openai_image_generation_registers_gemini_generated_file(tmp_path, monke
     operations = client.get("/v1beta/generatedFiles/operations")
     fetched = client.get(f"/v1beta/{generated_name}")
     downloaded = client.get(f"/v1beta/{generated_name}:download")
+    v1_listed = client.get("/v1/generatedFiles")
+    v1_operations = client.get("/v1/generatedFiles/operations")
+    operation_id = operations.json()["operations"][0]["name"].rsplit("/", 1)[-1]
+    v1_operation = client.get(f"/v1/generatedFiles/operations/{operation_id}")
+    v1_waited = client.post(f"/v1/generatedFiles/operations/{operation_id}:wait")
+    v1_cancelled = client.post(f"/v1/generatedFiles/operations/{operation_id}:cancel")
+    v1_fetched = client.get(f"/v1/{generated_name}")
+    v1_downloaded = client.get(f"/v1/{generated_name}:download")
+    v1_deleted = client.delete(f"/v1/{generated_name}")
+    v1_missing = client.get(f"/v1/{generated_name}")
 
     assert listed.status_code == 200
     assert listed.json()["generatedFiles"][0]["name"] == generated_name
@@ -1791,6 +1801,22 @@ def test_openai_image_generation_registers_gemini_generated_file(tmp_path, monke
     assert fetched.json()["mimeType"] == "image/png"
     assert downloaded.status_code == 200
     assert downloaded.content == b"fake-png"
+    assert v1_listed.status_code == 200
+    assert v1_listed.json()["generatedFiles"][0]["name"] == generated_name
+    assert v1_operations.status_code == 200
+    assert v1_operations.json()["operations"][0]["metadata"]["generatedFile"] == generated_name
+    assert v1_operation.status_code == 200
+    assert v1_operation.json()["metadata"]["generatedFile"] == generated_name
+    assert v1_waited.status_code == 200
+    assert v1_waited.json()["name"] == v1_operation.json()["name"]
+    assert v1_cancelled.status_code == 200
+    assert v1_cancelled.json() == {}
+    assert v1_fetched.status_code == 200
+    assert v1_fetched.json()["mimeType"] == "image/png"
+    assert v1_downloaded.status_code == 200
+    assert v1_downloaded.content == b"fake-png"
+    assert v1_deleted.status_code == 200
+    assert v1_missing.status_code == 404
 
 
 def test_gemini_image_model_generate_content_predict_and_generate_images(tmp_path, monkeypatch):

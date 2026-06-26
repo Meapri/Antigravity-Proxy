@@ -412,6 +412,15 @@ Implemented Gemini-compatible routes:
 - `GET /v1beta/files/{file}`
 - `GET /v1beta/files/{file}:download`
 - `DELETE /v1beta/files/{file}`
+- `GET /v1/generatedFiles`
+- `GET /v1/generatedFiles/{generated_file}`
+- `GET /v1/generatedFiles/{generated_file}:download`
+- `DELETE /v1/generatedFiles/{generated_file}`
+- `GET /v1/generatedFiles/operations`
+- `GET /v1/generatedFiles/operations/{operation}`
+- `POST /v1/generatedFiles/operations/{operation}:wait`
+- `POST /v1/generatedFiles/operations/{operation}:cancel`
+- `DELETE /v1/generatedFiles/operations/{operation}`
 - `GET /v1beta/generatedFiles`
 - `GET /v1beta/generatedFiles/{generated_file}`
 - `GET /v1beta/generatedFiles/{generated_file}:download`

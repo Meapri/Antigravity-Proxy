@@ -1439,8 +1439,10 @@ def _gemini_save_generated_files_index(index: dict[str, dict[str, Any]]) -> None
 
 def _gemini_generated_file_name(name: str) -> str:
     key = name.strip().strip("/")
-    if key.startswith("v1beta/"):
-        key = key[len("v1beta/"):]
+    for prefix in ("v1beta/", "v1/"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+            break
     if key.startswith("generatedFiles/"):
         return key
     return "generatedFiles/" + key
@@ -2928,7 +2930,6 @@ def _gemini_stable_alias_path(path: str) -> str:
         "batches",
         "corpora",
         "fileSearchStores",
-        "generatedFiles",
         "tunedModels",
         "webhooks",
     )
@@ -4423,6 +4424,7 @@ async def gemini_upload_file(request: Request):
     return await _gemini_upload_file_response(request, upload_version="v1beta")
 
 
+@app.get("/v1/generatedFiles")
 @app.get("/v1beta/generatedFiles")
 async def gemini_list_generated_files(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
     files = [_gemini_generated_file_resource(meta) for meta in _gemini_load_generated_files_index().values()]
@@ -4432,11 +4434,13 @@ async def gemini_list_generated_files(pageSize: int = Query(default=100, ge=1, l
     return {"generatedFiles": files[start:end], "nextPageToken": str(end) if end < len(files) else ""}
 
 
+@app.get("/v1/generatedFiles/operations")
 @app.get("/v1beta/generatedFiles/operations")
 async def gemini_list_generated_file_operations(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
     return _gemini_operation_list_response(_gemini_operations_for_scope("generatedFile"), pageSize, pageToken)
 
 
+@app.get("/v1/generatedFiles/{generated_file_id:path}:download")
 @app.get("/v1beta/generatedFiles/{generated_file_id:path}:download")
 async def gemini_download_generated_file(generated_file_id: str):
     meta = _gemini_get_generated_file_meta(generated_file_id)
@@ -4452,6 +4456,7 @@ async def gemini_download_generated_file(generated_file_id: str):
     return Response(content=path.read_bytes(), media_type=meta.get("mimeType") or "application/octet-stream")
 
 
+@app.get("/v1/generatedFiles/operations/{operation_id:path}")
 @app.get("/v1beta/generatedFiles/operations/{operation_id:path}")
 async def gemini_get_generated_file_operation(operation_id: str):
     operation = _gemini_get_operation(f"generatedFiles/operations/{operation_id}")
@@ -4460,6 +4465,7 @@ async def gemini_get_generated_file_operation(operation_id: str):
     return operation
 
 
+@app.post("/v1/generatedFiles/operations/{operation_id:path}:wait")
 @app.post("/v1beta/generatedFiles/operations/{operation_id:path}:wait")
 async def gemini_wait_generated_file_operation(operation_id: str):
     operation = _gemini_get_operation(f"generatedFiles/operations/{operation_id}")
@@ -4468,6 +4474,7 @@ async def gemini_wait_generated_file_operation(operation_id: str):
     return operation
 
 
+@app.post("/v1/generatedFiles/operations/{operation_id:path}:cancel")
 @app.post("/v1beta/generatedFiles/operations/{operation_id:path}:cancel")
 async def gemini_cancel_generated_file_operation(operation_id: str):
     operation = _gemini_get_operation(f"generatedFiles/operations/{operation_id}")
@@ -4476,6 +4483,7 @@ async def gemini_cancel_generated_file_operation(operation_id: str):
     return JSONResponse({})
 
 
+@app.delete("/v1/generatedFiles/operations/{operation_id:path}")
 @app.delete("/v1beta/generatedFiles/operations/{operation_id:path}")
 async def gemini_delete_generated_file_operation(operation_id: str):
     operation = _gemini_get_operation(f"generatedFiles/operations/{operation_id}")
@@ -4487,6 +4495,7 @@ async def gemini_delete_generated_file_operation(operation_id: str):
     return JSONResponse({})
 
 
+@app.get("/v1/generatedFiles/{generated_file_id:path}")
 @app.get("/v1beta/generatedFiles/{generated_file_id:path}")
 async def gemini_get_generated_file(generated_file_id: str):
     meta = _gemini_get_generated_file_meta(generated_file_id)
@@ -4495,6 +4504,7 @@ async def gemini_get_generated_file(generated_file_id: str):
     return _gemini_generated_file_resource(meta)
 
 
+@app.delete("/v1/generatedFiles/{generated_file_id:path}")
 @app.delete("/v1beta/generatedFiles/{generated_file_id:path}")
 async def gemini_delete_generated_file(generated_file_id: str):
     name = _gemini_generated_file_name(generated_file_id)
