@@ -344,7 +344,9 @@ Implemented Gemini-compatible routes:
 
 - `GET /v1beta/models`
 - `GET /v1beta/models/{model}`
+- `GET /v1beta/models/{model}/operations`
 - `GET /v1beta/models/{model}/operations/{operation}`
+- `POST /v1beta/models/{model}/operations/{operation}:wait`
 - `POST /v1beta/models/{model}/operations/{operation}:cancel`
 - `DELETE /v1beta/models/{model}/operations/{operation}`
 - `POST /v1beta/models/{model}:generateContent`
@@ -387,7 +389,9 @@ Implemented Gemini-compatible routes:
 - `GET /v1beta/generatedFiles/{generated_file}`
 - `GET /v1beta/generatedFiles/{generated_file}:download`
 - `DELETE /v1beta/generatedFiles/{generated_file}`
+- `GET /v1beta/generatedFiles/operations`
 - `GET /v1beta/generatedFiles/operations/{operation}`
+- `POST /v1beta/generatedFiles/operations/{operation}:wait`
 - `POST /v1beta/generatedFiles/operations/{operation}:cancel`
 - `DELETE /v1beta/generatedFiles/operations/{operation}`
 - `POST /v1beta/cachedContents`
@@ -422,6 +426,7 @@ Implemented Gemini-compatible routes:
 - `DELETE /v1beta/corpora/{corpus}/permissions/{permission}`
 - `GET /v1beta/operations`
 - `GET /v1beta/operations/{operation}`
+- `POST /v1beta/operations/{operation}:wait`
 - `POST /v1beta/operations/{operation}:cancel`
 - `DELETE /v1beta/operations/{operation}`
 - `POST /v1beta/fileSearchStores`
@@ -433,14 +438,18 @@ Implemented Gemini-compatible routes:
 - `GET /v1beta/fileSearchStores/{store}/documents`
 - `GET /v1beta/fileSearchStores/{store}/documents/{document}`
 - `GET /v1beta/fileSearchStores/{store}/media/{document}`
+- `GET /v1beta/fileSearchStores/{store}/operations`
 - `GET /v1beta/fileSearchStores/{store}/operations/{operation}`
+- `POST /v1beta/fileSearchStores/{store}/operations/{operation}:wait`
 - `POST /v1beta/fileSearchStores/{store}/operations/{operation}:cancel`
 - `DELETE /v1beta/fileSearchStores/{store}/operations/{operation}`
 - `DELETE /v1beta/fileSearchStores/{store}/documents/{document}`
 - `POST /v1beta/tunedModels`
 - `GET /v1beta/tunedModels`
 - `GET /v1beta/tunedModels/{tuned_model}`
+- `GET /v1beta/tunedModels/{tuned_model}/operations`
 - `GET /v1beta/tunedModels/{tuned_model}/operations/{operation}`
+- `POST /v1beta/tunedModels/{tuned_model}/operations/{operation}:wait`
 - `POST /v1beta/tunedModels/{tuned_model}/operations/{operation}:cancel`
 - `DELETE /v1beta/tunedModels/{tuned_model}/operations/{operation}`
 - `PATCH /v1beta/tunedModels/{tuned_model}`

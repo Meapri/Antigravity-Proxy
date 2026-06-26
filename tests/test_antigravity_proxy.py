@@ -328,7 +328,9 @@ def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
     assert seen["request"]["tools"] == [{"google_search": {}}]
 
 
-def test_gemini_predict_and_predict_long_running(monkeypatch):
+def test_gemini_predict_and_predict_long_running(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+
     class FakeClient:
         def generate_raw(self, *, request, model=""):
             return {"response": {"candidates": [{"content": {"parts": [{"text": request["contents"][0]["parts"][0]["text"]}]}}]}}
@@ -351,8 +353,14 @@ def test_gemini_predict_and_predict_long_running(monkeypatch):
 
     op_id = long_running.json()["name"].split("/", 1)[1]
     model_operation = client.get(f"/v1beta/models/gemini-3-flash-agent/operations/{op_id}")
+    model_operations = client.get("/v1beta/models/gemini-3-flash-agent/operations")
+    waited_operation = client.post(f"/v1beta/models/gemini-3-flash-agent/operations/{op_id}:wait")
     assert model_operation.status_code == 200
     assert model_operation.json()["name"] == long_running.json()["name"]
+    assert model_operations.status_code == 200
+    assert model_operations.json()["operations"][0]["name"] == long_running.json()["name"]
+    assert waited_operation.status_code == 200
+    assert waited_operation.json()["name"] == long_running.json()["name"]
 
 
 def test_gemini_legacy_text_message_answer_and_token_methods(monkeypatch):
@@ -428,6 +436,7 @@ def test_gemini_batch_generate_content_operation(tmp_path, monkeypatch):
 
     fetched = client.get(f"/v1beta/{operation['name']}")
     listed = client.get("/v1beta/operations")
+    waited = client.post(f"/v1beta/{operation['name']}:wait")
     batch_name = operation["metadata"]["batch"]
     batch = client.get(f"/v1beta/{batch_name}")
     batches = client.get("/v1beta/batches")
@@ -437,6 +446,8 @@ def test_gemini_batch_generate_content_operation(tmp_path, monkeypatch):
     assert fetched.json()["name"] == operation["name"]
     assert listed.status_code == 200
     assert listed.json()["operations"][0]["name"] == operation["name"]
+    assert waited.status_code == 200
+    assert waited.json()["name"] == operation["name"]
     assert batch.status_code == 200
     assert batch.json()["name"] == batch_name
     assert batch.json()["state"] == "JOB_STATE_SUCCEEDED"
@@ -847,9 +858,15 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     assert operation.json()["done"] is True
 
     nested_operation = client.get(f"/v1beta/fileSearchStores/{store_id}/{imported.json()['name']}")
+    nested_operations = client.get(f"/v1beta/fileSearchStores/{store_id}/operations")
+    waited_operation = client.post(f"/v1beta/fileSearchStores/{store_id}/{imported.json()['name']}:wait")
     media = client.get(f"/v1beta/fileSearchStores/{store_id}/media/{imported_doc['name'].rsplit('/', 1)[-1]}")
     assert nested_operation.status_code == 200
     assert nested_operation.json()["name"] == imported.json()["name"]
+    assert nested_operations.status_code == 200
+    assert nested_operations.json()["operations"][0]["name"] == imported.json()["name"]
+    assert waited_operation.status_code == 200
+    assert waited_operation.json()["name"] == imported.json()["name"]
     assert media.status_code == 200
     assert media.content == b"source document"
 
@@ -896,6 +913,7 @@ def test_gemini_file_search_tool_injects_local_context(tmp_path, monkeypatch):
 
 def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_TUNED_MODELS_DIR", str(tmp_path / "tuned"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
     seen = {}
 
     class FakeClient:
@@ -921,12 +939,18 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
 
     listed = client.get("/v1beta/tunedModels")
     fetched = client.get("/v1beta/tunedModels/my_tuned")
+    listed_operations = client.get("/v1beta/tunedModels/my_tuned/operations")
     fetched_operation = client.get(f"/v1beta/tunedModels/my_tuned/operations/{created_op_id}")
+    waited_operation = client.post(f"/v1beta/tunedModels/my_tuned/operations/{created_op_id}:wait")
     patched = client.patch("/v1beta/tunedModels/my_tuned", json={"description": "updated"})
     assert listed.status_code == 200
     assert fetched.json()["displayName"] == "My tuned"
+    assert listed_operations.status_code == 200
+    assert listed_operations.json()["operations"][0]["name"] == created.json()["name"]
     assert fetched_operation.status_code == 200
     assert fetched_operation.json()["name"] == created.json()["name"]
+    assert waited_operation.status_code == 200
+    assert waited_operation.json()["name"] == created.json()["name"]
     assert patched.json()["description"] == "updated"
 
     perm = client.post("/v1beta/tunedModels/my_tuned/permissions", json={
@@ -977,11 +1001,14 @@ def test_openai_image_generation_registers_gemini_generated_file(tmp_path, monke
     assert created.status_code == 200
     generated_name = created.json()["data"][0]["generated_file"]
     listed = client.get("/v1beta/generatedFiles")
+    operations = client.get("/v1beta/generatedFiles/operations")
     fetched = client.get(f"/v1beta/{generated_name}")
     downloaded = client.get(f"/v1beta/{generated_name}:download")
 
     assert listed.status_code == 200
     assert listed.json()["generatedFiles"][0]["name"] == generated_name
+    assert operations.status_code == 200
+    assert operations.json()["operations"][0]["metadata"]["generatedFile"] == generated_name
     assert fetched.status_code == 200
     assert fetched.json()["mimeType"] == "image/png"
     assert downloaded.status_code == 200
