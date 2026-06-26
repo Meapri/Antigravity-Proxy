@@ -798,6 +798,9 @@ Live API:
 - The Gemini Live WebSocket envelope is implemented for text turn flows:
   `setup` returns `setupComplete`, and `clientContent` with `turnComplete`
   produces `serverContent.modelTurn`.
+- Live `setup` forwards `systemInstruction`, `generationConfig`,
+  `safetySettings`, `tools`, and `toolConfig`; `response_format` wrappers are
+  normalized into `generationConfig` before generation.
 - Realtime audio/video `realtimeInput` is explicitly rejected with
   `UNIMPLEMENTED` because the current Antigravity backend is request/response
   oriented and does not expose native bidirectional media streaming.

@@ -879,6 +879,7 @@ async def _gemini_live_generate(
     setup: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     model = _resolve_gemini_model(model_name)
+    setup = _gemini_apply_response_format(setup)
     body: dict[str, Any] = {"contents": history}
     for key in ("systemInstruction", "generationConfig", "safetySettings", "tools", "toolConfig"):
         if key in setup:
@@ -889,7 +890,11 @@ async def _gemini_live_generate(
         request=body,
         model=str(model["antigravity_model"]),
     )
-    response = _gemini_unwrap_response(data)
+    response = _gemini_finalize_generate_response(
+        _gemini_unwrap_response(data),
+        model_name=model_name,
+        request_body=body,
+    )
     candidates = response.get("candidates") or []
     model_turn = None
     if candidates and isinstance(candidates[0], dict) and isinstance(candidates[0].get("content"), dict):

@@ -1272,7 +1272,17 @@ def test_gemini_live_websocket_text_turn(monkeypatch):
     client = TestClient(proxy.app)
 
     with client.websocket_connect("/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent") as ws:
-        ws.send_json({"setup": {"model": "models/gemini-3-flash-agent"}})
+        ws.send_json({
+            "setup": {
+                "model": "models/gemini-3-flash-agent",
+                "system_instruction": {"parts": [{"text": "be terse"}]},
+                "generation_config": {"max_output_tokens": 8},
+                "response_format": {
+                    "mime_type": "application/json",
+                    "schema": {"properties": {"ok": {"type": "boolean"}}},
+                },
+            }
+        })
         assert ws.receive_json() == {"setupComplete": {}}
         ws.send_json({
             "clientContent": {
@@ -1284,8 +1294,16 @@ def test_gemini_live_websocket_text_turn(monkeypatch):
 
     assert seen["model"] == "gemini-3-flash-agent"
     assert seen["request"]["contents"][0]["parts"][0]["text"] == "hello live"
+    assert seen["request"]["systemInstruction"]["parts"][0]["text"] == "be terse"
+    assert seen["request"]["generationConfig"]["maxOutputTokens"] == 8
+    assert seen["request"]["generationConfig"]["responseMimeType"] == "application/json"
+    assert seen["request"]["generationConfig"]["responseSchema"] == {
+        "properties": {"ok": {"type": "boolean"}},
+        "type": "object",
+    }
     assert response["serverContent"]["turnComplete"] is True
     assert response["serverContent"]["modelTurn"]["parts"][0]["text"] == "live ok"
+    assert response["serverContent"]["usageMetadata"]["totalTokenCount"] > 0
 
 
 def test_gemini_live_websocket_accepts_query_api_key(monkeypatch):
