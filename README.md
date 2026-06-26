@@ -844,7 +844,12 @@ Generated files:
   download generated media.
 - Gemini image model calls through `generateContent`, `generateImages`, and
   `predict` are mapped to Antigravity image generation and return inline/base64
-  image payloads plus local `generatedFiles/*` metadata.
+  image payloads plus local `generatedFiles/*` metadata. Image options are
+  accepted from top-level fields, `config`, `generationConfig`, `parameters`,
+  or nested `imageConfig`, including snake_case aliases for `aspectRatio`,
+  `imageSize`, `numberOfImages`, and `sampleCount`. `generateImages` repeats
+  the local generation call up to 8 images when `numberOfImages` or
+  `sampleCount` is provided.
 - Generated files are stored locally under `data/gemini_generated_files`;
   override with `ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR`.
 

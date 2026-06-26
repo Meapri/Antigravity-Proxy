@@ -410,6 +410,10 @@ _GEMINI_KEY_ALIASES = {
     "response_modalities": "responseModalities",
     "media_resolution": "mediaResolution",
     "image_config": "imageConfig",
+    "aspect_ratio": "aspectRatio",
+    "image_size": "imageSize",
+    "number_of_images": "numberOfImages",
+    "sample_count": "sampleCount",
     "speech_config": "speechConfig",
     "routing_config": "routingConfig",
     "embed_content_config": "embedContentConfig",
@@ -1263,6 +1267,32 @@ def _gemini_image_prompt_from_body(body: dict[str, Any]) -> str:
     return ""
 
 
+def _gemini_image_options_from_body(body: dict[str, Any]) -> dict[str, Any]:
+    options: dict[str, Any] = {}
+    for key in ("parameters", "generationConfig", "config"):
+        value = body.get(key)
+        if not isinstance(value, dict):
+            continue
+        normalized = _gemini_normalize_request(value)
+        options.update(normalized)
+        image_config = normalized.get("imageConfig")
+        if isinstance(image_config, dict):
+            options.update(_gemini_normalize_request(image_config))
+    for key in ("aspectRatio", "imageSize", "numberOfImages", "sampleCount"):
+        if body.get(key) is not None:
+            options[key] = body[key]
+    return options
+
+
+def _gemini_image_count(body: dict[str, Any]) -> int:
+    options = _gemini_image_options_from_body(body)
+    raw_count = options.get("numberOfImages", options.get("sampleCount", 1))
+    count = _gemini_int_value(raw_count)
+    if not isinstance(count, int) or isinstance(count, bool):
+        return 1
+    return max(1, min(count, 8))
+
+
 async def _gemini_generate_image_payload(model_name: str, body: dict[str, Any]) -> dict[str, Any]:
     model = _resolve_gemini_model(model_name)
     if not _model_capabilities(model)["image_generation"]:
@@ -1270,20 +1300,15 @@ async def _gemini_generate_image_payload(model_name: str, body: dict[str, Any]) 
     prompt = _gemini_image_prompt_from_body(body)
     if not prompt:
         raise HTTPException(status_code=400, detail="Image generation requires a prompt or text content.")
-    config = body.get("generationConfig") if isinstance(body.get("generationConfig"), dict) else {}
-    parameters = body.get("parameters") if isinstance(body.get("parameters"), dict) else {}
+    options = _gemini_image_options_from_body(body)
     aspect_ratio = (
         body.get("aspectRatio")
-        or body.get("aspect_ratio")
-        or config.get("aspectRatio")
-        or parameters.get("aspectRatio")
+        or options.get("aspectRatio")
         or "square"
     )
     image_size = (
         body.get("imageSize")
-        or body.get("image_size")
-        or config.get("imageSize")
-        or parameters.get("imageSize")
+        or options.get("imageSize")
         or "1K"
     )
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -6745,15 +6770,18 @@ async def gemini_generate_images(model_name: str, request: Request):
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
-        image = await _gemini_generate_image_payload(model_name, body)
-        return {
-            "generatedImages": [{
+        generated_images = []
+        for _ in range(_gemini_image_count(body)):
+            image = await _gemini_generate_image_payload(model_name, body)
+            generated_images.append({
                 "image": {
                     "imageBytes": image["base64"],
                     "mimeType": image["mimeType"],
                 },
                 "generatedFile": image["generatedFile"],
-            }]
+            })
+        return {
+            "generatedImages": generated_images
         }
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"

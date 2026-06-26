@@ -2744,9 +2744,11 @@ def test_openai_image_generation_registers_gemini_generated_file(tmp_path, monke
 def test_gemini_image_model_generate_content_predict_and_generate_images(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR", str(tmp_path / "generated"))
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    image_calls = []
 
     class FakeClient:
         def generate_image(self, *, prompt, output_dir, aspect_ratio="", image_size=""):
+            image_calls.append({"prompt": prompt, "aspect_ratio": aspect_ratio, "image_size": image_size})
             output = output_dir / "gemini-image.png"
             output.write_bytes(b"gemini-image")
             return output
@@ -2756,12 +2758,15 @@ def test_gemini_image_model_generate_content_predict_and_generate_images(tmp_pat
 
     content = client.post("/v1beta/models/gemini-image-latest:generateContent", json={
         "contents": [{"role": "user", "parts": [{"text": "draw image"}]}],
+        "generation_config": {"image_config": {"aspect_ratio": "16:9", "image_size": "2K"}},
     })
     predict = client.post("/v1beta/models/gemini-image-latest:predict", json={
         "instances": [{"prompt": "draw predict"}],
+        "parameters": {"aspect_ratio": "1:1", "image_size": "1K"},
     })
     generated = client.post("/v1beta/models/gemini-image-latest:generateImages", json={
         "prompt": "draw generated",
+        "config": {"aspect_ratio": "9:16", "image_size": "2K", "number_of_images": "2"},
     })
 
     assert content.status_code == 200
@@ -2775,13 +2780,20 @@ def test_gemini_image_model_generate_content_predict_and_generate_images(tmp_pat
     assert predict.json()["predictions"][0]["generatedFile"].startswith("generatedFiles/")
 
     assert generated.status_code == 200
+    assert len(generated.json()["generatedImages"]) == 2
     generated_image = generated.json()["generatedImages"][0]
     assert generated_image["image"]["imageBytes"]
     assert generated_image["generatedFile"]["name"].startswith("generatedFiles/")
+    assert image_calls == [
+        {"prompt": "draw image", "aspect_ratio": "16:9", "image_size": "2K"},
+        {"prompt": "draw predict", "aspect_ratio": "1:1", "image_size": "1K"},
+        {"prompt": "draw generated", "aspect_ratio": "9:16", "image_size": "2K"},
+        {"prompt": "draw generated", "aspect_ratio": "9:16", "image_size": "2K"},
+    ]
 
     listed = client.get("/v1beta/generatedFiles")
     assert listed.status_code == 200
-    assert len(listed.json()["generatedFiles"]) == 3
+    assert len(listed.json()["generatedFiles"]) == 4
 
 
 def test_admin_refresh_requires_configured_api_key(monkeypatch):
