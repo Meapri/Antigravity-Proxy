@@ -365,6 +365,10 @@ _GEMINI_KEY_ALIASES = {
     "image_config": "imageConfig",
     "speech_config": "speechConfig",
     "routing_config": "routingConfig",
+    "display_name": "displayName",
+    "target_uri": "targetUri",
+    "event_types": "eventTypes",
+    "webhook_secret": "webhookSecret",
     "function_declarations": "functionDeclarations",
     "function_calling_config": "functionCallingConfig",
     "allowed_function_names": "allowedFunctionNames",
@@ -1030,6 +1034,57 @@ def _gemini_store_interaction(interaction: dict[str, Any]) -> dict[str, Any]:
 
 def _gemini_get_interaction(name: str) -> dict[str, Any] | None:
     return _gemini_load_interactions_index().get(_gemini_interaction_name(name))
+
+
+def _gemini_webhooks_root() -> Path:
+    return Path(os.getenv("ANTIGRAVITY_GEMINI_WEBHOOKS_DIR", "data/gemini_webhooks")).expanduser()
+
+
+def _gemini_webhooks_index_path() -> Path:
+    return _gemini_webhooks_root() / "index.json"
+
+
+def _gemini_load_webhooks_index() -> dict[str, dict[str, Any]]:
+    path = _gemini_webhooks_index_path()
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        log.warning("Failed to read Gemini webhooks index; starting empty.")
+        return {}
+
+
+def _gemini_save_webhooks_index(index: dict[str, dict[str, Any]]) -> None:
+    root = _gemini_webhooks_root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = _gemini_webhooks_index_path()
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _gemini_webhook_name(name: str) -> str:
+    key = name.strip().strip("/")
+    if key.startswith("v1beta/"):
+        key = key[len("v1beta/"):]
+    if key.startswith("webhooks/"):
+        return key
+    return "webhooks/" + key
+
+
+def _gemini_store_webhook(webhook: dict[str, Any]) -> dict[str, Any]:
+    index = _gemini_load_webhooks_index()
+    index[webhook["name"]] = webhook
+    _gemini_save_webhooks_index(index)
+    return webhook
+
+
+def _gemini_get_webhook(name: str) -> dict[str, Any] | None:
+    return _gemini_load_webhooks_index().get(_gemini_webhook_name(name))
 
 
 def _gemini_generated_files_root() -> Path:
@@ -2403,6 +2458,7 @@ def _gemini_stable_alias_path(path: str) -> str:
         "interactions",
         "operations",
         "tunedModels",
+        "webhooks",
     )
     if suffix.startswith(stable_prefixes):
         return "/v1beta/" + suffix
@@ -5438,6 +5494,95 @@ async def gemini_delete_batch(batch_id: str):
         return _gemini_error_response(f"Batch '{batch_id}' not found.", status_code=404, status="NOT_FOUND")
     index.pop(name, None)
     _gemini_save_batches_index(index)
+    return JSONResponse({})
+
+
+@app.post("/v1beta/webhooks")
+async def gemini_create_webhook(request: Request):
+    """Gemini-compatible webhooks.create stored locally.
+
+    The proxy preserves webhook configuration for clients that manage Gemini
+    polling alternatives. It does not independently deliver callback events.
+    """
+    try:
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        webhook = body.get("webhook") if isinstance(body.get("webhook"), dict) else body
+        name = webhook.get("name")
+        if isinstance(name, str) and name.strip():
+            resource_name = _gemini_webhook_name(name)
+        else:
+            resource_name = "webhooks/webhook_" + uuid.uuid4().hex
+        now = _gemini_now_iso()
+        resource = dict(webhook)
+        resource["name"] = resource_name
+        resource.setdefault("displayName", resource_name.rsplit("/", 1)[-1])
+        resource.setdefault("createTime", now)
+        resource["updateTime"] = now
+        resource.setdefault("state", "ACTIVE")
+        resource.setdefault("eventTypes", resource.get("events") or [])
+        return _gemini_store_webhook(resource)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+
+
+@app.get("/v1beta/webhooks")
+async def gemini_list_webhooks(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+    webhooks = list(_gemini_load_webhooks_index().values())
+    webhooks.sort(key=lambda item: item.get("name") or "")
+    start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
+    end = start + pageSize
+    return {"webhooks": webhooks[start:end], "nextPageToken": str(end) if end < len(webhooks) else ""}
+
+
+@app.get("/v1beta/webhooks/{webhook_id:path}")
+async def gemini_get_webhook(webhook_id: str):
+    webhook = _gemini_get_webhook(webhook_id)
+    if not webhook:
+        return _gemini_error_response(f"Webhook '{webhook_id}' not found.", status_code=404, status="NOT_FOUND")
+    return webhook
+
+
+@app.patch("/v1beta/webhooks/{webhook_id:path}")
+async def gemini_patch_webhook(webhook_id: str, request: Request, updateMask: str | None = None):
+    try:
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        patch = body.get("webhook") if isinstance(body.get("webhook"), dict) else body
+        name = _gemini_webhook_name(webhook_id)
+        index = _gemini_load_webhooks_index()
+        webhook = index.get(name)
+        if not webhook:
+            raise HTTPException(status_code=404, detail=f"Webhook '{webhook_id}' not found.")
+        fields = [field.strip() for field in (updateMask or "").split(",") if field.strip()]
+        if fields:
+            for field in fields:
+                if field in patch:
+                    webhook[field] = patch[field]
+        else:
+            for key, value in patch.items():
+                if key not in {"name", "createTime"}:
+                    webhook[key] = value
+        webhook["updateTime"] = _gemini_now_iso()
+        index[name] = webhook
+        _gemini_save_webhooks_index(index)
+        return webhook
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+
+
+@app.delete("/v1beta/webhooks/{webhook_id:path}")
+async def gemini_delete_webhook(webhook_id: str):
+    name = _gemini_webhook_name(webhook_id)
+    index = _gemini_load_webhooks_index()
+    if name not in index:
+        return _gemini_error_response(f"Webhook '{webhook_id}' not found.", status_code=404, status="NOT_FOUND")
+    index.pop(name, None)
+    _gemini_save_webhooks_index(index)
     return JSONResponse({})
 
 

@@ -718,6 +718,46 @@ def test_gemini_interactions_accept_content_item_aliases_and_image_model(tmp_pat
     assert client.get(f"/v1beta/{body['name']}").status_code == 404
 
 
+def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_WEBHOOKS_DIR", str(tmp_path / "webhooks"))
+    client = TestClient(proxy.app)
+
+    created = client.post("/v1beta/webhooks", json={
+        "webhook": {
+            "display_name": "Batch updates",
+            "target_uri": "https://example.test/hook",
+            "event_types": ["batches.completed"],
+        }
+    })
+    assert created.status_code == 200
+    webhook = created.json()
+    assert webhook["name"].startswith("webhooks/")
+    assert webhook["displayName"] == "Batch updates"
+    assert webhook["targetUri"] == "https://example.test/hook"
+    assert webhook["eventTypes"] == ["batches.completed"]
+    assert webhook["state"] == "ACTIVE"
+
+    fetched = client.get(f"/v1/{webhook['name']}")
+    listed = client.get("/v1/webhooks?page_size=1&page_token=0")
+    patched = client.patch(f"/v1/{webhook['name']}?update_mask=displayName", json={
+        "display_name": "Renamed",
+        "target_uri": "https://example.test/ignored",
+    })
+
+    assert fetched.status_code == 200
+    assert fetched.json()["name"] == webhook["name"]
+    assert listed.status_code == 200
+    assert listed.json()["webhooks"][0]["name"] == webhook["name"]
+    assert patched.status_code == 200
+    assert patched.json()["displayName"] == "Renamed"
+    assert patched.json()["targetUri"] == "https://example.test/hook"
+
+    deleted = client.delete(f"/v1beta/{webhook['name']}")
+    missing = client.get(f"/v1beta/{webhook['name']}")
+    assert deleted.status_code == 200
+    assert missing.status_code == 404
+
+
 def test_gemini_live_websocket_text_turn(monkeypatch):
     seen = {}
 
