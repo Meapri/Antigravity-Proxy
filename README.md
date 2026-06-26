@@ -745,7 +745,8 @@ merges local cached content into the outgoing Antigravity request because the
 upstream internal endpoint does not expose public Gemini cache objects.
 Create and patch calls also accept SDK wrapper bodies like
 `{"cachedContent": {"ttl": "3600s"}}`; patch supports Gemini-style `ttl` or
-`expireTime` updates with `update_mask=ttl` / `updateMask=expireTime`.
+`expireTime` updates with `update_mask=ttl` / `updateMask=expireTime`, or with
+`updateMask` / `update_mask` inside the SDK wrapper body.
 Cached content creation uses the same SDK-friendly normalization as
 `generateContent`, including string `contents`, `config`, single
 `safetySettings`, and shortcut `toolConfig` forms.

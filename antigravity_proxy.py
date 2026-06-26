@@ -418,6 +418,7 @@ _GEMINI_KEY_ALIASES = {
     "task_type": "taskType",
     "display_name": "displayName",
     "target_uri": "targetUri",
+    "update_mask": "updateMask",
     "event_types": "eventTypes",
     "subscribed_events": "subscribedEvents",
     "webhook_secret": "webhookSecret",
@@ -1570,7 +1571,7 @@ def _gemini_batch_body(body: Any) -> Any:
     for key in ("batch", "generateContentBatch", "embedContentBatch"):
         if isinstance(body.get(key), dict):
             merged = dict(body[key])
-            for outer_key in ("model", "displayName", "inputConfig", "outputConfig", "requests"):
+            for outer_key in ("model", "displayName", "inputConfig", "outputConfig", "requests", "updateMask"):
                 if outer_key in body and outer_key not in merged:
                     merged[outer_key] = body[outer_key]
             merged["_batchKind"] = "embed" if key == "embedContentBatch" else "generate"
@@ -2510,7 +2511,7 @@ def _gemini_cached_body(body: Any) -> dict[str, Any]:
     wrapped = normalized.get("cachedContent")
     if isinstance(wrapped, dict):
         merged = dict(wrapped)
-        for key in ("ttl", "expireTime"):
+        for key in ("ttl", "expireTime", "updateMask"):
             if key in normalized and key not in merged:
                 merged[key] = normalized[key]
         normalized = merged
@@ -2571,6 +2572,7 @@ def _gemini_create_cached_content(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _gemini_patch_cached_meta(meta: dict[str, Any], body: dict[str, Any], update_mask: str | None) -> dict[str, Any]:
+    update_mask = update_mask or body.pop("updateMask", None)
     fields = _gemini_cached_update_mask(update_mask)
     if fields is None:
         fields = {key for key in ("ttl", "expireTime") if key in body}
@@ -6963,6 +6965,7 @@ def _gemini_patch_batch(batch_id: str, body: dict[str, Any], update_mask: str | 
     body = _gemini_batch_body(body)
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+    update_mask = update_mask or body.pop("updateMask", None)
     fields = _gemini_batch_update_fields(update_mask, body)
     if not fields:
         raise HTTPException(status_code=400, detail="batch update requires displayName or priority.")
@@ -7104,15 +7107,37 @@ async def gemini_patch_webhook(webhook_id: str, request: Request, updateMask: st
         webhook = index.get(name)
         if not webhook:
             raise HTTPException(status_code=404, detail=f"Webhook '{webhook_id}' not found.")
-        fields = [field.strip() for field in (updateMask or "").split(",") if field.strip()]
+        updateMask = updateMask or patch.pop("updateMask", None) or body.pop("updateMask", None)
+        field_aliases = {
+            "display_name": "displayName",
+            "target_uri": "targetUri",
+            "event_types": "eventTypes",
+            "subscribed_events": "subscribedEvents",
+            "webhook.display_name": "displayName",
+            "webhook.target_uri": "targetUri",
+            "webhook.event_types": "eventTypes",
+            "webhook.subscribed_events": "subscribedEvents",
+        }
+        fields = []
+        for raw_field in (updateMask or "").split(","):
+            raw_field = raw_field.strip()
+            if raw_field:
+                fields.append(field_aliases.get(raw_field, field_aliases.get(raw_field.rsplit(".", 1)[-1], raw_field)))
+        updated_fields: set[str] = set()
         if fields:
             for field in fields:
                 if field in patch:
                     webhook[field] = patch[field]
+                    updated_fields.add(field)
         else:
             for key, value in patch.items():
                 if key not in {"name", "createTime"}:
                     webhook[key] = value
+                    updated_fields.add(key)
+        if "targetUri" in updated_fields and "uri" not in updated_fields:
+            webhook["uri"] = webhook["targetUri"]
+        elif "uri" in updated_fields and "targetUri" not in updated_fields:
+            webhook["targetUri"] = webhook["uri"]
         if "uri" in webhook or "targetUri" in webhook:
             webhook["uri"] = _gemini_webhook_uri(webhook)
             webhook["targetUri"] = webhook["uri"]

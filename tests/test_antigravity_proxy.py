@@ -1212,6 +1212,10 @@ def test_gemini_snake_case_query_aliases(tmp_path, monkeypatch):
     priority = client.patch(f"/v1beta/{first['name']}:updateGenerateContentBatch?updateMask=priority", json={
         "priority": "7",
     })
+    body_masked = client.patch(f"/v1beta/{first['name']}:updateGenerateContentBatch", json={
+        "update_mask": "display_name",
+        "generateContentBatch": {"displayName": "body masked"},
+    })
     bad_patch = client.patch(f"/v1beta/{first['name']}:updateGenerateContentBatch?updateMask=state", json={
         "state": "BATCH_STATE_CANCELLED",
     })
@@ -1223,6 +1227,8 @@ def test_gemini_snake_case_query_aliases(tmp_path, monkeypatch):
     assert patched.json()["metadata"]["batchResource"]["displayName"] == "patched"
     assert priority.status_code == 200
     assert priority.json()["metadata"]["batchResource"]["priority"] == "7"
+    assert body_masked.status_code == 200
+    assert body_masked.json()["metadata"]["batchResource"]["displayName"] == "body masked"
     assert bad_patch.status_code == 400
 
 
@@ -1462,6 +1468,11 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
         "display_name": "Renamed",
         "target_uri": "https://example.test/ignored",
     })
+    body_masked = client.patch(f"/v1/{webhook['name']}", json={
+        "update_mask": "targetUri",
+        "display_name": "Ignored by mask",
+        "target_uri": "https://example.test/body-mask",
+    })
 
     assert fetched.status_code == 200
     assert fetched.json()["name"] == webhook["name"]
@@ -1471,6 +1482,9 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
     assert patched.status_code == 200
     assert patched.json()["displayName"] == "Renamed"
     assert patched.json()["targetUri"] == "https://example.test/hook"
+    assert body_masked.status_code == 200
+    assert body_masked.json()["displayName"] == "Renamed"
+    assert body_masked.json()["targetUri"] == "https://example.test/body-mask"
 
     malformed = client.patch(
         f"/v1/{webhook['name']}",
@@ -1976,6 +1990,13 @@ def test_gemini_cached_contents_merge_into_generate_request(tmp_path, monkeypatc
     assert patched.status_code == 200
     assert patched.json()["ttl"] == "120s"
     assert patched.json()["expireTime"]
+
+    patched_body_mask = client.patch(f"/v1beta/{cache_name}", json={
+        "update_mask": "ttl",
+        "cachedContent": {"ttl": "150s"},
+    })
+    assert patched_body_mask.status_code == 200
+    assert patched_body_mask.json()["ttl"] == "150s"
 
     patched_expire = client.patch(f"/v1beta/{cache_name}?updateMask=expireTime", json={
         "expireTime": "2099-01-01T00:00:00Z"
