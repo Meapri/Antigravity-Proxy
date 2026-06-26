@@ -175,7 +175,8 @@ def test_gemini_models_and_count_tokens():
     image = client.get("/v1beta/models/gemini-3.1-flash-image")
     assert image.status_code == 200
     assert "predict" in image.json()["supportedGenerationMethods"]
-    assert "generateContent" not in image.json()["supportedGenerationMethods"]
+    assert "generateContent" in image.json()["supportedGenerationMethods"]
+    assert "generateImages" in image.json()["supportedGenerationMethods"]
     assert image.json()["capabilities"]["imageGeneration"] is True
 
     counted = client.post("/v1beta/models/gemini-3-flash-agent:countTokens", json={
@@ -1122,6 +1123,49 @@ def test_openai_image_generation_registers_gemini_generated_file(tmp_path, monke
     assert fetched.json()["mimeType"] == "image/png"
     assert downloaded.status_code == 200
     assert downloaded.content == b"fake-png"
+
+
+def test_gemini_image_model_generate_content_predict_and_generate_images(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR", str(tmp_path / "generated"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+
+    class FakeClient:
+        def generate_image(self, *, prompt, output_dir, aspect_ratio="", image_size=""):
+            output = output_dir / "gemini-image.png"
+            output.write_bytes(b"gemini-image")
+            return output
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    content = client.post("/v1beta/models/gemini-image-latest:generateContent", json={
+        "contents": [{"role": "user", "parts": [{"text": "draw image"}]}],
+    })
+    predict = client.post("/v1beta/models/gemini-image-latest:predict", json={
+        "instances": [{"prompt": "draw predict"}],
+    })
+    generated = client.post("/v1beta/models/gemini-image-latest:generateImages", json={
+        "prompt": "draw generated",
+    })
+
+    assert content.status_code == 200
+    inline = content.json()["candidates"][0]["content"]["parts"][0]["inlineData"]
+    assert inline["mimeType"] == "image/png"
+    assert inline["data"]
+    assert content.json()["generatedFile"].startswith("generatedFiles/")
+
+    assert predict.status_code == 200
+    assert predict.json()["predictions"][0]["bytesBase64Encoded"]
+    assert predict.json()["predictions"][0]["generatedFile"].startswith("generatedFiles/")
+
+    assert generated.status_code == 200
+    generated_image = generated.json()["generatedImages"][0]
+    assert generated_image["image"]["imageBytes"]
+    assert generated_image["generatedFile"]["name"].startswith("generatedFiles/")
+
+    listed = client.get("/v1beta/generatedFiles")
+    assert listed.status_code == 200
+    assert len(listed.json()["generatedFiles"]) == 3
 
 
 def test_admin_refresh_requires_configured_api_key(monkeypatch):

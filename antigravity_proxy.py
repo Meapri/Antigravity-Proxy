@@ -23,6 +23,7 @@ import re
 import secrets
 import sqlite3
 import time
+import tempfile
 import uuid
 from urllib.parse import parse_qsl, urlencode
 from contextlib import asynccontextmanager
@@ -281,7 +282,7 @@ def _gemini_model_name(model: dict[str, Any]) -> str:
 def _gemini_model_resource(model: dict[str, Any]) -> dict[str, Any]:
     caps = _model_capabilities(model)
     if caps["image_generation"]:
-        methods = ["predict", "predictLongRunning"]
+        methods = ["generateContent", "generateImages", "predict", "predictLongRunning"]
         input_limit = 32768
         output_limit = 8192
     elif caps["internal"]:
@@ -463,6 +464,89 @@ def _gemini_response_text(response: dict[str, Any]) -> str:
             if isinstance(part, dict) and part.get("text") is not None:
                 texts.append(str(part["text"]))
     return "".join(texts)
+
+
+def _gemini_image_prompt_from_body(body: dict[str, Any]) -> str:
+    contents = body.get("contents")
+    if isinstance(contents, list):
+        texts = [_gemini_content_text(content) for content in contents if isinstance(content, dict)]
+        prompt = "\n".join(text for text in texts if text.strip()).strip()
+        if prompt:
+            return prompt
+    instances = body.get("instances")
+    if isinstance(instances, list) and instances:
+        first = instances[0]
+        if isinstance(first, dict):
+            for key in ("prompt", "text", "content"):
+                if first.get(key) is not None:
+                    return _msg_text(first[key]).strip()
+        return _msg_text(first).strip()
+    for key in ("prompt", "text"):
+        if body.get(key) is not None:
+            return _msg_text(body[key]).strip()
+    return ""
+
+
+async def _gemini_generate_image_payload(model_name: str, body: dict[str, Any]) -> dict[str, Any]:
+    model = _resolve_gemini_model(model_name)
+    if not _model_capabilities(model)["image_generation"]:
+        raise HTTPException(status_code=400, detail=f"Model '{model_name}' is not an image generation model.")
+    prompt = _gemini_image_prompt_from_body(body)
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Image generation requires a prompt or text content.")
+    config = body.get("generationConfig") if isinstance(body.get("generationConfig"), dict) else {}
+    parameters = body.get("parameters") if isinstance(body.get("parameters"), dict) else {}
+    aspect_ratio = (
+        body.get("aspectRatio")
+        or body.get("aspect_ratio")
+        or config.get("aspectRatio")
+        or parameters.get("aspectRatio")
+        or "square"
+    )
+    image_size = (
+        body.get("imageSize")
+        or body.get("image_size")
+        or config.get("imageSize")
+        or parameters.get("imageSize")
+        or "1K"
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = await asyncio.to_thread(
+            _get_client().generate_image,
+            prompt=prompt,
+            output_dir=Path(tmpdir),
+            aspect_ratio=str(aspect_ratio),
+            image_size=str(image_size),
+        )
+        image_bytes = output_path.read_bytes()
+        mime_type = mimetypes.guess_type(str(output_path))[0] or "image/png"
+    image_b64 = base64.b64encode(image_bytes).decode("ascii")
+    generated_file = _gemini_store_generated_file(
+        image_bytes,
+        mime_type=mime_type,
+        display_name=Path(str(output_path)).name,
+    )
+    operation = {
+        "name": "operations/generateImage-" + uuid.uuid4().hex,
+        "metadata": {
+            "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.GenerateImageMetadata",
+            "model": _gemini_model_name(model),
+            "generatedFile": generated_file["name"],
+        },
+        "done": True,
+        "response": {
+            "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.GeneratedFile",
+            **generated_file,
+        },
+    }
+    _gemini_store_operation(operation)
+    return {
+        "prompt": prompt,
+        "mimeType": mime_type,
+        "base64": image_b64,
+        "generatedFile": generated_file,
+        "operation": operation,
+    }
 
 
 def _gemini_message_to_content(message: Any) -> dict[str, Any] | None:
@@ -4816,6 +4900,16 @@ async def gemini_predict(model_name: str, request: Request):
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        if _model_capabilities(model)["image_generation"]:
+            image = await _gemini_generate_image_payload(model_name, body)
+            return {
+                "predictions": [{
+                    "bytesBase64Encoded": image["base64"],
+                    "mimeType": image["mimeType"],
+                    "generatedFile": image["generatedFile"]["name"],
+                }],
+                "deployedModelId": _gemini_model_name(model),
+            }
         request_body = _gemini_predict_to_generate_body(body)
         request_body = _gemini_apply_cached_content(request_body)
         request_body = _gemini_apply_file_search(request_body)
@@ -4833,6 +4927,31 @@ async def gemini_predict(model_name: str, request: Request):
     except Exception as exc:
         log.exception("Gemini predict failed")
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
+
+
+@app.post("/v1beta/models/{model_name:path}:generateImages")
+async def gemini_generate_images(model_name: str, request: Request):
+    """Gemini/Imagen-compatible generateImages endpoint backed by Antigravity image generation."""
+    try:
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        image = await _gemini_generate_image_payload(model_name, body)
+        return {
+            "generatedImages": [{
+                "image": {
+                    "imageBytes": image["base64"],
+                    "mimeType": image["mimeType"],
+                },
+                "generatedFile": image["generatedFile"],
+            }]
+        }
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini generateImages failed")
+        return _gemini_error_response(f"Antigravity image generation error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
 @app.post("/v1beta/models/{model_name:path}:predictLongRunning")
@@ -4962,6 +5081,23 @@ async def gemini_generate_content(model_name: str, request: Request):
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        if _model_capabilities(model)["image_generation"]:
+            image = await _gemini_generate_image_payload(model_name, body)
+            return JSONResponse({
+                "candidates": [{
+                    "content": {
+                        "role": "model",
+                        "parts": [{
+                            "inlineData": {
+                                "mimeType": image["mimeType"],
+                                "data": image["base64"],
+                            }
+                        }],
+                    },
+                    "finishReason": "STOP",
+                }],
+                "generatedFile": image["generatedFile"]["name"],
+            })
         body = _gemini_apply_cached_content(body)
         body = _gemini_apply_file_search(body)
         body = _gemini_inline_local_files(body)

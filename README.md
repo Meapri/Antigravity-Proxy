@@ -368,6 +368,7 @@ Implemented Gemini-compatible routes:
 - `POST /v1beta/models/{model}:generateText`
 - `POST /v1beta/models/{model}:generateMessage`
 - `POST /v1beta/models/{model}:generateAnswer`
+- `POST /v1beta/models/{model}:generateImages`
 - `POST /v1beta/models/{model}:predict`
 - `POST /v1beta/models/{model}:predictLongRunning`
 - `POST /v1beta/interactions`
@@ -592,6 +593,9 @@ Generated files:
 - OpenAI-compatible image generation also stores each image as a local Gemini
   `generatedFiles/*` resource so Gemini-style clients can list, fetch, and
   download generated media.
+- Gemini image model calls through `generateContent`, `generateImages`, and
+  `predict` are mapped to Antigravity image generation and return inline/base64
+  image payloads plus local `generatedFiles/*` metadata.
 - Generated files are stored locally under `data/gemini_generated_files`;
   override with `ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR`.
 
