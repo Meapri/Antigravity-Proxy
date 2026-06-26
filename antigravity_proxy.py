@@ -961,6 +961,94 @@ def _gemini_import_file_to_fss(store_name: str, body: dict[str, Any]) -> dict[st
     )
 
 
+def _gemini_extract_search_query(body: dict[str, Any]) -> str:
+    contents = body.get("contents") if isinstance(body.get("contents"), list) else []
+    for turn in reversed(contents):
+        if isinstance(turn, dict):
+            text = _gemini_content_text(turn)
+            if text.strip():
+                return text.strip()
+    return ""
+
+
+def _gemini_file_search_store_names(tool: dict[str, Any]) -> list[str]:
+    search_cfg = (
+        tool.get("file_search")
+        or tool.get("fileSearch")
+        or tool.get("fileSearchRetrieval")
+        or tool.get("file_search_retrieval")
+        or {}
+    )
+    names: list[str] = []
+    if isinstance(search_cfg, dict):
+        for key in ("fileSearchStoreNames", "file_search_store_names", "fileSearchStores", "file_search_stores"):
+            raw = search_cfg.get(key)
+            if isinstance(raw, str):
+                names.append(raw)
+            elif isinstance(raw, list):
+                names.extend(str(item) for item in raw if item)
+        for key in ("fileSearchStoreName", "file_search_store_name", "fileSearchStore", "file_search_store"):
+            raw = search_cfg.get(key)
+            if raw:
+                names.append(str(raw))
+    return names
+
+
+def _gemini_search_score(query: str, text: str) -> int:
+    import re
+
+    query_terms = {term.lower() for term in re.findall(r"[\w가-힣]+", query) if len(term) > 1}
+    text_l = text.lower()
+    return sum(1 for term in query_terms if term in text_l)
+
+
+def _gemini_file_search_context(body: dict[str, Any]) -> str:
+    tools = body.get("tools") if isinstance(body.get("tools"), list) else []
+    store_names: list[str] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        if any(key in tool for key in ("file_search", "fileSearch", "fileSearchRetrieval", "file_search_retrieval")):
+            store_names.extend(_gemini_file_search_store_names(tool))
+    if not store_names:
+        return ""
+
+    index = _gemini_load_fss_index()
+    query = _gemini_extract_search_query(body)
+    matches: list[tuple[int, str, dict[str, Any]]] = []
+    for store_name in store_names:
+        store = index.get(_gemini_fss_name(store_name))
+        if not store:
+            continue
+        for doc in (store.get("documents") or {}).values():
+            if not isinstance(doc, dict):
+                continue
+            text = str(doc.get("textPreview") or "")
+            score = _gemini_search_score(query, text)
+            if score or not query:
+                matches.append((score, str(doc.get("name") or ""), doc))
+    matches.sort(key=lambda item: (-item[0], item[1]))
+    selected = matches[:5]
+    if not selected:
+        return ""
+    blocks = []
+    for rank, (_score, _name, doc) in enumerate(selected, start=1):
+        title = doc.get("displayName") or doc.get("name")
+        snippet = str(doc.get("textPreview") or "")[:3000]
+        blocks.append(f"[{rank}] {title}\n{snippet}")
+    return "Local Gemini file_search results:\n\n" + "\n\n".join(blocks)
+
+
+def _gemini_apply_file_search(body: dict[str, Any]) -> dict[str, Any]:
+    context = _gemini_file_search_context(body)
+    if not context:
+        return body
+    merged = dict(body)
+    contents = merged.get("contents") if isinstance(merged.get("contents"), list) else []
+    merged["contents"] = [{"role": "user", "parts": [{"text": context}]}] + contents
+    return merged
+
+
 # ---------------------------------------------------------------------------
 # OpenAI-compatible Pydantic schemas
 # ---------------------------------------------------------------------------
@@ -2861,6 +2949,7 @@ async def gemini_count_tokens(model_name: str, request: Request):
         body = _gemini_normalize_request(await request.json())
         if isinstance(body, dict):
             body = _gemini_apply_cached_content(body)
+            body = _gemini_apply_file_search(body)
         messages = _gemini_count_tokens_request(body if isinstance(body, dict) else {})
         return {"totalTokens": _estimate_prompt_tokens(messages)}
     except HTTPException as exc:
@@ -2913,6 +3002,7 @@ async def gemini_generate_content(model_name: str, request: Request):
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
         body = _gemini_apply_cached_content(body)
+        body = _gemini_apply_file_search(body)
         body = _gemini_inline_local_files(body)
         body.pop("model", None)
         data = await asyncio.to_thread(
@@ -2952,7 +3042,10 @@ async def gemini_batch_generate_content(model_name: str, request: Request):
         for item in requests:
             if not isinstance(item, dict):
                 raise HTTPException(status_code=400, detail="batchGenerateContent request items must be objects.")
-            req_body = _gemini_inline_local_files(_gemini_apply_cached_content(_gemini_normalize_request(dict(item))))
+            req_body = _gemini_normalize_request(dict(item))
+            req_body = _gemini_apply_cached_content(req_body)
+            req_body = _gemini_apply_file_search(req_body)
+            req_body = _gemini_inline_local_files(req_body)
             req_body.pop("model", None)
             data = await asyncio.to_thread(
                 _get_client().generate_raw,
@@ -2991,6 +3084,7 @@ async def gemini_stream_generate_content(model_name: str, request: Request):
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
         body = _gemini_apply_cached_content(body)
+        body = _gemini_apply_file_search(body)
         body = _gemini_inline_local_files(body)
         body.pop("model", None)
     except HTTPException as exc:

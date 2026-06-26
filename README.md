@@ -452,9 +452,9 @@ File search stores:
   compatibility layer under `data/gemini_file_search_stores`.
 - `importFile` imports files previously uploaded through the local Files API.
 - `uploadToFileSearchStore` accepts direct uploads and stores documents locally.
-- The proxy preserves Gemini-compatible resource shapes and operations, but it
-  does not yet execute a semantic vector search over these stores inside
-  `tools.file_search`.
+- `tools.file_search` / `tools.fileSearch` performs local lexical retrieval
+  against these stores and injects the best matching document snippets into the
+  outgoing Gemini request context.
 
 Notes:
 
@@ -471,8 +471,8 @@ Notes:
 - File search stores are stored locally under `data/gemini_file_search_stores`;
   override with `ANTIGRAVITY_GEMINI_FILE_SEARCH_STORES_DIR`.
 - Tuned models, live API, interactions, permissions, true async long-running
-  jobs, semantic Google embeddings, and semantic `tools.file_search` retrieval
-  are not fully implemented yet.
+  jobs, semantic Google embeddings, and semantic/vector `tools.file_search`
+  retrieval are not fully implemented yet.
 
 ## Responses API Compatibility
 

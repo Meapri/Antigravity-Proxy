@@ -453,6 +453,39 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     assert deleted_store.status_code == 200
 
 
+def test_gemini_file_search_tool_injects_local_context(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILE_SEARCH_STORES_DIR", str(tmp_path / "fss"))
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "searched"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    store = client.post("/v1beta/fileSearchStores", json={"displayName": "knowledge"}).json()
+    store_id = store["name"].split("/", 1)[1]
+    uploaded = client.post(
+        f"/upload/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore?displayName=plan.txt",
+        content=b"Project Atlas launch window is October.",
+        headers={"Content-Type": "text/plain"},
+    )
+    assert uploaded.status_code == 200
+
+    response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": [{"role": "user", "parts": [{"text": "When is Project Atlas launch?"}]}],
+        "tools": [{"file_search": {"file_search_store_names": [store["name"]]}}],
+    })
+
+    assert response.status_code == 200
+    injected = seen["request"]["contents"][0]["parts"][0]["text"]
+    assert "Local Gemini file_search results" in injected
+    assert "Project Atlas launch window is October" in injected
+    assert seen["request"]["contents"][1]["parts"][0]["text"] == "When is Project Atlas launch?"
+
+
 def test_admin_refresh_requires_configured_api_key(monkeypatch):
     monkeypatch.delenv("ANTIGRAVITY_PROXY_API_KEY", raising=False)
     client = TestClient(proxy.app)
