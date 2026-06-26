@@ -863,6 +863,38 @@ def test_gemini_generate_content_accepts_provider_google_options(monkeypatch):
     }
 
 
+def test_gemini_generate_content_accepts_processing_options_without_forwarding(monkeypatch):
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "summarize video",
+        "processing_options": {
+            "media_resolution": "MEDIA_RESOLUTION_LOW",
+            "start_offset": "1s",
+            "end_offset": "3s",
+        },
+        "provider_options": {
+            "google": {
+                "processing_options": {
+                    "media_resolution": "MEDIA_RESOLUTION_HIGH",
+                }
+            }
+        },
+    })
+
+    assert response.status_code == 200
+    assert "processingOptions" not in seen["request"]
+    assert seen["request"]["contents"][0]["parts"][0]["text"] == "summarize video"
+
+
 def test_gemini_generate_content_normalizes_tools_unions(monkeypatch):
     seen = {}
 

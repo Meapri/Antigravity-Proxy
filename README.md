@@ -673,6 +673,10 @@ GenerateContent request fields.
 Google provider wrappers such as `providerOptions.google` and
 `provider_options.google` are merged through the same path, with direct request
 and `config` fields taking precedence.
+`processingOptions` / `processing_options` and aliases such as `start_offset`
+and `end_offset` are accepted for current Gemini SDK compatibility; because
+Antigravity's internal endpoint does not expose that field yet, the proxy
+removes it before forwarding so requests do not fail with unknown-field errors.
 Content parts preserve SDK-style aliases such as `function_call`,
 `function_response`, `executable_code`, `code_execution_result`, and
 `thought_signature` as canonical Gemini REST fields.

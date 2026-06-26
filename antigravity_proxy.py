@@ -379,6 +379,8 @@ _GEMINI_KEY_ALIASES = {
     "safety_settings": "safetySettings",
     "tool_config": "toolConfig",
     "cached_content": "cachedContent",
+    "processing_options": "processingOptions",
+    "processingOptions": "processingOptions",
     "response_mime_type": "responseMimeType",
     "response_schema": "responseSchema",
     "response_format": "responseFormat",
@@ -413,6 +415,10 @@ _GEMINI_KEY_ALIASES = {
     "include_thoughts": "includeThoughts",
     "response_modalities": "responseModalities",
     "media_resolution": "mediaResolution",
+    "start_offset": "startOffset",
+    "startOffset": "startOffset",
+    "end_offset": "endOffset",
+    "endOffset": "endOffset",
     "image_config": "imageConfig",
     "aspect_ratio": "aspectRatio",
     "image_size": "imageSize",
@@ -508,6 +514,7 @@ _GEMINI_GENERATE_CONFIG_TOP_LEVEL_KEYS = {
     "tools",
     "toolConfig",
     "cachedContent",
+    "processingOptions",
     "labels",
     "serviceTier",
     "store",
@@ -1111,6 +1118,7 @@ def _gemini_normalize_generate_body(body: dict[str, Any]) -> dict[str, Any]:
         out["toolConfig"] = _gemini_normalize_tool_config(out.get("toolConfig"))
     if "store" in out:
         out["store"] = _gemini_bool_value(out.get("store"))
+    out.pop("processingOptions", None)
     return out
 
 
