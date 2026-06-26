@@ -733,9 +733,12 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
     webhook = created.json()
     assert webhook["name"].startswith("webhooks/")
     assert webhook["displayName"] == "Batch updates"
+    assert webhook["uri"] == "https://example.test/hook"
     assert webhook["targetUri"] == "https://example.test/hook"
+    assert webhook["subscribedEvents"] == ["batches.completed"]
     assert webhook["eventTypes"] == ["batches.completed"]
-    assert webhook["state"] == "ACTIVE"
+    assert webhook["state"] == "enabled"
+    assert webhook["newSigningSecret"]["secret"]
 
     fetched = client.get(f"/v1/{webhook['name']}")
     listed = client.get("/v1/webhooks?page_size=1&page_token=0")
@@ -748,6 +751,7 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
     assert fetched.json()["name"] == webhook["name"]
     assert listed.status_code == 200
     assert listed.json()["webhooks"][0]["name"] == webhook["name"]
+    assert "newSigningSecret" not in fetched.json()
     assert patched.status_code == 200
     assert patched.json()["displayName"] == "Renamed"
     assert patched.json()["targetUri"] == "https://example.test/hook"
@@ -760,10 +764,59 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
     assert malformed.status_code == 400
     assert malformed.json()["error"]["status"] == "INVALID_ARGUMENT"
 
+    rotated = client.post(f"/v1beta/{webhook['name']}:rotateSigningSecret")
+    assert rotated.status_code == 200
+    assert rotated.json()["newSigningSecret"]["secret"]
+    assert rotated.json()["newSigningSecret"]["secret"] != webhook["newSigningSecret"]["secret"]
+
     deleted = client.delete(f"/v1beta/{webhook['name']}")
     missing = client.get(f"/v1beta/{webhook['name']}")
     assert deleted.status_code == 200
     assert missing.status_code == 404
+
+
+def test_gemini_webhooks_ping_and_batch_delivery(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_WEBHOOKS_DIR", str(tmp_path / "webhooks"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "operations"))
+    deliveries = []
+
+    async def fake_post(uri, payload, headers):
+        deliveries.append({"uri": uri, "payload": payload, "headers": headers})
+        return 204, "ok"
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "batch ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_gemini_post_webhook_json", fake_post)
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    created = client.post("/v1beta/webhooks", json={
+        "uri": "https://example.test/hook",
+        "subscribed_events": ["webhooks.ping", "batches.*"],
+    })
+    assert created.status_code == 200
+    name = created.json()["name"]
+
+    pinged = client.post(f"/v1beta/{name}:ping")
+    assert pinged.status_code == 200
+    assert deliveries[-1]["payload"]["eventType"] == "webhooks.ping"
+    assert deliveries[-1]["headers"]["X-Goog-Webhook-Signature"].startswith("sha256=")
+
+    batch = client.post("/v1beta/batches", json={
+        "model": "models/gemini-3-flash-agent",
+        "requests": [{"contents": [{"role": "user", "parts": [{"text": "hello"}]}]}],
+    })
+    assert batch.status_code == 200
+    assert deliveries[-1]["payload"]["eventType"] == "batches.completed"
+    assert deliveries[-1]["payload"]["resource"]["name"].startswith("batches/")
+
+    fetched = client.get(f"/v1beta/{name}")
+    attempts = fetched.json()["deliveryAttempts"]
+    assert [item["eventType"] for item in attempts] == ["webhooks.ping", "batches.completed"]
+    assert all(item["status"] == "delivered" for item in attempts)
 
 
 def test_gemini_live_websocket_text_turn(monkeypatch):

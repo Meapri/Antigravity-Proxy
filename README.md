@@ -389,6 +389,8 @@ Implemented Gemini-compatible routes:
 - `GET /v1beta/webhooks/{webhook}`
 - `PATCH /v1beta/webhooks/{webhook}`
 - `DELETE /v1beta/webhooks/{webhook}`
+- `POST /v1beta/webhooks/{webhook}:ping`
+- `POST /v1beta/webhooks/{webhook}:rotateSigningSecret`
 - `POST /v1beta/files:register`
 - `POST /upload/v1beta/files`
 - `POST /v1beta/files`
@@ -650,8 +652,10 @@ Notes:
 - Tuned model metadata and permissions are stored locally under
   `data/gemini_tuned_models`; override with `ANTIGRAVITY_GEMINI_TUNED_MODELS_DIR`.
 - Webhook configurations are stored locally under `data/gemini_webhooks`;
-  override with `ANTIGRAVITY_GEMINI_WEBHOOKS_DIR`. The proxy preserves webhook
-  resources for client compatibility but does not deliver callback events.
+  override with `ANTIGRAVITY_GEMINI_WEBHOOKS_DIR`. The proxy delivers
+  `webhooks.ping`, `batches.completed`, and `interactions.completed` callback
+  events to enabled webhooks, stores delivery attempts, and signs callbacks
+  with `X-Goog-Webhook-Signature` when a signing secret exists.
 - Realtime Live audio/video, real model tuning/training, true async
   long-running jobs, semantic Google embeddings, and semantic/vector
   `tools.file_search` retrieval are not fully implemented yet.

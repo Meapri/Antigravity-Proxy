@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hmac
 import hashlib
 import json
 import logging
@@ -368,7 +369,10 @@ _GEMINI_KEY_ALIASES = {
     "display_name": "displayName",
     "target_uri": "targetUri",
     "event_types": "eventTypes",
+    "subscribed_events": "subscribedEvents",
     "webhook_secret": "webhookSecret",
+    "signing_secrets": "signingSecrets",
+    "new_signing_secret": "newSigningSecret",
     "function_declarations": "functionDeclarations",
     "function_calling_config": "functionCallingConfig",
     "allowed_function_names": "allowedFunctionNames",
@@ -1085,6 +1089,119 @@ def _gemini_store_webhook(webhook: dict[str, Any]) -> dict[str, Any]:
 
 def _gemini_get_webhook(name: str) -> dict[str, Any] | None:
     return _gemini_load_webhooks_index().get(_gemini_webhook_name(name))
+
+
+def _gemini_webhook_uri(webhook: dict[str, Any]) -> str:
+    return str(webhook.get("uri") or webhook.get("targetUri") or "").strip()
+
+
+def _gemini_webhook_events(webhook: dict[str, Any]) -> list[str]:
+    raw = webhook.get("subscribedEvents")
+    if raw is None:
+        raw = webhook.get("eventTypes") or webhook.get("events") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    return [str(item).strip() for item in raw if str(item).strip()] if isinstance(raw, list) else []
+
+
+def _gemini_webhook_enabled(webhook: dict[str, Any]) -> bool:
+    state = str(webhook.get("state") or "enabled").strip().lower()
+    return state in {"enabled", "active", "state_enabled"}
+
+
+def _gemini_webhook_matches_event(webhook: dict[str, Any], event_type: str) -> bool:
+    subscribed = _gemini_webhook_events(webhook)
+    if not subscribed:
+        return False
+    event_family = event_type.split(".", 1)[0] + ".*" if "." in event_type else event_type + ".*"
+    return "*" in subscribed or event_type in subscribed or event_family in subscribed
+
+
+def _gemini_new_signing_secret() -> dict[str, Any]:
+    now = _gemini_now_iso()
+    return {
+        "id": "secret_" + uuid.uuid4().hex,
+        "secret": secrets.token_urlsafe(32),
+        "createTime": now,
+        "state": "active",
+    }
+
+
+def _gemini_webhook_public_resource(webhook: dict[str, Any], *, include_new_secret: bool = False) -> dict[str, Any]:
+    resource = dict(webhook)
+    resource["uri"] = _gemini_webhook_uri(resource)
+    resource["targetUri"] = resource["uri"]
+    resource["subscribedEvents"] = _gemini_webhook_events(resource)
+    resource["eventTypes"] = list(resource["subscribedEvents"])
+    if not include_new_secret:
+        resource.pop("newSigningSecret", None)
+    return resource
+
+
+async def _gemini_post_webhook_json(uri: str, payload: dict[str, Any], headers: dict[str, str]) -> tuple[int, str]:
+    import httpx
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)) as client:
+        response = await client.post(uri, json=payload, headers=headers)
+        return response.status_code, response.text[:1000]
+
+
+async def _gemini_deliver_webhook(webhook: dict[str, Any], event_type: str, resource: dict[str, Any]) -> dict[str, Any]:
+    uri = _gemini_webhook_uri(webhook)
+    now = _gemini_now_iso()
+    payload = {
+        "eventType": event_type,
+        "eventTime": now,
+        "webhook": webhook["name"],
+        "resource": resource,
+    }
+    body = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Webhook-Id": webhook["name"],
+        "X-Goog-Webhook-Event": event_type,
+        "X-Goog-Webhook-Timestamp": now,
+    }
+    secrets_list = webhook.get("signingSecrets") if isinstance(webhook.get("signingSecrets"), list) else []
+    active_secret = next((item for item in secrets_list if isinstance(item, dict) and item.get("secret")), None)
+    if active_secret:
+        signature = hmac.new(str(active_secret["secret"]).encode("utf-8"), body, hashlib.sha256).hexdigest()
+        headers["X-Goog-Webhook-Signature"] = "sha256=" + signature
+    attempt = {
+        "eventType": event_type,
+        "eventTime": now,
+        "uri": uri,
+        "status": "pending",
+    }
+    try:
+        status_code, response_text = await _gemini_post_webhook_json(uri, payload, headers)
+        attempt.update({
+            "status": "delivered" if 200 <= status_code < 300 else "failed",
+            "statusCode": status_code,
+            "response": response_text,
+        })
+    except Exception as exc:
+        attempt.update({"status": "failed", "error": str(exc)})
+    return attempt
+
+
+async def _gemini_emit_webhook_event(event_type: str, resource: dict[str, Any]) -> None:
+    index = _gemini_load_webhooks_index()
+    changed = False
+    for name, webhook in list(index.items()):
+        if not _gemini_webhook_enabled(webhook):
+            continue
+        if not _gemini_webhook_uri(webhook):
+            continue
+        if not _gemini_webhook_matches_event(webhook, event_type):
+            continue
+        attempt = await _gemini_deliver_webhook(webhook, event_type, resource)
+        webhook.setdefault("deliveryAttempts", []).append(attempt)
+        webhook["updateTime"] = _gemini_now_iso()
+        index[name] = webhook
+        changed = True
+    if changed:
+        _gemini_save_webhooks_index(index)
 
 
 def _gemini_generated_files_root() -> Path:
@@ -5388,7 +5505,10 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
         "done": True,
         "response": response_payload,
     }
-    return _gemini_store_operation(operation), _gemini_store_batch(batch)
+    stored_operation = _gemini_store_operation(operation)
+    stored_batch = _gemini_store_batch(batch)
+    await _gemini_emit_webhook_event("batches.completed", stored_batch)
+    return stored_operation, stored_batch
 
 
 @app.post("/v1beta/batches")
@@ -5520,9 +5640,18 @@ async def gemini_create_webhook(request: Request):
         resource.setdefault("displayName", resource_name.rsplit("/", 1)[-1])
         resource.setdefault("createTime", now)
         resource["updateTime"] = now
-        resource.setdefault("state", "ACTIVE")
-        resource.setdefault("eventTypes", resource.get("events") or [])
-        return _gemini_store_webhook(resource)
+        resource["uri"] = _gemini_webhook_uri(resource)
+        resource["targetUri"] = resource["uri"]
+        if not resource["uri"]:
+            raise HTTPException(status_code=400, detail="Webhook requires uri or targetUri.")
+        resource["subscribedEvents"] = _gemini_webhook_events(resource)
+        resource["eventTypes"] = list(resource["subscribedEvents"])
+        resource.setdefault("state", "enabled")
+        if body.get("newSigningSecret", body.get("new_signing_secret", True)) is not False:
+            secret = _gemini_new_signing_secret()
+            resource["newSigningSecret"] = secret
+            resource["signingSecrets"] = [secret]
+        return _gemini_webhook_public_resource(_gemini_store_webhook(resource), include_new_secret=True)
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
@@ -5537,7 +5666,10 @@ async def gemini_list_webhooks(pageSize: int = Query(default=100, ge=1, le=1000)
     webhooks.sort(key=lambda item: item.get("name") or "")
     start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
     end = start + pageSize
-    return {"webhooks": webhooks[start:end], "nextPageToken": str(end) if end < len(webhooks) else ""}
+    return {
+        "webhooks": [_gemini_webhook_public_resource(item) for item in webhooks[start:end]],
+        "nextPageToken": str(end) if end < len(webhooks) else "",
+    }
 
 
 @app.get("/v1beta/webhooks/{webhook_id:path}")
@@ -5545,7 +5677,7 @@ async def gemini_get_webhook(webhook_id: str):
     webhook = _gemini_get_webhook(webhook_id)
     if not webhook:
         return _gemini_error_response(f"Webhook '{webhook_id}' not found.", status_code=404, status="NOT_FOUND")
-    return webhook
+    return _gemini_webhook_public_resource(webhook)
 
 
 @app.patch("/v1beta/webhooks/{webhook_id:path}")
@@ -5569,10 +5701,16 @@ async def gemini_patch_webhook(webhook_id: str, request: Request, updateMask: st
             for key, value in patch.items():
                 if key not in {"name", "createTime"}:
                     webhook[key] = value
+        if "uri" in webhook or "targetUri" in webhook:
+            webhook["uri"] = _gemini_webhook_uri(webhook)
+            webhook["targetUri"] = webhook["uri"]
+        if "subscribedEvents" in webhook or "eventTypes" in webhook or "events" in webhook:
+            webhook["subscribedEvents"] = _gemini_webhook_events(webhook)
+            webhook["eventTypes"] = list(webhook["subscribedEvents"])
         webhook["updateTime"] = _gemini_now_iso()
         index[name] = webhook
         _gemini_save_webhooks_index(index)
-        return webhook
+        return _gemini_webhook_public_resource(webhook)
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
@@ -5590,6 +5728,38 @@ async def gemini_delete_webhook(webhook_id: str):
     index.pop(name, None)
     _gemini_save_webhooks_index(index)
     return JSONResponse({})
+
+
+@app.post("/v1beta/webhooks/{webhook_id:path}:ping")
+async def gemini_ping_webhook(webhook_id: str):
+    name = _gemini_webhook_name(webhook_id)
+    index = _gemini_load_webhooks_index()
+    webhook = index.get(name)
+    if not webhook:
+        return _gemini_error_response(f"Webhook '{webhook_id}' not found.", status_code=404, status="NOT_FOUND")
+    attempt = await _gemini_deliver_webhook(webhook, "webhooks.ping", {"name": name})
+    webhook.setdefault("deliveryAttempts", []).append(attempt)
+    webhook["updateTime"] = _gemini_now_iso()
+    index[name] = webhook
+    _gemini_save_webhooks_index(index)
+    return {"deliveryAttempt": attempt}
+
+
+@app.post("/v1beta/webhooks/{webhook_id:path}:rotateSigningSecret")
+async def gemini_rotate_webhook_signing_secret(webhook_id: str):
+    name = _gemini_webhook_name(webhook_id)
+    index = _gemini_load_webhooks_index()
+    webhook = index.get(name)
+    if not webhook:
+        return _gemini_error_response(f"Webhook '{webhook_id}' not found.", status_code=404, status="NOT_FOUND")
+    secret = _gemini_new_signing_secret()
+    secrets_list = webhook.get("signingSecrets") if isinstance(webhook.get("signingSecrets"), list) else []
+    webhook["signingSecrets"] = [secret] + [item for item in secrets_list if isinstance(item, dict)][:1]
+    webhook["newSigningSecret"] = secret
+    webhook["updateTime"] = _gemini_now_iso()
+    index[name] = webhook
+    _gemini_save_webhooks_index(index)
+    return _gemini_webhook_public_resource(webhook, include_new_secret=True)
 
 
 async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
@@ -5662,6 +5832,7 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
         }
         if body.get("store", True) is not False:
             _gemini_store_interaction(interaction)
+            await _gemini_emit_webhook_event("interactions.completed", interaction)
         return interaction
 
     request_body = _gemini_apply_cached_content(request_body)
@@ -5704,6 +5875,7 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
     }
     if body.get("store", True) is not False:
         _gemini_store_interaction(interaction)
+        await _gemini_emit_webhook_event("interactions.completed", interaction)
     return interaction
 
 
