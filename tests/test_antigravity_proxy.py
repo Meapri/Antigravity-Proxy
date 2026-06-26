@@ -1763,6 +1763,43 @@ def test_gemini_files_upload_and_file_data_inline_conversion(tmp_path, monkeypat
     assert missing.status_code == 404
 
 
+def test_gemini_file_resource_content_part_inline_conversion(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "gemini_files"))
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "file resource ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    uploaded = client.post(
+        "/upload/v1beta/files?uploadType=media&displayName=file-object.txt",
+        content=b"file object body",
+        headers={"Content-Type": "text/plain"},
+    )
+    assert uploaded.status_code == 200
+    file_resource = uploaded.json()["file"]
+
+    generated = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": [{
+            "role": "user",
+            "parts": [
+                file_resource,
+                {"text": "summarize this uploaded file"},
+            ],
+        }]
+    })
+
+    assert generated.status_code == 200
+    parts = seen["request"]["contents"][0]["parts"]
+    assert parts[0]["inlineData"]["mimeType"] == "text/plain"
+    assert parts[0]["inlineData"]["data"]
+    assert parts[1]["text"] == "summarize this uploaded file"
+
+
 def test_gemini_upload_query_snake_case_aliases(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "gemini_files"))
     client = TestClient(proxy.app)

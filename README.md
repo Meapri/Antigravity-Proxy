@@ -725,7 +725,9 @@ Then pass the returned `file.uri` in `fileData.fileUri`:
 Uploaded local file references are automatically converted to Gemini
 `inlineData` before being forwarded to Antigravity, which keeps Gemini SDK-style
 file upload flows usable even though Antigravity's internal endpoint does not
-expose a native public Files API.
+expose a native public Files API. The proxy also accepts Gemini SDK-style File
+resource objects directly inside `contents[].parts`, for example
+`{"name": "files/...", "uri": "files/...", "mimeType": "text/plain"}`.
 
 Cached content example:
 

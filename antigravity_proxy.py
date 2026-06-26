@@ -698,6 +698,13 @@ def _gemini_content_part(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         if any(key in value for key in ("text", "inlineData", "fileData", "functionCall", "functionResponse")):
             return value
+        file_uri = value.get("uri") or value.get("fileUri") or value.get("name")
+        if file_uri and (value.get("mimeType") or value.get("mime_type") or str(file_uri).startswith("files/")):
+            file_data: dict[str, Any] = {"fileUri": str(file_uri)}
+            mime_type = value.get("mimeType") or value.get("mime_type")
+            if mime_type:
+                file_data["mimeType"] = str(mime_type)
+            return {"fileData": file_data}
         if value.get("type") in {"text", "input_text", "output_text"} and value.get("text") is not None:
             return {"text": str(value["text"])}
         if isinstance(value.get("content"), str):
