@@ -591,6 +591,59 @@ def test_gemini_cached_contents_merge_into_generate_request(tmp_path, monkeypatc
     assert missing.status_code == 404
 
 
+def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_CORPORA_DIR", str(tmp_path / "corpora"))
+    client = TestClient(proxy.app)
+
+    created = client.post("/v1beta/corpora", json={"displayName": "Knowledge"})
+    assert created.status_code == 200
+    corpus_name = created.json()["name"]
+    corpus_id = corpus_name.split("/", 1)[1]
+
+    document = client.post(f"/v1beta/corpora/{corpus_id}/documents", json={"displayName": "Launch notes"})
+    assert document.status_code == 200
+    doc_name = document.json()["name"]
+    doc_id = doc_name.rsplit("/", 1)[-1]
+
+    chunk = client.post(f"/v1beta/corpora/{corpus_id}/documents/{doc_id}/chunks", json={
+        "data": {"stringValue": "Project Atlas launch window is October."},
+    })
+    assert chunk.status_code == 200
+    chunk_id = chunk.json()["name"].rsplit("/", 1)[-1]
+
+    queried = client.post(f"/v1beta/corpora/{corpus_id}:query", json={"query": "Atlas October"})
+    doc_queried = client.post(f"/v1beta/corpora/{corpus_id}/documents/{doc_id}:query", json={"query": "launch"})
+    listed_chunks = client.get(f"/v1beta/corpora/{corpus_id}/documents/{doc_id}/chunks")
+    fetched_chunk = client.get(f"/v1beta/corpora/{corpus_id}/documents/{doc_id}/chunks/{chunk_id}")
+    patched_chunk = client.patch(f"/v1beta/corpora/{corpus_id}/documents/{doc_id}/chunks/{chunk_id}", json={
+        "data": {"stringValue": "Project Atlas moved to November."},
+    })
+
+    assert queried.status_code == 200
+    assert queried.json()["relevantChunks"][0]["chunk"]["name"] == chunk.json()["name"]
+    assert doc_queried.status_code == 200
+    assert listed_chunks.json()["chunks"][0]["name"] == chunk.json()["name"]
+    assert fetched_chunk.json()["data"]["stringValue"].endswith("October.")
+    assert patched_chunk.json()["data"]["stringValue"].endswith("November.")
+
+    perm = client.post(f"/v1beta/corpora/{corpus_id}/permissions", json={
+        "emailAddress": "reader@example.com",
+        "role": "READER",
+    })
+    perm_id = perm.json()["name"].rsplit("/", 1)[-1]
+    fetched_perm = client.get(f"/v1beta/corpora/{corpus_id}/permissions/{perm_id}")
+    patched_perm = client.patch(f"/v1beta/corpora/{corpus_id}/permissions/{perm_id}", json={"role": "WRITER"})
+
+    assert perm.status_code == 200
+    assert fetched_perm.json()["role"] == "READER"
+    assert patched_perm.json()["role"] == "WRITER"
+
+    assert client.delete(f"/v1beta/corpora/{corpus_id}/documents/{doc_id}/chunks/{chunk_id}").status_code == 200
+    assert client.delete(f"/v1beta/corpora/{corpus_id}/permissions/{perm_id}").status_code == 200
+    assert client.delete(f"/v1beta/corpora/{corpus_id}/documents/{doc_id}").status_code == 200
+    assert client.delete(f"/v1beta/corpora/{corpus_id}").status_code == 200
+
+
 def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILE_SEARCH_STORES_DIR", str(tmp_path / "fss"))
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "files"))

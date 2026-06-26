@@ -376,6 +376,31 @@ Implemented Gemini-compatible routes:
 - `GET /v1beta/cachedContents/{cached_content}`
 - `PATCH /v1beta/cachedContents/{cached_content}`
 - `DELETE /v1beta/cachedContents/{cached_content}`
+- `POST /v1beta/corpora`
+- `GET /v1beta/corpora`
+- `GET /v1beta/corpora/{corpus}`
+- `PATCH /v1beta/corpora/{corpus}`
+- `POST /v1beta/corpora/{corpus}:query`
+- `DELETE /v1beta/corpora/{corpus}`
+- `POST /v1beta/corpora/{corpus}/documents`
+- `GET /v1beta/corpora/{corpus}/documents`
+- `GET /v1beta/corpora/{corpus}/documents/{document}`
+- `PATCH /v1beta/corpora/{corpus}/documents/{document}`
+- `POST /v1beta/corpora/{corpus}/documents/{document}:query`
+- `DELETE /v1beta/corpora/{corpus}/documents/{document}`
+- `POST /v1beta/corpora/{corpus}/documents/{document}/chunks`
+- `GET /v1beta/corpora/{corpus}/documents/{document}/chunks`
+- `GET /v1beta/corpora/{corpus}/documents/{document}/chunks/{chunk}`
+- `PATCH /v1beta/corpora/{corpus}/documents/{document}/chunks/{chunk}`
+- `DELETE /v1beta/corpora/{corpus}/documents/{document}/chunks/{chunk}`
+- `POST /v1beta/corpora/{corpus}/documents/{document}/chunks:batchCreate`
+- `POST /v1beta/corpora/{corpus}/documents/{document}/chunks:batchUpdate`
+- `POST /v1beta/corpora/{corpus}/documents/{document}/chunks:batchDelete`
+- `GET /v1beta/corpora/{corpus}/permissions`
+- `POST /v1beta/corpora/{corpus}/permissions`
+- `GET /v1beta/corpora/{corpus}/permissions/{permission}`
+- `PATCH /v1beta/corpora/{corpus}/permissions/{permission}`
+- `DELETE /v1beta/corpora/{corpus}/permissions/{permission}`
 - `GET /v1beta/operations`
 - `GET /v1beta/operations/{operation}`
 - `POST /v1beta/operations/{operation}:cancel`
@@ -509,6 +534,14 @@ File search stores:
   against these stores and injects the best matching document snippets into the
   outgoing Gemini request context.
 
+Corpora and semantic retriever:
+
+- Legacy `corpora`, `documents`, `chunks`, and corpus `permissions` are
+  implemented as a local compatibility layer under `data/gemini_corpora`.
+- Corpus and document `:query` perform local lexical chunk matching. They return
+  Gemini-shaped `relevantChunks`, but they are not semantic Google retriever
+  scores because Antigravity does not expose that service.
+
 Tuned models and permissions:
 
 - `tunedModels` are implemented as local aliases over a base Antigravity model.
@@ -535,6 +568,8 @@ Notes:
   `ANTIGRAVITY_GEMINI_FILES_DIR`.
 - Cached contents are stored locally under `data/gemini_cached_contents` by
   default; override with `ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR`.
+- Corpora are stored locally under `data/gemini_corpora` by default; override
+  with `ANTIGRAVITY_GEMINI_CORPORA_DIR`.
 - Batch operations are stored locally under `data/gemini_operations` by default;
   override with `ANTIGRAVITY_GEMINI_OPERATIONS_DIR`.
 - Batch resources are stored locally under `data/gemini_batches` by default;

@@ -19,6 +19,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import secrets
 import sqlite3
 import time
@@ -1173,6 +1174,137 @@ def _gemini_apply_cached_content(body: dict[str, Any]) -> dict[str, Any]:
             merged[key] = payload[key]
     merged.pop("cachedContent", None)
     return merged
+
+
+def _gemini_corpora_root() -> Path:
+    return Path(os.getenv("ANTIGRAVITY_GEMINI_CORPORA_DIR", "data/gemini_corpora")).expanduser()
+
+
+def _gemini_corpora_index_path() -> Path:
+    return _gemini_corpora_root() / "index.json"
+
+
+def _gemini_load_corpora_index() -> dict[str, dict[str, Any]]:
+    path = _gemini_corpora_index_path()
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        log.warning("Failed to read Gemini corpora index; starting empty.")
+        return {}
+
+
+def _gemini_save_corpora_index(index: dict[str, dict[str, Any]]) -> None:
+    root = _gemini_corpora_root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = _gemini_corpora_index_path()
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _gemini_corpus_name(name: str) -> str:
+    key = name.strip().strip("/")
+    if key.startswith("v1beta/"):
+        key = key[len("v1beta/"):]
+    if key.startswith("corpora/"):
+        return key.split("/documents/", 1)[0].split("/permissions/", 1)[0]
+    return "corpora/" + key
+
+
+def _gemini_corpus_document_name(corpus_name: str, document: str) -> str:
+    corpus_key = _gemini_corpus_name(corpus_name)
+    key = document.strip().strip("/")
+    if key.startswith("v1beta/"):
+        key = key[len("v1beta/"):]
+    if key.startswith(corpus_key + "/documents/"):
+        return key.split("/chunks/", 1)[0]
+    if "/documents/" in key:
+        key = key.rsplit("/documents/", 1)[-1].split("/chunks/", 1)[0]
+    return f"{corpus_key}/documents/{key}"
+
+
+def _gemini_corpus_chunk_name(corpus_name: str, document: str, chunk: str) -> str:
+    doc_key = _gemini_corpus_document_name(corpus_name, document)
+    key = chunk.strip().strip("/")
+    if key.startswith("v1beta/"):
+        key = key[len("v1beta/"):]
+    if key.startswith(doc_key + "/chunks/"):
+        return key
+    if "/chunks/" in key:
+        key = key.rsplit("/chunks/", 1)[-1]
+    return f"{doc_key}/chunks/{key}"
+
+
+def _gemini_corpus_permission_name(corpus_name: str, permission: str) -> str:
+    corpus_key = _gemini_corpus_name(corpus_name)
+    key = permission.strip().strip("/")
+    if key.startswith("v1beta/"):
+        key = key[len("v1beta/"):]
+    if key.startswith(corpus_key + "/permissions/"):
+        return key
+    if "/permissions/" in key:
+        key = key.rsplit("/permissions/", 1)[-1]
+    return f"{corpus_key}/permissions/{key}"
+
+
+def _gemini_corpus_resource(meta: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in meta.items() if k not in {"documents", "permissions"} and v is not None}
+
+
+def _gemini_document_resource(doc: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in doc.items() if k not in {"chunks"} and v is not None}
+
+
+def _gemini_chunk_resource(chunk: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in chunk.items() if v is not None}
+
+
+def _gemini_create_corpus(body: dict[str, Any]) -> dict[str, Any]:
+    body = _gemini_normalize_request(body)
+    corpus_id = str(body.get("name") or body.get("corpusId") or body.get("corpus_id") or "").strip().strip("/")
+    if corpus_id.startswith("corpora/"):
+        corpus_id = corpus_id.split("/", 1)[1]
+    if not corpus_id:
+        corpus_id = "corpus_" + uuid.uuid4().hex
+    now = _gemini_now_iso()
+    meta = {
+        "name": f"corpora/{corpus_id}",
+        "displayName": body.get("displayName") or body.get("display_name") or corpus_id,
+        "createTime": now,
+        "updateTime": now,
+        "documents": {},
+        "permissions": {},
+    }
+    index = _gemini_load_corpora_index()
+    index[meta["name"]] = meta
+    _gemini_save_corpora_index(index)
+    return _gemini_corpus_resource(meta)
+
+
+def _gemini_corpus_query(meta: dict[str, Any], query: str, *, top_k: int = 10) -> dict[str, Any]:
+    terms = {part.lower() for part in re.findall(r"\w+", query or "") if part}
+    ranked: list[tuple[float, dict[str, Any]]] = []
+    for doc in (meta.get("documents") or {}).values():
+        for chunk in (doc.get("chunks") or {}).values():
+            text = str(((chunk.get("data") or {}).get("stringValue")) or chunk.get("text") or "")
+            words = {part.lower() for part in re.findall(r"\w+", text) if part}
+            score = (len(terms & words) / max(1, len(terms))) if terms else 0.0
+            if query.lower() in text.lower() and query:
+                score = max(score, 1.0)
+            if score > 0:
+                ranked.append((score, chunk))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return {
+        "relevantChunks": [
+            {"chunk": _gemini_chunk_resource(chunk), "chunkRelevanceScore": score}
+            for score, chunk in ranked[:top_k]
+        ]
+    }
 
 
 def _gemini_fss_root() -> Path:
@@ -3395,6 +3527,415 @@ async def gemini_delete_cached_content(cache_id: str):
     index = _gemini_load_cached_index()
     index.pop(meta["name"], None)
     _gemini_save_cached_index(index)
+    return JSONResponse({})
+
+
+@app.post("/v1beta/corpora")
+async def gemini_create_corpus(request: Request):
+    try:
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        return _gemini_create_corpus(body)
+    except HTTPException as exc:
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT")
+
+
+@app.get("/v1beta/corpora")
+async def gemini_list_corpora(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+    corpora = [_gemini_corpus_resource(meta) for meta in _gemini_load_corpora_index().values()]
+    corpora.sort(key=lambda item: item.get("createTime") or "")
+    start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
+    end = start + pageSize
+    return {"corpora": corpora[start:end], "nextPageToken": str(end) if end < len(corpora) else ""}
+
+
+@app.post("/v1beta/corpora/{corpus_id}:query")
+async def gemini_query_corpus(corpus_id: str, request: Request):
+    meta = _gemini_load_corpora_index().get(_gemini_corpus_name(corpus_id))
+    if not meta:
+        return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
+    body = _gemini_normalize_request(await request.json())
+    query = str((body or {}).get("query") or (body or {}).get("text") or "")
+    top_k = int((body or {}).get("resultsCount") or (body or {}).get("results_count") or 10)
+    return _gemini_corpus_query(meta, query, top_k=top_k)
+
+
+@app.get("/v1beta/corpora/{corpus_id}")
+async def gemini_get_corpus(corpus_id: str):
+    meta = _gemini_load_corpora_index().get(_gemini_corpus_name(corpus_id))
+    if not meta:
+        return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
+    return _gemini_corpus_resource(meta)
+
+
+@app.patch("/v1beta/corpora/{corpus_id}")
+async def gemini_patch_corpus(corpus_id: str, request: Request):
+    index = _gemini_load_corpora_index()
+    name = _gemini_corpus_name(corpus_id)
+    meta = index.get(name)
+    if not meta:
+        return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
+    body = _gemini_normalize_request(await request.json())
+    if isinstance(body, dict) and "displayName" in body:
+        meta["displayName"] = body["displayName"]
+    meta["updateTime"] = _gemini_now_iso()
+    index[name] = meta
+    _gemini_save_corpora_index(index)
+    return _gemini_corpus_resource(meta)
+
+
+@app.delete("/v1beta/corpora/{corpus_id}")
+async def gemini_delete_corpus(corpus_id: str):
+    name = _gemini_corpus_name(corpus_id)
+    index = _gemini_load_corpora_index()
+    if name not in index:
+        return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
+    index.pop(name, None)
+    _gemini_save_corpora_index(index)
+    return JSONResponse({})
+
+
+@app.post("/v1beta/corpora/{corpus_id}/documents")
+async def gemini_create_corpus_document(corpus_id: str, request: Request):
+    index = _gemini_load_corpora_index()
+    corpus_name = _gemini_corpus_name(corpus_id)
+    meta = index.get(corpus_name)
+    if not meta:
+        return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
+    body = _gemini_normalize_request(await request.json())
+    if not isinstance(body, dict):
+        return _gemini_error_response("Request body must be a JSON object.", status_code=400, status="INVALID_ARGUMENT")
+    doc_id = str(body.get("documentId") or body.get("document_id") or body.get("name") or "").strip().strip("/")
+    if doc_id.startswith(corpus_name + "/documents/"):
+        doc_id = doc_id.rsplit("/documents/", 1)[-1]
+    if not doc_id:
+        doc_id = "doc_" + uuid.uuid4().hex
+    now = _gemini_now_iso()
+    doc = {
+        "name": f"{corpus_name}/documents/{doc_id}",
+        "displayName": body.get("displayName") or body.get("display_name") or doc_id,
+        "customMetadata": body.get("customMetadata") or body.get("custom_metadata") or [],
+        "createTime": now,
+        "updateTime": now,
+        "chunks": {},
+    }
+    meta.setdefault("documents", {})[doc["name"]] = doc
+    meta["updateTime"] = now
+    index[corpus_name] = meta
+    _gemini_save_corpora_index(index)
+    return _gemini_document_resource(doc)
+
+
+@app.get("/v1beta/corpora/{corpus_id}/documents")
+async def gemini_list_corpus_documents(corpus_id: str, pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+    meta = _gemini_load_corpora_index().get(_gemini_corpus_name(corpus_id))
+    if not meta:
+        return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
+    docs = [_gemini_document_resource(doc) for doc in (meta.get("documents") or {}).values()]
+    docs.sort(key=lambda item: item.get("createTime") or "")
+    start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
+    end = start + pageSize
+    return {"documents": docs[start:end], "nextPageToken": str(end) if end < len(docs) else ""}
+
+
+@app.post("/v1beta/corpora/{corpus_id}/documents/{document_id:path}:query")
+async def gemini_query_corpus_document(corpus_id: str, document_id: str, request: Request):
+    meta = _gemini_load_corpora_index().get(_gemini_corpus_name(corpus_id))
+    if not meta:
+        return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
+    doc = (meta.get("documents") or {}).get(_gemini_corpus_document_name(corpus_id, document_id))
+    if not doc:
+        return _gemini_error_response(f"Document '{document_id}' not found.", status_code=404, status="NOT_FOUND")
+    body = _gemini_normalize_request(await request.json())
+    tmp_meta = {"documents": {doc["name"]: doc}}
+    query = str((body or {}).get("query") or (body or {}).get("text") or "")
+    top_k = int((body or {}).get("resultsCount") or (body or {}).get("results_count") or 10)
+    return _gemini_corpus_query(tmp_meta, query, top_k=top_k)
+
+
+def _gemini_get_corpus_doc_for_chunks(corpus_id: str, document_id: str) -> tuple[dict[str, Any], str, dict[str, Any], str]:
+    index = _gemini_load_corpora_index()
+    corpus_name = _gemini_corpus_name(corpus_id)
+    meta = index.get(corpus_name)
+    if not meta:
+        raise HTTPException(status_code=404, detail=f"Corpus '{corpus_id}' not found.")
+    doc_name = _gemini_corpus_document_name(corpus_id, document_id)
+    doc = (meta.get("documents") or {}).get(doc_name)
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found.")
+    return index, corpus_name, doc, doc_name
+
+
+def _gemini_upsert_corpus_chunk(doc: dict[str, Any], doc_name: str, body: dict[str, Any]) -> dict[str, Any]:
+    body = _gemini_normalize_request(body)
+    chunk_id = str(body.get("chunkId") or body.get("chunk_id") or body.get("name") or "").strip().strip("/")
+    if chunk_id.startswith(doc_name + "/chunks/"):
+        chunk_id = chunk_id.rsplit("/chunks/", 1)[-1]
+    if "/chunks/" in chunk_id:
+        chunk_id = chunk_id.rsplit("/chunks/", 1)[-1]
+    if not chunk_id:
+        chunk_id = "chunk_" + uuid.uuid4().hex
+    data = body.get("data") if isinstance(body.get("data"), dict) else {}
+    text = body.get("text")
+    if text is not None and "stringValue" not in data:
+        data = {"stringValue": str(text)}
+    now = _gemini_now_iso()
+    chunk = {
+        "name": f"{doc_name}/chunks/{chunk_id}",
+        "data": data,
+        "customMetadata": body.get("customMetadata") or body.get("custom_metadata") or [],
+        "createTime": body.get("createTime") or now,
+        "updateTime": now,
+    }
+    doc.setdefault("chunks", {})[chunk["name"]] = chunk
+    doc["updateTime"] = now
+    return chunk
+
+
+@app.post("/v1beta/corpora/{corpus_id}/documents/{document_id:path}/chunks:batchCreate")
+async def gemini_batch_create_corpus_chunks(corpus_id: str, document_id: str, request: Request):
+    try:
+        index, corpus_name, doc, doc_name = _gemini_get_corpus_doc_for_chunks(corpus_id, document_id)
+        body = _gemini_normalize_request(await request.json())
+        raw_requests = (body or {}).get("requests") or []
+        chunks = []
+        for item in raw_requests if isinstance(raw_requests, list) else []:
+            chunk_body = item.get("chunk") if isinstance(item, dict) and isinstance(item.get("chunk"), dict) else item
+            if isinstance(chunk_body, dict):
+                chunks.append(_gemini_chunk_resource(_gemini_upsert_corpus_chunk(doc, doc_name, chunk_body)))
+        index[corpus_name]["documents"][doc_name] = doc
+        _gemini_save_corpora_index(index)
+        return {"chunks": chunks}
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+
+
+@app.post("/v1beta/corpora/{corpus_id}/documents/{document_id:path}/chunks:batchUpdate")
+async def gemini_batch_update_corpus_chunks(corpus_id: str, document_id: str, request: Request):
+    return await gemini_batch_create_corpus_chunks(corpus_id, document_id, request)
+
+
+@app.post("/v1beta/corpora/{corpus_id}/documents/{document_id:path}/chunks:batchDelete")
+async def gemini_batch_delete_corpus_chunks(corpus_id: str, document_id: str, request: Request):
+    try:
+        index, corpus_name, doc, doc_name = _gemini_get_corpus_doc_for_chunks(corpus_id, document_id)
+        body = _gemini_normalize_request(await request.json())
+        names = (body or {}).get("names") or []
+        if not isinstance(names, list):
+            names = []
+        for name in names:
+            doc.setdefault("chunks", {}).pop(_gemini_corpus_chunk_name(corpus_id, document_id, str(name)), None)
+        doc["updateTime"] = _gemini_now_iso()
+        index[corpus_name]["documents"][doc_name] = doc
+        _gemini_save_corpora_index(index)
+        return JSONResponse({})
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+
+
+@app.post("/v1beta/corpora/{corpus_id}/documents/{document_id:path}/chunks")
+async def gemini_create_corpus_chunk(corpus_id: str, document_id: str, request: Request):
+    try:
+        index, corpus_name, doc, doc_name = _gemini_get_corpus_doc_for_chunks(corpus_id, document_id)
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        chunk = _gemini_upsert_corpus_chunk(doc, doc_name, body)
+        index[corpus_name]["documents"][doc_name] = doc
+        _gemini_save_corpora_index(index)
+        return _gemini_chunk_resource(chunk)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+
+
+@app.get("/v1beta/corpora/{corpus_id}/documents/{document_id:path}/chunks")
+async def gemini_list_corpus_chunks(corpus_id: str, document_id: str, pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+    try:
+        _index, _corpus_name, doc, _doc_name = _gemini_get_corpus_doc_for_chunks(corpus_id, document_id)
+        chunks = [_gemini_chunk_resource(chunk) for chunk in (doc.get("chunks") or {}).values()]
+        chunks.sort(key=lambda item: item.get("createTime") or "")
+        start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
+        end = start + pageSize
+        return {"chunks": chunks[start:end], "nextPageToken": str(end) if end < len(chunks) else ""}
+    except HTTPException as exc:
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status="NOT_FOUND")
+
+
+@app.get("/v1beta/corpora/{corpus_id}/documents/{document_id:path}/chunks/{chunk_id:path}")
+async def gemini_get_corpus_chunk(corpus_id: str, document_id: str, chunk_id: str):
+    try:
+        _index, _corpus_name, doc, _doc_name = _gemini_get_corpus_doc_for_chunks(corpus_id, document_id)
+        chunk = (doc.get("chunks") or {}).get(_gemini_corpus_chunk_name(corpus_id, document_id, chunk_id))
+        if not chunk:
+            raise HTTPException(status_code=404, detail=f"Chunk '{chunk_id}' not found.")
+        return _gemini_chunk_resource(chunk)
+    except HTTPException as exc:
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status="NOT_FOUND")
+
+
+@app.patch("/v1beta/corpora/{corpus_id}/documents/{document_id:path}/chunks/{chunk_id:path}")
+async def gemini_patch_corpus_chunk(corpus_id: str, document_id: str, chunk_id: str, request: Request):
+    try:
+        index, corpus_name, doc, doc_name = _gemini_get_corpus_doc_for_chunks(corpus_id, document_id)
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body["name"] = _gemini_corpus_chunk_name(corpus_id, document_id, chunk_id)
+        chunk = _gemini_upsert_corpus_chunk(doc, doc_name, body)
+        index[corpus_name]["documents"][doc_name] = doc
+        _gemini_save_corpora_index(index)
+        return _gemini_chunk_resource(chunk)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+
+
+@app.delete("/v1beta/corpora/{corpus_id}/documents/{document_id:path}/chunks/{chunk_id:path}")
+async def gemini_delete_corpus_chunk(corpus_id: str, document_id: str, chunk_id: str):
+    try:
+        index, corpus_name, doc, doc_name = _gemini_get_corpus_doc_for_chunks(corpus_id, document_id)
+        chunk_name = _gemini_corpus_chunk_name(corpus_id, document_id, chunk_id)
+        if chunk_name not in (doc.get("chunks") or {}):
+            raise HTTPException(status_code=404, detail=f"Chunk '{chunk_id}' not found.")
+        doc["chunks"].pop(chunk_name, None)
+        doc["updateTime"] = _gemini_now_iso()
+        index[corpus_name]["documents"][doc_name] = doc
+        _gemini_save_corpora_index(index)
+        return JSONResponse({})
+    except HTTPException as exc:
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status="NOT_FOUND")
+
+
+@app.get("/v1beta/corpora/{corpus_id}/documents/{document_id:path}")
+async def gemini_get_corpus_document(corpus_id: str, document_id: str):
+    meta = _gemini_load_corpora_index().get(_gemini_corpus_name(corpus_id))
+    if not meta:
+        return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
+    doc = (meta.get("documents") or {}).get(_gemini_corpus_document_name(corpus_id, document_id))
+    if not doc:
+        return _gemini_error_response(f"Document '{document_id}' not found.", status_code=404, status="NOT_FOUND")
+    return _gemini_document_resource(doc)
+
+
+@app.patch("/v1beta/corpora/{corpus_id}/documents/{document_id:path}")
+async def gemini_patch_corpus_document(corpus_id: str, document_id: str, request: Request):
+    index = _gemini_load_corpora_index()
+    corpus_name = _gemini_corpus_name(corpus_id)
+    meta = index.get(corpus_name)
+    if not meta:
+        return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
+    doc_name = _gemini_corpus_document_name(corpus_id, document_id)
+    doc = (meta.get("documents") or {}).get(doc_name)
+    if not doc:
+        return _gemini_error_response(f"Document '{document_id}' not found.", status_code=404, status="NOT_FOUND")
+    body = _gemini_normalize_request(await request.json())
+    if isinstance(body, dict):
+        for key in ("displayName", "customMetadata"):
+            if key in body:
+                doc[key] = body[key]
+    doc["updateTime"] = _gemini_now_iso()
+    meta.setdefault("documents", {})[doc_name] = doc
+    index[corpus_name] = meta
+    _gemini_save_corpora_index(index)
+    return _gemini_document_resource(doc)
+
+
+@app.delete("/v1beta/corpora/{corpus_id}/documents/{document_id:path}")
+async def gemini_delete_corpus_document(corpus_id: str, document_id: str):
+    index = _gemini_load_corpora_index()
+    corpus_name = _gemini_corpus_name(corpus_id)
+    meta = index.get(corpus_name)
+    if not meta:
+        return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
+    doc_name = _gemini_corpus_document_name(corpus_id, document_id)
+    if doc_name not in (meta.get("documents") or {}):
+        return _gemini_error_response(f"Document '{document_id}' not found.", status_code=404, status="NOT_FOUND")
+    meta["documents"].pop(doc_name, None)
+    meta["updateTime"] = _gemini_now_iso()
+    index[corpus_name] = meta
+    _gemini_save_corpora_index(index)
+    return JSONResponse({})
+
+
+@app.get("/v1beta/corpora/{corpus_id}/permissions")
+async def gemini_list_corpus_permissions(corpus_id: str):
+    meta = _gemini_load_corpora_index().get(_gemini_corpus_name(corpus_id))
+    if not meta:
+        return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
+    return {"permissions": list((meta.get("permissions") or {}).values())}
+
+
+@app.post("/v1beta/corpora/{corpus_id}/permissions")
+async def gemini_create_corpus_permission(corpus_id: str, request: Request):
+    index = _gemini_load_corpora_index()
+    corpus_name = _gemini_corpus_name(corpus_id)
+    meta = index.get(corpus_name)
+    if not meta:
+        return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
+    body = _gemini_normalize_request(await request.json())
+    pid = "perm_" + uuid.uuid4().hex
+    perm = {
+        "name": f"{corpus_name}/permissions/{pid}",
+        "granteeType": (body or {}).get("granteeType") or "USER",
+        "emailAddress": (body or {}).get("emailAddress"),
+        "role": (body or {}).get("role") or "READER",
+    }
+    meta.setdefault("permissions", {})[perm["name"]] = perm
+    index[corpus_name] = meta
+    _gemini_save_corpora_index(index)
+    return perm
+
+
+@app.get("/v1beta/corpora/{corpus_id}/permissions/{permission_id:path}")
+async def gemini_get_corpus_permission(corpus_id: str, permission_id: str):
+    meta = _gemini_load_corpora_index().get(_gemini_corpus_name(corpus_id))
+    if not meta:
+        return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
+    perm = (meta.get("permissions") or {}).get(_gemini_corpus_permission_name(corpus_id, permission_id))
+    if not perm:
+        return _gemini_error_response(f"Permission '{permission_id}' not found.", status_code=404, status="NOT_FOUND")
+    return perm
+
+
+@app.patch("/v1beta/corpora/{corpus_id}/permissions/{permission_id:path}")
+async def gemini_patch_corpus_permission(corpus_id: str, permission_id: str, request: Request):
+    index = _gemini_load_corpora_index()
+    corpus_name = _gemini_corpus_name(corpus_id)
+    meta = index.get(corpus_name)
+    if not meta:
+        return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
+    perm_name = _gemini_corpus_permission_name(corpus_id, permission_id)
+    perm = (meta.get("permissions") or {}).get(perm_name)
+    if not perm:
+        return _gemini_error_response(f"Permission '{permission_id}' not found.", status_code=404, status="NOT_FOUND")
+    body = _gemini_normalize_request(await request.json())
+    if isinstance(body, dict):
+        for key in ("role", "granteeType", "emailAddress"):
+            if key in body:
+                perm[key] = body[key]
+    meta.setdefault("permissions", {})[perm_name] = perm
+    index[corpus_name] = meta
+    _gemini_save_corpora_index(index)
+    return perm
+
+
+@app.delete("/v1beta/corpora/{corpus_id}/permissions/{permission_id:path}")
+async def gemini_delete_corpus_permission(corpus_id: str, permission_id: str):
+    index = _gemini_load_corpora_index()
+    corpus_name = _gemini_corpus_name(corpus_id)
+    meta = index.get(corpus_name)
+    if not meta:
+        return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
+    perm_name = _gemini_corpus_permission_name(corpus_id, permission_id)
+    if perm_name not in (meta.get("permissions") or {}):
+        return _gemini_error_response(f"Permission '{permission_id}' not found.", status_code=404, status="NOT_FOUND")
+    meta["permissions"].pop(perm_name, None)
+    index[corpus_name] = meta
+    _gemini_save_corpora_index(index)
     return JSONResponse({})
 
 
