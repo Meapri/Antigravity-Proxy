@@ -260,12 +260,22 @@ def test_gemini_count_tokens_applies_generate_content_request_cache(tmp_path, mo
             "contents": [{"role": "user", "parts": [{"text": "new prompt"}]}],
         }
     })
+    counted_request_wrapper = client.post("/v1beta/models/gemini-3-flash-agent:countTokens", json={
+        "request": {
+            "cached_content": cache_name,
+            "contents": "new prompt",
+            "processing_options": {"media_resolution": "MEDIA_RESOLUTION_LOW"},
+        }
+    })
 
     assert uncached.status_code == 200
     assert counted.status_code == 200
+    assert counted_request_wrapper.status_code == 200
     assert counted.json()["totalTokens"] > uncached.json()["totalTokens"]
     assert counted.json()["cachedContentTokenCount"] > 0
     assert counted.json()["cacheTokensDetails"][0]["tokenCount"] == counted.json()["cachedContentTokenCount"]
+    assert counted_request_wrapper.json()["cachedContentTokenCount"] == counted.json()["cachedContentTokenCount"]
+    assert counted_request_wrapper.json()["totalTokens"] > uncached.json()["totalTokens"]
 
 
 def test_gemini_video_model_and_generate_videos_operation(tmp_path, monkeypatch):

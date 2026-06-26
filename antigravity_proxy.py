@@ -1122,8 +1122,16 @@ def _gemini_normalize_generate_body(body: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _gemini_generate_request_payload(body: dict[str, Any]) -> dict[str, Any]:
+    for key in ("generateContentRequest", "request"):
+        value = body.get(key)
+        if isinstance(value, dict):
+            return value
+    return body
+
+
 def _gemini_count_tokens_request(body: dict[str, Any]) -> list[ChatMessage]:
-    payload = body.get("generateContentRequest") if isinstance(body.get("generateContentRequest"), dict) else body
+    payload = _gemini_generate_request_payload(body)
     if isinstance(payload, dict):
         payload = _gemini_apply_generate_config(payload)
         payload = _gemini_normalize_generate_body(payload)
@@ -1155,7 +1163,7 @@ def _gemini_count_tokens_request(body: dict[str, Any]) -> list[ChatMessage]:
 
 
 def _gemini_cached_content_tokens(body: dict[str, Any]) -> int:
-    payload = body.get("generateContentRequest") if isinstance(body.get("generateContentRequest"), dict) else body
+    payload = _gemini_generate_request_payload(body)
     if not isinstance(payload, dict):
         return 0
     cached_name = payload.get("cachedContent")
