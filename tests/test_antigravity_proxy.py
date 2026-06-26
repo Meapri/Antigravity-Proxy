@@ -2580,6 +2580,17 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     assert patched_doc.json()["displayName"] == "Launch notes updated"
     assert patched_doc.json()["customMetadata"][0]["stringValue"] == "initial"
 
+    wrapped_doc = client.post(f"/v1/corpora/{corpus_id}/documents?document_id=wrapped_doc", json={
+        "document": {
+            "display_name": "Wrapped document",
+            "custom_metadata": [{"key": "source", "stringValue": "wrapped"}],
+        }
+    })
+    assert wrapped_doc.status_code == 200
+    assert wrapped_doc.json()["name"].endswith("/documents/wrapped_doc")
+    assert wrapped_doc.json()["displayName"] == "Wrapped document"
+    assert wrapped_doc.json()["customMetadata"][0]["stringValue"] == "wrapped"
+
     chunk = client.post(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks", json={
         "data": {"stringValue": "Project Atlas launch window is October."},
         "customMetadata": [{"key": "topic", "stringValue": "launch"}],
@@ -2587,11 +2598,35 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     assert chunk.status_code == 200
     chunk_id = chunk.json()["name"].rsplit("/", 1)[-1]
 
+    wrapped_chunk = client.post(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks?chunk_id=wrapped_chunk", json={
+        "chunk": {
+            "data": {"string_value": "Wrapped chunk text"},
+            "custom_metadata": [{"key": "kind", "stringValue": "wrapped"}],
+        }
+    })
+    assert wrapped_chunk.status_code == 200
+    assert wrapped_chunk.json()["name"].endswith("/chunks/wrapped_chunk")
+    assert wrapped_chunk.json()["data"]["stringValue"] == "Wrapped chunk text"
+    assert wrapped_chunk.json()["customMetadata"][0]["stringValue"] == "wrapped"
+
     batch_created = client.post(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks:batchCreate", json={
-        "requests": [{"chunk": {"chunkId": "batch_one", "data": {"stringValue": "Batch chunk text"}}}],
+        "requests": [{
+            "chunk_id": "batch_one",
+            "chunk": {
+                "data": {"stringValue": "Batch chunk text"},
+                "custom_metadata": [{"key": "batch", "stringValue": "keep"}],
+            },
+        }],
     })
     batch_updated = client.post(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks:batchUpdate", json={
-        "requests": [{"chunk": {"name": "batch_one", "data": {"stringValue": "Batch chunk updated"}}}],
+        "requests": [{
+            "chunk": {
+                "name": "batch_one",
+                "data": {"stringValue": "Batch chunk updated"},
+                "custom_metadata": [{"key": "batch", "stringValue": "ignored"}],
+            },
+            "update_mask": "chunk.data",
+        }],
     })
 
     queried = client.post(f"/v1/corpora/{corpus_id}:query", json={"query": "Atlas October"})
@@ -2605,8 +2640,10 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
 
     assert batch_created.status_code == 200
     assert batch_created.json()["chunks"][0]["name"].endswith("/chunks/batch_one")
+    assert batch_created.json()["chunks"][0]["customMetadata"][0]["stringValue"] == "keep"
     assert batch_updated.status_code == 200
     assert batch_updated.json()["chunks"][0]["data"]["stringValue"] == "Batch chunk updated"
+    assert batch_updated.json()["chunks"][0]["customMetadata"][0]["stringValue"] == "keep"
     assert queried.status_code == 200
     assert queried.json()["relevantChunks"][0]["chunk"]["name"] == chunk.json()["name"]
     assert doc_queried.status_code == 200

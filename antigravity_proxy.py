@@ -431,6 +431,10 @@ _GEMINI_KEY_ALIASES = {
     "reader_project_numbers": "readerProjectNumbers",
     "training_data": "trainingData",
     "validation_data": "validationData",
+    "document_id": "documentId",
+    "documentId": "documentId",
+    "chunk_id": "chunkId",
+    "chunkId": "chunkId",
     "epoch_count": "epochCount",
     "batch_size": "batchSize",
     "target_uri": "targetUri",
@@ -464,6 +468,10 @@ _GEMINI_KEY_ALIASES = {
     "mime_type": "mimeType",
     "mimeType": "mimeType",
     "size_bytes": "sizeBytes",
+    "string_value": "stringValue",
+    "stringValue": "stringValue",
+    "numeric_value": "numericValue",
+    "numericValue": "numericValue",
     "download_uri": "downloadUri",
     "expiration_time": "expirationTime",
     "sha256_hash": "sha256Hash",
@@ -6139,9 +6147,10 @@ async def gemini_create_corpus_document(corpus_id: str, request: Request):
     meta = index.get(corpus_name)
     if not meta:
         return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
-    body = _gemini_normalize_request(await request.json())
-    if not isinstance(body, dict):
-        return _gemini_error_response("Request body must be a JSON object.", status_code=400, status="INVALID_ARGUMENT")
+    try:
+        body = _gemini_document_create_body(await request.json(), request)
+    except HTTPException as exc:
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT")
     doc_id = str(body.get("documentId") or body.get("document_id") or body.get("name") or "").strip().strip("/")
     if doc_id.startswith(corpus_name + "/documents/"):
         doc_id = doc_id.rsplit("/documents/", 1)[-1]
@@ -6206,7 +6215,49 @@ def _gemini_get_corpus_doc_for_chunks(corpus_id: str, document_id: str) -> tuple
     return index, corpus_name, doc, doc_name
 
 
-def _gemini_upsert_corpus_chunk(doc: dict[str, Any], doc_name: str, body: dict[str, Any]) -> dict[str, Any]:
+def _gemini_document_create_body(raw_body: Any, request: Request) -> dict[str, Any]:
+    body = _gemini_normalize_request(raw_body)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+    document = body.get("document") if isinstance(body.get("document"), dict) else body
+    merged = dict(document)
+    for key in ("documentId", "displayName", "customMetadata"):
+        if body.get(key) is not None:
+            merged[key] = body[key]
+    query = request.query_params
+    document_id = query.get("documentId") or query.get("document_id")
+    if document_id:
+        merged["documentId"] = document_id
+    return _gemini_normalize_request(merged)
+
+
+def _gemini_chunk_body(raw_body: Any, request: Request | None = None) -> dict[str, Any]:
+    body = _gemini_normalize_request(raw_body)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+    chunk = body.get("chunk") if isinstance(body.get("chunk"), dict) else body
+    merged = dict(chunk)
+    for key in ("chunkId", "name", "data", "customMetadata", "text", "createTime", "updateMask"):
+        if body.get(key) is not None:
+            merged[key] = body[key]
+    if request is not None:
+        query = request.query_params
+        chunk_id = query.get("chunkId") or query.get("chunk_id")
+        if chunk_id:
+            merged["chunkId"] = chunk_id
+        update_mask = query.get("updateMask") or query.get("update_mask")
+        if update_mask:
+            merged["updateMask"] = update_mask
+    return _gemini_normalize_request(merged)
+
+
+def _gemini_upsert_corpus_chunk(
+    doc: dict[str, Any],
+    doc_name: str,
+    body: dict[str, Any],
+    *,
+    update_mask: str | None = None,
+) -> dict[str, Any]:
     body = _gemini_normalize_request(body)
     chunk_id = str(body.get("chunkId") or body.get("chunk_id") or body.get("name") or "").strip().strip("/")
     if chunk_id.startswith(doc_name + "/chunks/"):
@@ -6220,13 +6271,40 @@ def _gemini_upsert_corpus_chunk(doc: dict[str, Any], doc_name: str, body: dict[s
     if text is not None and "stringValue" not in data:
         data = {"stringValue": str(text)}
     now = _gemini_now_iso()
-    chunk = {
-        "name": f"{doc_name}/chunks/{chunk_id}",
-        "data": data,
-        "customMetadata": body.get("customMetadata") or body.get("custom_metadata") or [],
-        "createTime": body.get("createTime") or now,
-        "updateTime": now,
-    }
+    chunk_name = f"{doc_name}/chunks/{chunk_id}"
+    existing = dict((doc.get("chunks") or {}).get(chunk_name) or {})
+    if update_mask:
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"Chunk '{chunk_id}' not found.")
+        patch_body = dict(body)
+        if data:
+            patch_body["data"] = data
+        fields = _gemini_simple_update_fields(
+            update_mask=update_mask,
+            body=patch_body,
+            allowed={"data", "customMetadata"},
+            aliases={
+                "chunk.data": "data",
+                "chunk.custom_metadata": "customMetadata",
+                "chunk.customMetadata": "customMetadata",
+                "custom_metadata": "customMetadata",
+            },
+            resource="chunks",
+        )
+        chunk = existing
+        for key in fields:
+            if update_mask and key not in patch_body:
+                raise HTTPException(status_code=400, detail=f"{key} is required by updateMask.")
+            chunk[key] = patch_body[key]
+        chunk["updateTime"] = now
+    else:
+        chunk = {
+            "name": chunk_name,
+            "data": data,
+            "customMetadata": body.get("customMetadata") or body.get("custom_metadata") or [],
+            "createTime": existing.get("createTime") or body.get("createTime") or now,
+            "updateTime": now,
+        }
     doc.setdefault("chunks", {})[chunk["name"]] = chunk
     doc["updateTime"] = now
     return chunk
@@ -6241,7 +6319,7 @@ async def gemini_batch_create_corpus_chunks(corpus_id: str, document_id: str, re
         raw_requests = (body or {}).get("requests") or []
         chunks = []
         for item in raw_requests if isinstance(raw_requests, list) else []:
-            chunk_body = item.get("chunk") if isinstance(item, dict) and isinstance(item.get("chunk"), dict) else item
+            chunk_body = _gemini_chunk_body(item)
             if isinstance(chunk_body, dict):
                 chunks.append(_gemini_chunk_resource(_gemini_upsert_corpus_chunk(doc, doc_name, chunk_body)))
         index[corpus_name]["documents"][doc_name] = doc
@@ -6255,7 +6333,26 @@ async def gemini_batch_create_corpus_chunks(corpus_id: str, document_id: str, re
 @app.post("/v1/corpora/{corpus_id}/documents/{document_id:path}/chunks:batchUpdate")
 @app.post("/v1beta/corpora/{corpus_id}/documents/{document_id:path}/chunks:batchUpdate")
 async def gemini_batch_update_corpus_chunks(corpus_id: str, document_id: str, request: Request):
-    return await gemini_batch_create_corpus_chunks(corpus_id, document_id, request)
+    try:
+        index, corpus_name, doc, doc_name = _gemini_get_corpus_doc_for_chunks(corpus_id, document_id)
+        body = _gemini_normalize_request(await request.json())
+        raw_requests = (body or {}).get("requests") or []
+        chunks = []
+        for item in raw_requests if isinstance(raw_requests, list) else []:
+            chunk_body = _gemini_chunk_body(item)
+            update_mask = chunk_body.pop("updateMask", None)
+            chunks.append(_gemini_chunk_resource(_gemini_upsert_corpus_chunk(
+                doc,
+                doc_name,
+                chunk_body,
+                update_mask=update_mask,
+            )))
+        index[corpus_name]["documents"][doc_name] = doc
+        _gemini_save_corpora_index(index)
+        return {"chunks": chunks}
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
 
 
 @app.post("/v1/corpora/{corpus_id}/documents/{document_id:path}/chunks:batchDelete")
@@ -6283,9 +6380,7 @@ async def gemini_batch_delete_corpus_chunks(corpus_id: str, document_id: str, re
 async def gemini_create_corpus_chunk(corpus_id: str, document_id: str, request: Request):
     try:
         index, corpus_name, doc, doc_name = _gemini_get_corpus_doc_for_chunks(corpus_id, document_id)
-        body = _gemini_normalize_request(await request.json())
-        if not isinstance(body, dict):
-            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body = _gemini_chunk_body(await request.json(), request)
         chunk = _gemini_upsert_corpus_chunk(doc, doc_name, body)
         index[corpus_name]["documents"][doc_name] = doc
         _gemini_save_corpora_index(index)
@@ -6328,9 +6423,7 @@ async def gemini_get_corpus_chunk(corpus_id: str, document_id: str, chunk_id: st
 async def gemini_patch_corpus_chunk(corpus_id: str, document_id: str, chunk_id: str, request: Request, updateMask: str | None = None):
     try:
         index, corpus_name, doc, doc_name = _gemini_get_corpus_doc_for_chunks(corpus_id, document_id)
-        body = _gemini_normalize_request(await request.json())
-        if not isinstance(body, dict):
-            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body = _gemini_chunk_body(await request.json())
         updateMask = updateMask or body.pop("updateMask", None)
         chunk_name = _gemini_corpus_chunk_name(corpus_id, document_id, chunk_id)
         current = dict((doc.get("chunks") or {}).get(chunk_name) or {})
