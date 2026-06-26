@@ -192,10 +192,17 @@ def test_gemini_models_and_count_tokens():
     counted = client.post("/v1beta/models/gemini-3-flash-agent:countTokens", json={
         "contents": [{"role": "user", "parts": [{"text": "hello world"}]}]
     })
+    counted_string = client.post("/v1/models/gemini-3-flash-agent:countTokens", json={
+        "contents": "hello from sdk string"
+    })
     assert counted.status_code == 200
     assert counted.json()["totalTokens"] > 0
     assert counted.json()["promptTokensDetails"][0]["modality"] == "TEXT"
+    assert counted.json()["cachedContentTokenCount"] == 0
     assert counted.json()["cacheTokensDetails"] == []
+    assert counted_string.status_code == 200
+    assert counted_string.json()["totalTokens"] > 0
+    assert counted_string.json()["promptTokensDetails"][0]["modality"] == "TEXT"
 
     counted_media = client.post("/v1beta/models/gemini-3-flash-agent:countTokens", json={
         "contents": [{
@@ -234,6 +241,8 @@ def test_gemini_count_tokens_applies_generate_content_request_cache(tmp_path, mo
     assert uncached.status_code == 200
     assert counted.status_code == 200
     assert counted.json()["totalTokens"] > uncached.json()["totalTokens"]
+    assert counted.json()["cachedContentTokenCount"] > 0
+    assert counted.json()["cacheTokensDetails"][0]["tokenCount"] == counted.json()["cachedContentTokenCount"]
 
 
 def test_gemini_video_model_and_generate_videos_operation(tmp_path, monkeypatch):

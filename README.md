@@ -813,9 +813,10 @@ Notes:
   official default page size of 50 and maximum page size of 1000.
 - `countTokens` is approximate because Antigravity's internal endpoint does not
   expose a separate Gemini token-count RPC. Responses include `totalTokens`,
-  `promptTokensDetails`, and `cacheTokensDetails` fields for Gemini SDK
-  compatibility. `generateContentRequest` wrappers are accepted, and local
-  `cachedContent` / `file_search` context is expanded before counting.
+  `promptTokensDetails`, `cachedContentTokenCount`, and `cacheTokensDetails`
+  fields for Gemini SDK compatibility. `generateContentRequest` wrappers,
+  string `contents`, and local `cachedContent` / `file_search` context are
+  expanded before counting.
 - Files are stored locally under `data/gemini_files` by default; override with
   `ANTIGRAVITY_GEMINI_FILES_DIR`. File resources include Gemini-style
   `downloadUri`, `source`, base64 `sha256Hash`, and video metadata fields when

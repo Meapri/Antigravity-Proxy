@@ -555,21 +555,49 @@ def _gemini_count_tokens_request(body: dict[str, Any]) -> list[ChatMessage]:
         payload = _gemini_apply_cached_content(payload)
         payload = _gemini_apply_file_search(payload)
     contents = payload.get("contents") or []
+    if isinstance(contents, str):
+        contents = [{"role": "user", "parts": [{"text": contents}]}]
     if isinstance(contents, dict):
         contents = [contents]
     messages: list[ChatMessage] = []
     for turn in contents if isinstance(contents, list) else []:
+        if isinstance(turn, str):
+            messages.append(ChatMessage(role="user", content=[{"text": turn}]))
+            continue
         if not isinstance(turn, dict):
             continue
         role = str(turn.get("role") or "user")
         if role == "model":
             role = "assistant"
         parts = turn.get("parts") or []
+        if isinstance(parts, str):
+            parts = [{"text": parts}]
         messages.append(ChatMessage(role=role, content=parts))
     system_instruction = payload.get("systemInstruction")
     if isinstance(system_instruction, dict):
         messages.insert(0, ChatMessage(role="system", content=system_instruction.get("parts") or []))
     return messages
+
+
+def _gemini_cached_content_tokens(body: dict[str, Any]) -> int:
+    payload = body.get("generateContentRequest") if isinstance(body.get("generateContentRequest"), dict) else body
+    if not isinstance(payload, dict):
+        return 0
+    cached_name = payload.get("cachedContent")
+    if not cached_name:
+        return 0
+    meta = _gemini_load_cached_index().get(_gemini_cached_name(str(cached_name)))
+    if not meta:
+        return 0
+    usage = meta.get("usageMetadata") if isinstance(meta.get("usageMetadata"), dict) else {}
+    cached_total = usage.get("totalTokenCount") or usage.get("totalTokens")
+    if cached_total is not None:
+        try:
+            return max(0, int(cached_total))
+        except (TypeError, ValueError):
+            pass
+    payload = meta.get("payload") if isinstance(meta.get("payload"), dict) else {}
+    return _estimate_prompt_tokens(_gemini_count_tokens_request(payload))
 
 
 def _gemini_content_text(content: Any) -> str:
@@ -4124,7 +4152,7 @@ def _gemini_part_modality(part: Any) -> str:
     return "DOCUMENT"
 
 
-def _gemini_count_tokens_response(messages: list[ChatMessage]) -> dict[str, Any]:
+def _gemini_count_tokens_response(messages: list[ChatMessage], *, cached_tokens: int = 0) -> dict[str, Any]:
     prompt_estimate = _estimate_prompt_tokens(messages)
     by_modality: dict[str, int] = {}
     for message in messages:
@@ -4142,15 +4170,17 @@ def _gemini_count_tokens_response(messages: list[ChatMessage]) -> dict[str, Any]
     if detail_sum != total_tokens:
         by_modality["TEXT"] = by_modality.get("TEXT", 0) + (total_tokens - detail_sum)
 
-    return {
+    response = {
         "totalTokens": total_tokens,
         "promptTokensDetails": [
             {"modality": modality, "tokenCount": count}
             for modality, count in sorted(by_modality.items())
             if count > 0
         ],
-        "cacheTokensDetails": [],
+        "cachedContentTokenCount": cached_tokens,
+        "cacheTokensDetails": [{"modality": "TEXT", "tokenCount": cached_tokens}] if cached_tokens > 0 else [],
     }
+    return response
 
 
 def _usage_from_response(
@@ -5591,9 +5621,13 @@ async def gemini_tuned_count_tokens(tuned_model_id: str, request: Request):
     try:
         _gemini_tuned_base_model(tuned_model_id)
         body = _gemini_normalize_request(await request.json())
+        cached_tokens = _gemini_cached_content_tokens(body if isinstance(body, dict) else {})
         if isinstance(body, dict):
             body = _gemini_apply_file_search(_gemini_apply_cached_content(body))
-        return _gemini_count_tokens_response(_gemini_count_tokens_request(body if isinstance(body, dict) else {}))
+        return _gemini_count_tokens_response(
+            _gemini_count_tokens_request(body if isinstance(body, dict) else {}),
+            cached_tokens=cached_tokens,
+        )
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
@@ -5700,10 +5734,13 @@ async def gemini_count_tokens(model_name: str, request: Request):
         _resolve_gemini_model(model_name)
         body = _gemini_normalize_request(await request.json())
         if isinstance(body, dict):
+            cached_tokens = _gemini_cached_content_tokens(body)
             body = _gemini_apply_cached_content(body)
             body = _gemini_apply_file_search(body)
+        else:
+            cached_tokens = 0
         messages = _gemini_count_tokens_request(body if isinstance(body, dict) else {})
-        return _gemini_count_tokens_response(messages)
+        return _gemini_count_tokens_response(messages, cached_tokens=cached_tokens)
     except HTTPException as exc:
         return _gemini_error_response(exc.detail, status_code=exc.status_code)
     except Exception as exc:
