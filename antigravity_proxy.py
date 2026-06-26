@@ -33,7 +33,7 @@ from email.parser import BytesParser
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 try:
@@ -482,6 +482,32 @@ def _gemini_interaction_contents(body: dict[str, Any]) -> list[dict[str, Any]]:
     return contents
 
 
+def _gemini_predict_to_generate_body(body: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(body.get("contents"), list):
+        request_body = dict(body)
+        request_body.pop("instances", None)
+        request_body.pop("parameters", None)
+        return request_body
+    instances = body.get("instances")
+    if not isinstance(instances, list):
+        raise HTTPException(status_code=400, detail="predict requires instances or contents.")
+    contents: list[dict[str, Any]] = []
+    for instance in instances:
+        if isinstance(instance, dict) and isinstance(instance.get("content"), dict):
+            contents.append(instance["content"])
+        elif isinstance(instance, dict) and isinstance(instance.get("parts"), list):
+            contents.append({"role": instance.get("role") or "user", "parts": instance["parts"]})
+        elif isinstance(instance, dict) and instance.get("text") is not None:
+            contents.append({"role": "user", "parts": [{"text": str(instance["text"])}]})
+        else:
+            contents.append({"role": "user", "parts": [{"text": json.dumps(instance, ensure_ascii=False)}]})
+    request_body = {"contents": contents}
+    parameters = body.get("parameters")
+    if isinstance(parameters, dict):
+        request_body["generationConfig"] = parameters.get("generationConfig") or parameters.get("generation_config") or parameters
+    return request_body
+
+
 def _gemini_embedding_values(text: str, *, dimensions: int = 768) -> list[float]:
     dimensions = max(1, min(int(dimensions or 768), 3072))
     values: list[float] = []
@@ -567,7 +593,17 @@ def _gemini_store_operation(operation: dict[str, Any]) -> dict[str, Any]:
 
 
 def _gemini_get_operation(name: str) -> dict[str, Any] | None:
-    return _gemini_load_operations_index().get(_gemini_operation_name(name))
+    index = _gemini_load_operations_index()
+    found = index.get(_gemini_operation_name(name))
+    if found:
+        return found
+    key = name.strip().strip("/")
+    if "/operations/" in key:
+        suffix = key.rsplit("/operations/", 1)[-1]
+        for op_name, operation in index.items():
+            if op_name == f"operations/{suffix}" or op_name.endswith("/" + suffix):
+                return operation
+    return None
 
 
 def _gemini_now_iso() -> str:
@@ -782,6 +818,41 @@ def _gemini_store_file(data: bytes, *, mime_type: str | None = None, display_nam
     return _gemini_file_resource(meta)
 
 
+def _gemini_register_file(body: dict[str, Any]) -> dict[str, Any]:
+    file_meta = body.get("file") if isinstance(body.get("file"), dict) else body
+    if not isinstance(file_meta, dict):
+        raise HTTPException(status_code=400, detail="files.register requires file metadata.")
+    root = _gemini_files_root()
+    root.mkdir(parents=True, exist_ok=True)
+    file_id = str(file_meta.get("name") or "").strip().strip("/")
+    if file_id.startswith("files/"):
+        file_id = file_id.split("/", 1)[1]
+    if not file_id:
+        file_id = "file_" + uuid.uuid4().hex
+    now = int(time.time())
+    iso = _gemini_now_iso()
+    uri = str(file_meta.get("uri") or file_meta.get("fileUri") or f"files/{file_id}")
+    meta = {
+        "name": f"files/{file_id}",
+        "displayName": file_meta.get("displayName") or file_meta.get("display_name") or file_id,
+        "mimeType": file_meta.get("mimeType") or file_meta.get("mime_type") or "application/octet-stream",
+        "sizeBytes": int(file_meta.get("sizeBytes") or file_meta.get("size_bytes") or 0),
+        "createTime": now,
+        "updateTime": now,
+        "createTimeIso": iso,
+        "updateTimeIso": iso,
+        "expirationTimeIso": file_meta.get("expirationTime") or file_meta.get("expiration_time"),
+        "sha256Hash": file_meta.get("sha256Hash") or file_meta.get("sha256_hash") or "",
+        "uri": uri,
+        "state": file_meta.get("state") or "ACTIVE",
+        "registered": True,
+    }
+    index = _gemini_load_files_index()
+    index[meta["name"]] = meta
+    _gemini_save_files_index(index)
+    return _gemini_file_resource(meta)
+
+
 def _gemini_get_file_meta(file_name: str) -> dict[str, Any] | None:
     key = file_name.strip().strip("/")
     if key.startswith("v1beta/"):
@@ -800,7 +871,7 @@ def _gemini_file_uri_to_inline(file_uri: str) -> dict[str, Any] | None:
     if not meta:
         return None
     path = Path(str(meta.get("path") or ""))
-    if not path.exists():
+    if not path.is_file():
         return None
     data = base64.b64encode(path.read_bytes()).decode("ascii")
     return {"inlineData": {"mimeType": meta.get("mimeType") or "application/octet-stream", "data": data}}
@@ -2984,6 +3055,32 @@ async def gemini_list_files(pageSize: int = Query(default=100, ge=1, le=1000), p
     }
 
 
+@app.post("/v1beta/files:register")
+async def gemini_register_file(request: Request):
+    """Gemini-compatible metadata-only file registration."""
+    try:
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        return {"file": _gemini_register_file(body)}
+    except HTTPException as exc:
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT")
+    except Exception as exc:
+        log.exception("Gemini file register failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.get("/v1beta/files/{file_id:path}:download")
+async def gemini_download_file(file_id: str):
+    meta = _gemini_get_file_meta(file_id)
+    if not meta:
+        return _gemini_error_response(f"File '{file_id}' not found.", status_code=404, status="NOT_FOUND")
+    path = Path(str(meta.get("path") or ""))
+    if not path.is_file():
+        return _gemini_error_response(f"File '{file_id}' has no local media blob.", status_code=404, status="NOT_FOUND")
+    return Response(content=path.read_bytes(), media_type=meta.get("mimeType") or "application/octet-stream")
+
+
 @app.get("/v1beta/files/{file_id:path}")
 async def gemini_get_file(file_id: str):
     meta = _gemini_get_file_meta(file_id)
@@ -3221,6 +3318,49 @@ async def gemini_list_file_search_documents(store_id: str, pageSize: int = Query
     start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
     end = start + pageSize
     return {"documents": docs[start:end], "nextPageToken": str(end) if end < len(docs) else ""}
+
+
+@app.get("/v1beta/fileSearchStores/{store_id}/media/{document_id:path}")
+async def gemini_download_file_search_document_media(store_id: str, document_id: str):
+    meta = _gemini_get_fss_meta(store_id)
+    if not meta:
+        return _gemini_error_response(f"File search store '{store_id}' not found.", status_code=404, status="NOT_FOUND")
+    doc = (meta.get("documents") or {}).get(_gemini_document_name(store_id, document_id))
+    if not doc:
+        return _gemini_error_response(f"Document '{document_id}' not found.", status_code=404, status="NOT_FOUND")
+    try:
+        content = base64.b64decode(str(doc.get("content") or ""))
+    except Exception:
+        content = b""
+    return Response(content=content, media_type=doc.get("mimeType") or "application/octet-stream")
+
+
+@app.get("/v1beta/fileSearchStores/{store_id}/operations/{operation_id:path}")
+async def gemini_get_file_search_operation(store_id: str, operation_id: str):
+    operation = _gemini_get_operation(f"fileSearchStores/{store_id}/operations/{operation_id}")
+    if not operation:
+        return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    return operation
+
+
+@app.post("/v1beta/fileSearchStores/{store_id}/operations/{operation_id:path}:cancel")
+async def gemini_cancel_file_search_operation(store_id: str, operation_id: str):
+    operation = _gemini_get_operation(f"fileSearchStores/{store_id}/operations/{operation_id}")
+    if not operation:
+        return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    return JSONResponse({})
+
+
+@app.delete("/v1beta/fileSearchStores/{store_id}/operations/{operation_id:path}")
+async def gemini_delete_file_search_operation(store_id: str, operation_id: str):
+    operation = _gemini_get_operation(f"fileSearchStores/{store_id}/operations/{operation_id}")
+    if not operation:
+        return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    name = operation["name"]
+    index = _gemini_load_operations_index()
+    index.pop(name, None)
+    _gemini_save_operations_index(index)
+    return JSONResponse({})
 
 
 @app.get("/v1beta/fileSearchStores/{store_id}/documents/{document_id:path}")
@@ -3495,6 +3635,117 @@ async def gemini_batch_embed_contents(model_name: str, request: Request):
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.post("/v1beta/models/{model_name:path}:asyncBatchEmbedContent")
+async def gemini_async_batch_embed_content(model_name: str, request: Request):
+    """Gemini-compatible asyncBatchEmbedContent as an immediately completed operation."""
+    try:
+        model = _resolve_gemini_model(model_name)
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        embedding_response = _gemini_batch_embedding_from_request(body)
+        now = _gemini_now_iso()
+        batch_name = "batches/batch_" + uuid.uuid4().hex
+        operation_name = "operations/asyncBatchEmbedContent-" + uuid.uuid4().hex
+        model_resource = _gemini_model_name(model)
+        request_count = len(body.get("requests") or [])
+        response_payload = {
+            "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.AsyncBatchEmbedContentResponse",
+            **embedding_response,
+        }
+        batch = {
+            "name": batch_name,
+            "displayName": body.get("displayName") or body.get("display_name") or batch_name.rsplit("/", 1)[-1],
+            "model": model_resource,
+            "state": "JOB_STATE_SUCCEEDED",
+            "createTime": now,
+            "updateTime": now,
+            "endTime": now,
+            "requestCount": request_count,
+            "operation": operation_name,
+            "response": response_payload,
+            "metadata": {
+                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.AsyncBatchEmbedContentMetadata",
+                "model": model_resource,
+                "requestCount": request_count,
+            },
+        }
+        operation = {
+            "name": operation_name,
+            "metadata": {
+                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.AsyncBatchEmbedContentMetadata",
+                "model": model_resource,
+                "requestCount": request_count,
+                "batch": batch_name,
+            },
+            "done": True,
+            "response": response_payload,
+        }
+        _gemini_store_batch(batch)
+        return _gemini_store_operation(operation)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini asyncBatchEmbedContent failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.post("/v1beta/models/{model_name:path}:predict")
+async def gemini_predict(model_name: str, request: Request):
+    """Gemini/Vertex-compatible predict endpoint mapped to generateContent."""
+    try:
+        model = _resolve_gemini_model(model_name)
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        request_body = _gemini_predict_to_generate_body(body)
+        request_body = _gemini_apply_cached_content(request_body)
+        request_body = _gemini_apply_file_search(request_body)
+        request_body = _gemini_inline_local_files(request_body)
+        data = await asyncio.to_thread(
+            _get_client().generate_raw,
+            request=request_body,
+            model=str(model["antigravity_model"]),
+        )
+        response = _gemini_unwrap_response(data)
+        return {"predictions": [response], "deployedModelId": _gemini_model_name(model)}
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini predict failed")
+        return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
+
+
+@app.post("/v1beta/models/{model_name:path}:predictLongRunning")
+async def gemini_predict_long_running(model_name: str, request: Request):
+    """Gemini/Vertex-compatible predictLongRunning as a completed operation."""
+    try:
+        prediction = await gemini_predict(model_name, request)
+        if isinstance(prediction, JSONResponse):
+            return prediction
+        operation = {
+            "name": "operations/predictLongRunning-" + uuid.uuid4().hex,
+            "metadata": {
+                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.PredictLongRunningMetadata",
+                "model": _gemini_model_name(_resolve_gemini_model(model_name)),
+            },
+            "done": True,
+            "response": {
+                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.PredictLongRunningResponse",
+                **prediction,
+            },
+        }
+        return _gemini_store_operation(operation)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini predictLongRunning failed")
+        return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
+
+
 @app.post("/v1beta/models/{model_name:path}:generateContent")
 async def gemini_generate_content(model_name: str, request: Request):
     """Gemini REST-compatible generateContent endpoint backed by Antigravity."""
@@ -3657,6 +3908,49 @@ async def gemini_cancel_batch(batch_id: str):
         batch["endTime"] = now
         _gemini_store_batch(batch)
     return JSONResponse({})
+
+
+def _gemini_patch_batch(batch_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    name = _gemini_batch_name(batch_id)
+    index = _gemini_load_batches_index()
+    batch = index.get(name)
+    if not batch:
+        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found.")
+    for key in ("displayName", "state", "endTime"):
+        if key in body:
+            batch[key] = body[key]
+    if isinstance(body.get("metadata"), dict):
+        batch.setdefault("metadata", {}).update(body["metadata"])
+    batch["updateTime"] = _gemini_now_iso()
+    index[name] = batch
+    _gemini_save_batches_index(index)
+    return batch
+
+
+@app.patch("/v1beta/batches/{batch_id:path}:updateGenerateContentBatch")
+@app.post("/v1beta/batches/{batch_id:path}:updateGenerateContentBatch")
+async def gemini_update_generate_content_batch(batch_id: str, request: Request):
+    try:
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        return _gemini_patch_batch(batch_id, body)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+
+
+@app.patch("/v1beta/batches/{batch_id:path}:updateEmbedContentBatch")
+@app.post("/v1beta/batches/{batch_id:path}:updateEmbedContentBatch")
+async def gemini_update_embed_content_batch(batch_id: str, request: Request):
+    try:
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        return _gemini_patch_batch(batch_id, body)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
 
 
 @app.delete("/v1beta/batches/{batch_id:path}")

@@ -200,6 +200,33 @@ def test_gemini_embeddings_are_deterministic():
     assert len(batch.json()["embeddings"][0]["values"]) == 16
 
 
+def test_gemini_async_batch_embed_and_batch_update(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
+    client = TestClient(proxy.app)
+
+    created = client.post("/v1beta/models/gemini-3-flash-agent:asyncBatchEmbedContent", json={
+        "displayName": "embed job",
+        "requests": [
+            {"content": {"parts": [{"text": "alpha"}]}, "outputDimensionality": 8},
+            {"content": {"parts": [{"text": "beta"}]}, "outputDimensionality": 8},
+        ],
+    })
+
+    assert created.status_code == 200
+    operation = created.json()
+    assert operation["done"] is True
+    assert operation["response"]["embeddings"][0]["values"]
+
+    batch_name = operation["metadata"]["batch"]
+    updated = client.patch(f"/v1beta/{batch_name}:updateEmbedContentBatch", json={"displayName": "renamed"})
+    fetched = client.get(f"/v1beta/{batch_name}")
+
+    assert updated.status_code == 200
+    assert updated.json()["displayName"] == "renamed"
+    assert fetched.json()["operation"] == operation["name"]
+
+
 def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
     seen = {}
 
@@ -232,6 +259,28 @@ def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
     assert seen["request"]["generationConfig"]["responseMimeType"] == "application/json"
     assert seen["request"]["generationConfig"]["maxOutputTokens"] == 32
     assert seen["request"]["tools"] == [{"google_search": {}}]
+
+
+def test_gemini_predict_and_predict_long_running(monkeypatch):
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            return {"response": {"candidates": [{"content": {"parts": [{"text": request["contents"][0]["parts"][0]["text"]}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    predicted = client.post("/v1beta/models/gemini-3-flash-agent:predict", json={
+        "instances": [{"text": "predict me"}],
+    })
+    long_running = client.post("/v1beta/models/gemini-3-flash-agent:predictLongRunning", json={
+        "instances": [{"text": "later"}],
+    })
+
+    assert predicted.status_code == 200
+    assert predicted.json()["predictions"][0]["candidates"][0]["content"]["parts"][0]["text"] == "predict me"
+    assert long_running.status_code == 200
+    assert long_running.json()["done"] is True
+    assert long_running.json()["response"]["predictions"]
 
 
 def test_gemini_stream_generate_content_sse(monkeypatch):
@@ -417,6 +466,10 @@ def test_gemini_files_upload_and_file_data_inline_conversion(tmp_path, monkeypat
     assert fetched.status_code == 200
     assert fetched.json()["displayName"] == "note.txt"
 
+    downloaded = client.get(f"/v1beta/{file_resource['name']}:download")
+    assert downloaded.status_code == 200
+    assert downloaded.content == b"hello file"
+
     generated = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
         "contents": [{
             "role": "user",
@@ -436,6 +489,31 @@ def test_gemini_files_upload_and_file_data_inline_conversion(tmp_path, monkeypat
     assert deleted.status_code == 200
     missing = client.get(f"/v1beta/{file_resource['name']}")
     assert missing.status_code == 404
+
+
+def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "gemini_files"))
+    client = TestClient(proxy.app)
+
+    registered = client.post("/v1beta/files:register", json={
+        "file": {
+            "displayName": "external.txt",
+            "mimeType": "text/plain",
+            "uri": "gs://bucket/external.txt",
+            "sizeBytes": "12",
+        }
+    })
+
+    assert registered.status_code == 200
+    file_resource = registered.json()["file"]
+    assert file_resource["displayName"] == "external.txt"
+    assert file_resource["uri"] == "gs://bucket/external.txt"
+
+    fetched = client.get(f"/v1beta/{file_resource['name']}")
+    downloaded = client.get(f"/v1beta/{file_resource['name']}:download")
+
+    assert fetched.status_code == 200
+    assert downloaded.status_code == 404
 
 
 def test_gemini_resumable_file_upload(tmp_path, monkeypatch):
@@ -547,6 +625,13 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     operation = client.get(f"/v1beta/{imported.json()['name']}")
     assert operation.status_code == 200
     assert operation.json()["done"] is True
+
+    nested_operation = client.get(f"/v1beta/fileSearchStores/{store_id}/{imported.json()['name']}")
+    media = client.get(f"/v1beta/fileSearchStores/{store_id}/media/{imported_doc['name'].rsplit('/', 1)[-1]}")
+    assert nested_operation.status_code == 200
+    assert nested_operation.json()["name"] == imported.json()["name"]
+    assert media.status_code == 200
+    assert media.content == b"source document"
 
     deleted_doc = client.delete(f"/v1beta/{imported_doc['name']}")
     deleted_store = client.delete(f"/v1beta/{store_name}")

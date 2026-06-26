@@ -339,7 +339,10 @@ Implemented Gemini-compatible routes:
 - `POST /v1beta/models/{model}:countTokens`
 - `POST /v1beta/models/{model}:embedContent`
 - `POST /v1beta/models/{model}:batchEmbedContents`
+- `POST /v1beta/models/{model}:asyncBatchEmbedContent`
 - `POST /v1beta/models/{model}:batchGenerateContent`
+- `POST /v1beta/models/{model}:predict`
+- `POST /v1beta/models/{model}:predictLongRunning`
 - `POST /v1beta/interactions`
 - `GET /v1beta/interactions/{interaction}`
 - `POST /v1beta/interactions/{interaction}:cancel`
@@ -348,11 +351,15 @@ Implemented Gemini-compatible routes:
 - `GET /v1beta/batches`
 - `GET /v1beta/batches/{batch}`
 - `POST /v1beta/batches/{batch}:cancel`
+- `PATCH /v1beta/batches/{batch}:updateGenerateContentBatch`
+- `PATCH /v1beta/batches/{batch}:updateEmbedContentBatch`
 - `DELETE /v1beta/batches/{batch}`
+- `POST /v1beta/files:register`
 - `POST /upload/v1beta/files`
 - `POST /v1beta/files`
 - `GET /v1beta/files`
 - `GET /v1beta/files/{file}`
+- `GET /v1beta/files/{file}:download`
 - `DELETE /v1beta/files/{file}`
 - `POST /v1beta/cachedContents`
 - `GET /v1beta/cachedContents`
@@ -371,6 +378,10 @@ Implemented Gemini-compatible routes:
 - `POST /upload/v1beta/fileSearchStores/{store}:uploadToFileSearchStore`
 - `GET /v1beta/fileSearchStores/{store}/documents`
 - `GET /v1beta/fileSearchStores/{store}/documents/{document}`
+- `GET /v1beta/fileSearchStores/{store}/media/{document}`
+- `GET /v1beta/fileSearchStores/{store}/operations/{operation}`
+- `POST /v1beta/fileSearchStores/{store}/operations/{operation}:cancel`
+- `DELETE /v1beta/fileSearchStores/{store}/operations/{operation}`
 - `DELETE /v1beta/fileSearchStores/{store}/documents/{document}`
 - `POST /v1beta/tunedModels`
 - `GET /v1beta/tunedModels`
@@ -465,11 +476,15 @@ Embeddings and batch operations:
   vectors for Gemini SDK compatibility. They are stable and shaped like Gemini
   embeddings, but they are not semantic Google embedding model outputs because
   Antigravity does not expose a public embedding RPC.
+- `asyncBatchEmbedContent` stores the deterministic batch embedding result as
+  an immediately completed local operation and batch resource.
 - `batchGenerateContent` runs requests synchronously through Antigravity and
   stores immediately completed `operations/*` and `batches/*` results.
 - `batches.create` accepts inline `requests` plus `model` and returns a
   completed local batch resource. It is intended for Gemini SDK/REST management
   compatibility; it does not run true asynchronous Batch Mode jobs.
+- `predict` and `predictLongRunning` are mapped to Gemini `generateContent`
+  requests and return prediction/operation-shaped compatibility responses.
 
 File search stores:
 
