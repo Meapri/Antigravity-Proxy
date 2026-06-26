@@ -618,6 +618,8 @@ def _gemini_normalize_generation_config(value: Any) -> Any:
     for key in ("responseLogprobs",):
         if key in out:
             out[key] = _gemini_bool_value(out[key])
+    if isinstance(out.get("responseSchema"), dict):
+        out["responseSchema"] = _sanitize_schema(dict(out["responseSchema"]))
     if isinstance(out.get("thinkingConfig"), dict):
         thinking = _gemini_normalize_request(out["thinkingConfig"])
         if "thinkingBudget" in thinking:

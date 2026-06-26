@@ -686,8 +686,9 @@ Gemini REST list form. Numeric and boolean generation config values such as
 from common string forms when possible.
 SDK transport-only options such as `httpOptions`, `requestOptions`,
 `apiVersion`, and `baseUrl` are ignored rather than forwarded as API payload.
-`response_format` / `responseFormat` wrappers are mapped into
-`generationConfig.responseMimeType` and `generationConfig.responseSchema`.
+`response_format` / `responseFormat` wrappers and direct
+`generationConfig.responseSchema` / SDK `config.response_schema` values are
+mapped into Gemini-compatible JSON output controls.
 Common schema aliases such as `property_ordering`, `any_of`, `min_items`, and
 `min_length` are normalized to Gemini/OpenAPI-style camelCase fields.
 Generate responses are normalized with Gemini-style `modelVersion`,
