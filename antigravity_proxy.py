@@ -694,10 +694,26 @@ def _gemini_status_for_http(status_code: int) -> str:
     return mapping.get(status_code, "INTERNAL" if status_code >= 500 else "INVALID_ARGUMENT")
 
 
+def _gemini_inline_data_part(value: dict[str, Any]) -> dict[str, Any] | None:
+    data = value.get("data") or value.get("base64") or value.get("bytesBase64Encoded")
+    mime_type = value.get("mimeType") or value.get("mime_type")
+    if data is None or not mime_type:
+        return None
+    text_data = str(data)
+    resolved_mime = str(mime_type)
+    if text_data.startswith("data:"):
+        header, _, text_data = text_data.partition(",")
+        resolved_mime = header.split(";", 1)[0].removeprefix("data:") or resolved_mime
+    return {"inlineData": {"mimeType": resolved_mime, "data": text_data}}
+
+
 def _gemini_content_part(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         if any(key in value for key in ("text", "inlineData", "fileData", "functionCall", "functionResponse")):
             return value
+        inline_part = _gemini_inline_data_part(value)
+        if inline_part:
+            return inline_part
         file_uri = value.get("uri") or value.get("fileUri") or value.get("name")
         if file_uri and (value.get("mimeType") or value.get("mime_type") or str(file_uri).startswith("files/")):
             file_data: dict[str, Any] = {"fileUri": str(file_uri)}
@@ -1156,6 +1172,9 @@ def _gemini_content_item_to_part(item: Any) -> dict[str, Any] | None:
     item_type = str(normalized.get("type") or "").strip()
     if item_type in {"text", "input_text", "output_text"} and normalized.get("text") is not None:
         return {"text": str(normalized["text"])}
+    inline_part = _gemini_inline_data_part(normalized)
+    if inline_part:
+        return inline_part
     if item_type in {"image", "input_image"}:
         mime_type = str(normalized.get("mimeType") or "image/jpeg")
         uri = (

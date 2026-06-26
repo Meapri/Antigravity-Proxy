@@ -659,6 +659,22 @@ def test_gemini_generate_content_accepts_sdk_content_unions(monkeypatch):
     assert counted.status_code == 200
     assert counted.json()["totalTokens"] > 0
 
+    bytes_part = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": [{
+            "role": "user",
+            "parts": [
+                {"data": "aW1hZ2U=", "mime_type": "image/png"},
+                {"text": "describe bytes"},
+            ],
+        }]
+    })
+    assert bytes_part.status_code == 200
+    assert seen["request"]["contents"][0]["parts"][0]["inlineData"] == {
+        "mimeType": "image/png",
+        "data": "aW1hZ2U=",
+    }
+    assert seen["request"]["contents"][0]["parts"][1]["text"] == "describe bytes"
+
 
 def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
     seen = {}
@@ -1452,6 +1468,21 @@ def test_gemini_interactions_accept_content_item_aliases_and_image_model(tmp_pat
     assert parts[1]["inlineData"] == {"mimeType": "image/jpeg", "data": "aW1hZ2U="}
     assert seen["request"]["generationConfig"]["responseModalities"] == ["TEXT"]
     assert seen["request"]["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_LOW"
+
+    bytes_interaction = client.post("/v1beta/interactions", json={
+        "input": [{
+            "role": "user",
+            "content": [
+                {"data": "ZmlsZQ==", "mime_type": "application/pdf"},
+                {"type": "text", "text": "read bytes"},
+            ],
+        }],
+        "store": False,
+    })
+    assert bytes_interaction.status_code == 200
+    parts = seen["request"]["contents"][0]["parts"]
+    assert parts[0]["inlineData"] == {"mimeType": "application/pdf", "data": "ZmlsZQ=="}
+    assert parts[1] == {"text": "read bytes"}
 
     structured_interaction = client.post("/v1/interactions", json={
         "input": "return json",
