@@ -661,6 +661,21 @@ def test_gemini_batch_wrapped_request_bodies(tmp_path, monkeypatch):
             "requests": [{"contents": [{"role": "user", "parts": [{"text": "method"}]}]}],
         }
     })
+    embedded = client.post("/v1beta/batches", json={
+        "embedContentBatch": {
+            "model": "models/gemini-3-flash-agent",
+            "displayName": "wrapped embed",
+            "requests": [{
+                "content": {"parts": [{"text": "embed wrapped"}]},
+                "outputDimensionality": 8,
+            }],
+        }
+    })
+    wrong_method = client.post("/v1beta/models/gemini-3-flash-agent:batchGenerateContent", json={
+        "embedContentBatch": {
+            "requests": [{"content": {"parts": [{"text": "wrong"}]}}],
+        }
+    })
 
     assert created.status_code == 200
     assert created.json()["displayName"] == "wrapped batch"
@@ -668,6 +683,11 @@ def test_gemini_batch_wrapped_request_bodies(tmp_path, monkeypatch):
     assert generated.status_code == 200
     assert generated.json()["metadata"]["requestCount"] == 1
     assert generated.json()["response"]["responses"][0]["candidates"][0]["content"]["parts"][0]["text"] == "method"
+    assert embedded.status_code == 200
+    assert embedded.json()["displayName"] == "wrapped embed"
+    assert embedded.json()["response"]["embeddings"][0]["values"]
+    assert len(embedded.json()["response"]["embeddings"][0]["values"]) == 8
+    assert wrong_method.status_code == 400
 
 
 def test_gemini_batches_create_get_cancel_delete(tmp_path, monkeypatch):

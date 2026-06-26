@@ -1051,13 +1051,16 @@ def _gemini_batch_name(name: str) -> str:
     return "batches/" + key
 
 
-def _gemini_batch_body(body: dict[str, Any]) -> dict[str, Any]:
+def _gemini_batch_body(body: Any) -> Any:
+    if not isinstance(body, dict):
+        return body
     for key in ("batch", "generateContentBatch", "embedContentBatch"):
         if isinstance(body.get(key), dict):
             merged = dict(body[key])
             for outer_key in ("model", "displayName", "inputConfig", "outputConfig", "requests"):
                 if outer_key in body and outer_key not in merged:
                     merged[outer_key] = body[outer_key]
+            merged["_batchKind"] = "embed" if key == "embedContentBatch" else "generate"
             return merged
     return body
 
@@ -5315,52 +5318,58 @@ async def gemini_async_batch_embed_content(model_name: str, request: Request):
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
-        embedding_response = _gemini_batch_embedding_from_request(body)
-        now = _gemini_now_iso()
-        batch_name = "batches/batch_" + uuid.uuid4().hex
-        operation_name = "operations/asyncBatchEmbedContent-" + uuid.uuid4().hex
-        model_resource = _gemini_model_name(model)
-        request_count = len(body.get("requests") or [])
-        response_payload = {
-            "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.AsyncBatchEmbedContentResponse",
-            **embedding_response,
-        }
-        batch = {
-            "name": batch_name,
-            "displayName": body.get("displayName") or body.get("display_name") or batch_name.rsplit("/", 1)[-1],
-            "model": model_resource,
-            "state": "JOB_STATE_SUCCEEDED",
-            "createTime": now,
-            "updateTime": now,
-            "endTime": now,
-            "requestCount": request_count,
-            "operation": operation_name,
-            "response": response_payload,
-            "metadata": {
-                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.AsyncBatchEmbedContentMetadata",
-                "model": model_resource,
-                "requestCount": request_count,
-            },
-        }
-        operation = {
-            "name": operation_name,
-            "metadata": {
-                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.AsyncBatchEmbedContentMetadata",
-                "model": model_resource,
-                "requestCount": request_count,
-                "batch": batch_name,
-            },
-            "done": True,
-            "response": response_payload,
-        }
-        _gemini_store_batch(batch)
-        return _gemini_store_operation(operation)
+        operation, _batch = _gemini_create_completed_embed_batch(model, body)
+        return operation
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
     except Exception as exc:
         log.exception("Gemini asyncBatchEmbedContent failed")
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+def _gemini_create_completed_embed_batch(model: dict[str, Any], body: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    embedding_response = _gemini_batch_embedding_from_request(body)
+    now = _gemini_now_iso()
+    batch_name = "batches/batch_" + uuid.uuid4().hex
+    operation_name = "operations/asyncBatchEmbedContent-" + uuid.uuid4().hex
+    model_resource = _gemini_model_name(model)
+    request_count = len(body.get("requests") or [])
+    response_payload = {
+        "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.AsyncBatchEmbedContentResponse",
+        **embedding_response,
+    }
+    batch = {
+        "name": batch_name,
+        "displayName": body.get("displayName") or batch_name.rsplit("/", 1)[-1],
+        "model": model_resource,
+        "state": "JOB_STATE_SUCCEEDED",
+        "createTime": now,
+        "updateTime": now,
+        "endTime": now,
+        "requestCount": request_count,
+        "operation": operation_name,
+        "response": response_payload,
+        "metadata": {
+            "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.AsyncBatchEmbedContentMetadata",
+            "model": model_resource,
+            "requestCount": request_count,
+        },
+    }
+    operation = {
+        "name": operation_name,
+        "metadata": {
+            "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.AsyncBatchEmbedContentMetadata",
+            "model": model_resource,
+            "requestCount": request_count,
+            "batch": batch_name,
+        },
+        "done": True,
+        "response": response_payload,
+    }
+    stored_batch = _gemini_store_batch(batch)
+    stored_operation = _gemini_store_operation(operation)
+    return stored_operation, stored_batch
 
 
 @app.post("/v1beta/models/{model_name:path}:predict")
@@ -5676,6 +5685,8 @@ async def gemini_batch_generate_content(model_name: str, request: Request):
     """Gemini-compatible batchGenerateContent as an immediately completed operation."""
     try:
         body = _gemini_batch_body(_gemini_normalize_request(await request.json()))
+        if isinstance(body, dict) and body.pop("_batchKind", None) == "embed":
+            raise HTTPException(status_code=400, detail="batchGenerateContent does not accept embedContentBatch.")
         operation, _batch = await _gemini_create_completed_batch(model_name, body)
         return operation
     except HTTPException as exc:
@@ -5762,7 +5773,12 @@ async def gemini_create_batch(request: Request):
         model_name = body.get("model") or body.get("modelName") or body.get("model_name")
         if not isinstance(model_name, str) or not model_name.strip():
             raise HTTPException(status_code=400, detail="batches.create requires a model.")
-        _operation, batch = await _gemini_create_completed_batch(model_name, body)
+        batch_kind = body.pop("_batchKind", None)
+        if batch_kind == "embed":
+            model = _resolve_gemini_model(model_name)
+            _operation, batch = _gemini_create_completed_embed_batch(model, body)
+        else:
+            _operation, batch = await _gemini_create_completed_batch(model_name, body)
         return batch
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
