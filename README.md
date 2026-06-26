@@ -398,6 +398,13 @@ Implemented Gemini-compatible routes:
 - `DELETE /v1beta/webhooks/{webhook}`
 - `POST /v1beta/webhooks/{webhook}:ping`
 - `POST /v1beta/webhooks/{webhook}:rotateSigningSecret`
+- `POST /v1/files:register`
+- `POST /upload/v1/files`
+- `POST /v1/files`
+- `GET /v1/files`
+- `GET /v1/files/{file}`
+- `GET /v1/files/{file}:download`
+- `DELETE /v1/files/{file}`
 - `POST /v1beta/files:register`
 - `POST /upload/v1beta/files`
 - `POST /v1beta/files`
@@ -414,6 +421,11 @@ Implemented Gemini-compatible routes:
 - `POST /v1beta/generatedFiles/operations/{operation}:wait`
 - `POST /v1beta/generatedFiles/operations/{operation}:cancel`
 - `DELETE /v1beta/generatedFiles/operations/{operation}`
+- `POST /v1/cachedContents`
+- `GET /v1/cachedContents`
+- `GET /v1/cachedContents/{cached_content}`
+- `PATCH /v1/cachedContents/{cached_content}`
+- `DELETE /v1/cachedContents/{cached_content}`
 - `POST /v1beta/cachedContents`
 - `GET /v1beta/cachedContents`
 - `GET /v1beta/cachedContents/{cached_content}`
@@ -685,11 +697,12 @@ Notes:
   `ANTIGRAVITY_GEMINI_FILES_DIR`. File resources include Gemini-style
   `downloadUri`, `source`, base64 `sha256Hash`, and video metadata fields when
   available. `POST /v1beta/files` supports official metadata-only File
-  creation, and `files:register` supports Gemini's `uris` array shape.
-  `files.list` uses Gemini's default page size of 10 and maximum page size of
-  100.
+  creation, the same Files API surface is also available under `/v1`, and
+  `files:register` supports Gemini's `uris` array shape. `files.list` uses
+  Gemini's default page size of 10 and maximum page size of 100.
 - Cached contents are stored locally under `data/gemini_cached_contents` by
   default; override with `ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR`.
+  `cachedContents` is available under both `/v1` and `/v1beta`;
   `cachedContents.list` supports Gemini `pageSize` / `pageToken` pagination and
   coerces page sizes above 1000 down to 1000.
 - Corpora are stored locally under `data/gemini_corpora` by default; override

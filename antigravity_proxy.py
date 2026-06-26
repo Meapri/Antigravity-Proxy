@@ -1680,8 +1680,10 @@ def _gemini_register_files_from_uris(body: dict[str, Any]) -> list[dict[str, Any
 
 def _gemini_get_file_meta(file_name: str) -> dict[str, Any] | None:
     key = file_name.strip().strip("/")
-    if key.startswith("v1beta/"):
-        key = key[len("v1beta/"):]
+    for prefix in ("v1beta/", "v1/"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+            break
     if key.startswith("files/"):
         name = key
     elif "/files/" in key:
@@ -1795,7 +1797,9 @@ async def _gemini_upload_file_from_request(request: Request) -> dict[str, Any]:
 
 def _is_gemini_metadata_file_create(request: Request) -> bool:
     path = request.url.path.rstrip("/")
-    if not path.endswith("/v1beta/files") or path.endswith("/upload/v1beta/files"):
+    if not (path.endswith("/v1beta/files") or path.endswith("/v1/files")):
+        return False
+    if path.endswith("/upload/v1beta/files") or path.endswith("/upload/v1/files"):
         return False
     if request.query_params.get("uploadType"):
         return False
@@ -1804,7 +1808,7 @@ def _is_gemini_metadata_file_create(request: Request) -> bool:
     return "application/json" in request.headers.get("content-type", "").lower()
 
 
-async def _gemini_start_resumable_upload(request: Request) -> JSONResponse:
+async def _gemini_start_resumable_upload(request: Request, upload_version: str | None = None) -> JSONResponse:
     body = await request.body()
     metadata: dict[str, Any] = {}
     if body:
@@ -1827,7 +1831,11 @@ async def _gemini_start_resumable_upload(request: Request) -> JSONResponse:
         "created": int(time.time()),
     }
     _gemini_save_upload_sessions(sessions)
-    upload_url = str(request.base_url).rstrip("/") + f"/upload/v1beta/files/{session_id}"
+    if upload_version is None:
+        raw_path = request.scope.get("raw_path")
+        upload_path = (raw_path.decode("ascii", "ignore") if isinstance(raw_path, bytes) else request.url.path).rstrip("/")
+        upload_version = "v1" if "/upload/v1/files" in upload_path or upload_path.endswith("/v1/files") else "v1beta"
+    upload_url = str(request.base_url).rstrip("/") + f"/upload/{upload_version}/files/{session_id}"
     return JSONResponse(
         {},
         headers={
@@ -1886,8 +1894,10 @@ def _gemini_save_cached_index(index: dict[str, dict[str, Any]]) -> None:
 
 def _gemini_cached_name(name: str) -> str:
     key = name.strip().strip("/")
-    if key.startswith("v1beta/"):
-        key = key[len("v1beta/"):]
+    for prefix in ("v1beta/", "v1/"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+            break
     if key.startswith("cachedContents/"):
         return key
     return "cachedContents/" + key
@@ -1895,6 +1905,11 @@ def _gemini_cached_name(name: str) -> str:
 
 def _gemini_cached_resource(meta: dict[str, Any]) -> dict[str, Any]:
     out = {k: v for k, v in meta.items() if k not in {"payload"} and v is not None}
+    payload = meta.get("payload")
+    if isinstance(payload, dict):
+        for key in ("contents", "systemInstruction", "tools", "toolConfig"):
+            if key in payload and key not in out:
+                out[key] = payload[key]
     return out
 
 
@@ -2900,6 +2915,8 @@ def _websocket_api_key_valid(websocket: WebSocket) -> bool:
 
 
 def _gemini_stable_alias_path(path: str) -> str:
+    if path.startswith("/upload/v1/files"):
+        return path
     if path.startswith("/upload/v1/"):
         return "/upload/v1beta/" + path[len("/upload/v1/"):]
     if not path.startswith("/v1/"):
@@ -2907,12 +2924,9 @@ def _gemini_stable_alias_path(path: str) -> str:
     suffix = path[len("/v1/"):]
     stable_prefixes = (
         "batches",
-        "cachedContents",
         "corpora",
         "fileSearchStores",
-        "files",
         "generatedFiles",
-        "interactions",
         "operations",
         "tunedModels",
         "webhooks",
@@ -4305,6 +4319,7 @@ async def gemini_get_model(model_name: str):
     return _gemini_model_resource(model)
 
 
+@app.get("/v1/files")
 @app.get("/v1beta/files")
 async def gemini_list_files(pageSize: int = Query(default=10, ge=1, le=100), pageToken: str | None = None):
     """Gemini-compatible local Files API listing."""
@@ -4319,6 +4334,7 @@ async def gemini_list_files(pageSize: int = Query(default=10, ge=1, le=100), pag
     }
 
 
+@app.post("/v1/files:register")
 @app.post("/v1beta/files:register")
 async def gemini_register_file(request: Request):
     """Gemini-compatible metadata-only file registration."""
@@ -4336,6 +4352,7 @@ async def gemini_register_file(request: Request):
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.get("/v1/files/{file_id:path}:download")
 @app.get("/v1beta/files/{file_id:path}:download")
 async def gemini_download_file(file_id: str):
     meta = _gemini_get_file_meta(file_id)
@@ -4347,6 +4364,7 @@ async def gemini_download_file(file_id: str):
     return Response(content=path.read_bytes(), media_type=meta.get("mimeType") or "application/octet-stream")
 
 
+@app.get("/v1/files/{file_id:path}")
 @app.get("/v1beta/files/{file_id:path}")
 async def gemini_get_file(file_id: str):
     meta = _gemini_get_file_meta(file_id)
@@ -4355,6 +4373,7 @@ async def gemini_get_file(file_id: str):
     return _gemini_file_resource(meta)
 
 
+@app.delete("/v1/files/{file_id:path}")
 @app.delete("/v1beta/files/{file_id:path}")
 async def gemini_delete_file(file_id: str):
     meta = _gemini_get_file_meta(file_id)
@@ -4372,9 +4391,7 @@ async def gemini_delete_file(file_id: str):
     return JSONResponse({})
 
 
-@app.post("/v1beta/files")
-@app.post("/upload/v1beta/files")
-async def gemini_upload_file(request: Request):
+async def _gemini_upload_file_response(request: Request, upload_version: str) -> Any:
     """Gemini-compatible simple media/multipart file upload."""
     try:
         if _is_gemini_metadata_file_create(request):
@@ -4383,7 +4400,7 @@ async def gemini_upload_file(request: Request):
                 raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
             return {"file": _gemini_register_file(body)}
         if request.headers.get("x-goog-upload-protocol", "").lower() == "resumable":
-            return await _gemini_start_resumable_upload(request)
+            return await _gemini_start_resumable_upload(request, upload_version=upload_version)
         file_resource = await _gemini_upload_file_from_request(request)
         return {"file": file_resource}
     except HTTPException as exc:
@@ -4391,6 +4408,18 @@ async def gemini_upload_file(request: Request):
     except Exception as exc:
         log.exception("Gemini file upload failed")
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.post("/v1/files")
+@app.post("/upload/v1/files")
+async def gemini_upload_file_v1(request: Request):
+    return await _gemini_upload_file_response(request, upload_version="v1")
+
+
+@app.post("/v1beta/files")
+@app.post("/upload/v1beta/files")
+async def gemini_upload_file(request: Request):
+    return await _gemini_upload_file_response(request, upload_version="v1beta")
 
 
 @app.get("/v1beta/generatedFiles")
@@ -4483,7 +4512,9 @@ async def gemini_delete_generated_file(generated_file_id: str):
     return JSONResponse({})
 
 
+@app.post("/upload/v1/files/{session_id}")
 @app.post("/upload/v1beta/files/{session_id}")
+@app.put("/upload/v1/files/{session_id}")
 @app.put("/upload/v1beta/files/{session_id}")
 async def gemini_resumable_upload(session_id: str, request: Request):
     try:
@@ -4499,6 +4530,7 @@ async def gemini_resumable_upload(session_id: str, request: Request):
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.post("/v1/cachedContents")
 @app.post("/v1beta/cachedContents")
 async def gemini_create_cached_content(request: Request):
     try:
@@ -4513,6 +4545,7 @@ async def gemini_create_cached_content(request: Request):
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.get("/v1/cachedContents")
 @app.get("/v1beta/cachedContents")
 async def gemini_list_cached_contents(pageSize: int = Query(default=100, ge=1), pageToken: str | None = None):
     index = _gemini_load_cached_index()
@@ -4524,6 +4557,7 @@ async def gemini_list_cached_contents(pageSize: int = Query(default=100, ge=1), 
     return {"cachedContents": items[start:end], "nextPageToken": str(end) if end < len(items) else ""}
 
 
+@app.get("/v1/cachedContents/{cache_id:path}")
 @app.get("/v1beta/cachedContents/{cache_id:path}")
 async def gemini_get_cached_content(cache_id: str):
     meta = _gemini_get_cached_meta(cache_id)
@@ -4532,6 +4566,7 @@ async def gemini_get_cached_content(cache_id: str):
     return _gemini_cached_resource(meta)
 
 
+@app.patch("/v1/cachedContents/{cache_id:path}")
 @app.patch("/v1beta/cachedContents/{cache_id:path}")
 async def gemini_patch_cached_content(cache_id: str, request: Request, updateMask: str | None = None):
     try:
@@ -4548,6 +4583,7 @@ async def gemini_patch_cached_content(cache_id: str, request: Request, updateMas
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.delete("/v1/cachedContents/{cache_id:path}")
 @app.delete("/v1beta/cachedContents/{cache_id:path}")
 async def gemini_delete_cached_content(cache_id: str):
     meta = _gemini_get_cached_meta(cache_id)

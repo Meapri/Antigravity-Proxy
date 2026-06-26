@@ -1345,6 +1345,50 @@ def test_gemini_resumable_file_upload(tmp_path, monkeypatch):
     assert file_resource["mimeType"] == "text/plain"
 
 
+def test_gemini_files_v1_aliases(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "gemini_files"))
+    client = TestClient(proxy.app)
+
+    uploaded = client.post(
+        "/upload/v1/files?uploadType=media&displayName=v1-note.txt",
+        content=b"v1 file",
+        headers={"Content-Type": "text/plain"},
+    )
+    assert uploaded.status_code == 200
+    file_resource = uploaded.json()["file"]
+    assert file_resource["displayName"] == "v1-note.txt"
+
+    assert client.get("/v1/files").json()["files"][0]["name"] == file_resource["name"]
+    assert client.get(f"/v1/{file_resource['name']}").json()["displayName"] == "v1-note.txt"
+    assert client.get(f"/v1/{file_resource['name']}:download").content == b"v1 file"
+
+    registered = client.post("/v1/files", json={
+        "file": {"displayName": "v1-external.txt", "uri": "gs://bucket/v1-external.txt"}
+    })
+    assert registered.status_code == 200
+    assert registered.json()["file"]["source"] == "REGISTERED"
+
+    registered_many = client.post("/v1/files:register", json={"uris": ["gs://bucket/v1-one.txt"]})
+    assert registered_many.status_code == 200
+    assert registered_many.json()["files"][0]["uri"] == "gs://bucket/v1-one.txt"
+
+    started = client.post(
+        "/upload/v1/files",
+        json={"file": {"displayName": "v1-resumable.txt", "mimeType": "text/plain"}},
+        headers={
+            "X-Goog-Upload-Protocol": "resumable",
+            "X-Goog-Upload-Command": "start",
+            "X-Goog-Upload-Header-Content-Type": "text/plain",
+        },
+    )
+    assert started.status_code == 200
+    assert "/upload/v1/files/" in started.headers["x-goog-upload-url"]
+
+    deleted = client.delete(f"/v1/{file_resource['name']}")
+    assert deleted.status_code == 200
+    assert client.get(f"/v1/{file_resource['name']}").status_code == 404
+
+
 def test_gemini_cached_contents_merge_into_generate_request(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR", str(tmp_path / "gemini_cached"))
     seen = {}
@@ -1424,6 +1468,36 @@ def test_gemini_cached_contents_merge_into_generate_request(tmp_path, monkeypatc
     deleted = client.delete(f"/v1beta/{cache_name}")
     assert deleted.status_code == 200
     missing = client.get(f"/v1beta/{cache_name}")
+    assert missing.status_code == 404
+
+
+def test_gemini_cached_contents_v1_aliases(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR", str(tmp_path / "gemini_cached"))
+    client = TestClient(proxy.app)
+
+    created = client.post("/v1/cachedContents", json={
+        "cachedContent": {
+            "model": "models/gemini-3-flash-agent",
+            "contents": [{"role": "user", "parts": [{"text": "v1 cached context"}]}],
+            "ttl": "60s",
+        }
+    })
+    assert created.status_code == 200
+    cache_name = created.json()["name"]
+
+    listed = client.get("/v1/cachedContents")
+    fetched = client.get(f"/v1/{cache_name}")
+    patched = client.patch(f"/v1/{cache_name}?updateMask=ttl", json={"ttl": "90s"})
+    deleted = client.delete(f"/v1/{cache_name}")
+    missing = client.get(f"/v1/{cache_name}")
+
+    assert listed.status_code == 200
+    assert listed.json()["cachedContents"][0]["name"] == cache_name
+    assert fetched.status_code == 200
+    assert fetched.json()["contents"][0]["parts"][0]["text"] == "v1 cached context"
+    assert patched.status_code == 200
+    assert patched.json()["ttl"] == "90s"
+    assert deleted.status_code == 200
     assert missing.status_code == 404
 
 
