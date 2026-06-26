@@ -2161,6 +2161,8 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     assert file_resource["uri"] == "gs://bucket/external.txt"
     assert file_resource["downloadUri"] == "https://storage.example/external.txt"
     assert file_resource["source"] == "REGISTERED"
+    assert file_resource["state"] == "ACTIVE"
+    assert file_resource["updateTime"]
 
     official_created = client.post("/v1beta/files", json={
         "file": {
@@ -2175,6 +2177,7 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     assert official_file["displayName"] == "official.txt"
     assert official_file["uri"] == "gs://bucket/official.txt"
     assert official_file["source"] == "REGISTERED"
+    assert official_file["state"] == "ACTIVE"
     assert official_file.get("expirationTime") is None
     official_download = client.get(f"/v1beta/{official_file['name']}:download")
     assert official_download.status_code == 404
@@ -2184,19 +2187,21 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
             "displayName": "config-file.txt",
             "uri": "gs://bucket/config-file.txt",
         },
-        "config": {"mime_type": "text/markdown", "sizeBytes": "9"},
+        "config": {"mime_type": "text/markdown", "sizeBytes": "9", "state": "file_state_processing"},
     })
     assert config_created.status_code == 200
     assert config_created.json()["file"]["mimeType"] == "text/markdown"
     assert config_created.json()["file"]["sizeBytes"] == "9"
+    assert config_created.json()["file"]["state"] == "PROCESSING"
 
     official_registered = client.post("/v1beta/files:register", json={
         "uris": ["gs://bucket/one.txt", "gs://bucket/two.txt"],
-        "config": {"mime_type": "text/plain", "source": "REGISTERED"},
+        "config": {"mime_type": "text/plain", "source": "file_source_registered"},
         "files": [
             {
                 "display_name": "one-custom.txt",
                 "custom_metadata": [{"key": "source", "stringValue": "uris"}],
+                "state": "state_failed",
             },
             {"display_name": "two-custom.txt"},
         ],
@@ -2210,6 +2215,7 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     assert all(item["source"] == "REGISTERED" for item in official_registered_files)
     assert all(item["mimeType"] == "text/plain" for item in official_registered_files)
     assert [item["displayName"] for item in official_registered_files] == ["one-custom.txt", "two-custom.txt"]
+    assert [item["state"] for item in official_registered_files] == ["FAILED", "ACTIVE"]
     assert official_registered_files[0]["customMetadata"][0]["stringValue"] == "uris"
 
     video = client.post("/v1beta/files:register", json={

@@ -733,7 +733,10 @@ curl http://127.0.0.1:8765/v1beta/files \
 `files`; common `config` fields such as `mimeType`, `source`, and
 `customMetadata` are applied to each URI, while an optional `files` array can
 provide per-URI metadata such as `displayName` or `customMetadata`. The older
-proxy `{"file": ...}` form remains available as a compatibility alias.
+proxy `{"file": ...}` form remains available as a compatibility alias. File
+`state` and `source` values are normalized to Gemini-style enum names such as
+`ACTIVE`, `FAILED`, `UPLOADED`, and `REGISTERED` across create, list, and get
+responses.
 
 Then pass the returned `file.uri` in `fileData.fileUri`:
 

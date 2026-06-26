@@ -2579,6 +2579,43 @@ def _gemini_save_files_index(index: dict[str, dict[str, Any]]) -> None:
     os.replace(tmp, path)
 
 
+def _gemini_file_enum(value: Any, *, default: str, allowed: set[str]) -> str:
+    if value is None:
+        return default
+    normalized = str(value).strip().upper().replace("-", "_")
+    if not normalized:
+        return default
+    if normalized in allowed:
+        return normalized
+    if normalized.startswith("FILE_STATE_"):
+        candidate = normalized.removeprefix("FILE_STATE_")
+    elif normalized.startswith("STATE_"):
+        candidate = normalized.removeprefix("STATE_")
+    elif normalized.startswith("FILE_SOURCE_"):
+        candidate = normalized.removeprefix("FILE_SOURCE_")
+    elif normalized.startswith("SOURCE_"):
+        candidate = normalized.removeprefix("SOURCE_")
+    else:
+        candidate = normalized
+    return candidate if candidate in allowed else normalized
+
+
+def _gemini_file_state(value: Any) -> str:
+    return _gemini_file_enum(
+        value,
+        default="ACTIVE",
+        allowed={"STATE_UNSPECIFIED", "PROCESSING", "ACTIVE", "FAILED"},
+    )
+
+
+def _gemini_file_source(value: Any, *, registered: bool = False) -> str:
+    return _gemini_file_enum(
+        value,
+        default="REGISTERED" if registered else "UPLOADED",
+        allowed={"SOURCE_UNSPECIFIED", "UPLOADED", "GENERATED", "REGISTERED"},
+    )
+
+
 def _gemini_file_resource(meta: dict[str, Any]) -> dict[str, Any]:
     now = int(meta.get("createTime") or time.time())
     sha256_hash = str(meta.get("sha256Hash") or "")
@@ -2598,8 +2635,8 @@ def _gemini_file_resource(meta: dict[str, Any]) -> dict[str, Any]:
         "sha256Hash": sha256_hash,
         "uri": meta.get("uri") or meta["name"],
         "downloadUri": meta.get("downloadUri") or (meta.get("uri") or meta["name"]),
-        "state": meta.get("state") or "ACTIVE",
-        "source": meta.get("source") or ("REGISTERED" if meta.get("registered") else "UPLOADED"),
+        "state": _gemini_file_state(meta.get("state")),
+        "source": _gemini_file_source(meta.get("source"), registered=bool(meta.get("registered"))),
     }
     if isinstance(meta.get("error"), dict):
         resource["error"] = meta["error"]
@@ -2660,7 +2697,7 @@ def _gemini_file_metadata(body: dict[str, Any]) -> dict[str, Any]:
     merged = dict(file_meta)
     config = normalized.get("config") if isinstance(normalized.get("config"), dict) else file_meta.get("config")
     if isinstance(config, dict):
-        for key in ("displayName", "mimeType", "name", "uri", "downloadUri", "sizeBytes", "videoMetadata", "customMetadata", "source", "expirationTime", "sha256Hash"):
+        for key in ("displayName", "mimeType", "name", "uri", "downloadUri", "sizeBytes", "videoMetadata", "customMetadata", "state", "source", "expirationTime", "sha256Hash"):
             if key in config and key not in merged:
                 merged[key] = config[key]
     return merged
@@ -2693,8 +2730,8 @@ def _gemini_register_file(body: dict[str, Any]) -> dict[str, Any]:
         "sha256Hash": file_meta.get("sha256Hash") or file_meta.get("sha256_hash") or "",
         "uri": uri,
         "downloadUri": file_meta.get("downloadUri") or file_meta.get("download_uri") or uri,
-        "state": file_meta.get("state") or "ACTIVE",
-        "source": file_meta.get("source") or "REGISTERED",
+        "state": _gemini_file_state(file_meta.get("state")),
+        "source": _gemini_file_source(file_meta.get("source"), registered=True),
         "videoMetadata": file_meta.get("videoMetadata") or file_meta.get("video_metadata"),
         "customMetadata": file_meta.get("customMetadata") or file_meta.get("custom_metadata") or file_meta.get("metadata"),
         "registered": True,
