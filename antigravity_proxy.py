@@ -17,9 +17,11 @@ import json
 import logging
 import os
 import secrets
+import sqlite3
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import sys
@@ -305,6 +307,35 @@ class ModelListResponse(BaseModel):
     data: list[dict[str, Any]]
 
 
+class ResponseCreateRequest(BaseModel):
+    model: str = "gemini-3-flash"
+    input: Any
+    instructions: str | None = None
+    previous_response_id: str | None = None
+    stream: bool = False
+    store: bool = True
+    background: bool = False
+    metadata: dict[str, Any] | None = None
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    max_output_tokens: int | None = Field(default=None, ge=1, le=1048576)
+    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
+    tools: list[dict[str, Any]] | None = None
+    tool_choice: Any | None = None
+    parallel_tool_calls: bool | None = True
+    truncation: str | None = "disabled"
+    user: str | None = None
+
+    model_config = {"extra": "allow"}
+
+
+class ResponseInputTokensRequest(BaseModel):
+    model: str | None = None
+    input: Any
+    instructions: str | None = None
+
+    model_config = {"extra": "allow"}
+
+
 # ---------------------------------------------------------------------------
 # Global state
 # ---------------------------------------------------------------------------
@@ -313,6 +344,109 @@ _client: AntigravityClient | None = None
 _LAST_MODEL_REFRESH_TS: float = 0.0
 _LAST_MODEL_REFRESH_OK: bool = False
 _LAST_MODEL_REFRESH_ERROR: str = ""
+
+
+def _responses_db_path() -> Path:
+    return Path(os.getenv("ANTIGRAVITY_RESPONSES_DB", "data/responses.sqlite3")).expanduser()
+
+
+def _responses_db() -> sqlite3.Connection:
+    path = _responses_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS responses (
+            id TEXT PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            model TEXT NOT NULL,
+            response_json TEXT NOT NULL,
+            input_items_json TEXT NOT NULL,
+            output_items_json TEXT NOT NULL,
+            usage_json TEXT NOT NULL,
+            previous_response_id TEXT,
+            metadata_json TEXT NOT NULL,
+            deleted INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.commit()
+    return conn
+
+
+def _responses_store_save(response: dict[str, Any], input_items: list[dict[str, Any]]) -> None:
+    now = int(time.time())
+    with _responses_db() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO responses
+                (id, created_at, updated_at, status, model, response_json, input_items_json,
+                 output_items_json, usage_json, previous_response_id, metadata_json, deleted)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            """,
+            (
+                response["id"],
+                int(response.get("created_at") or now),
+                now,
+                str(response.get("status") or "completed"),
+                str(response.get("model") or ""),
+                json.dumps(response, ensure_ascii=False),
+                json.dumps(input_items, ensure_ascii=False),
+                json.dumps(response.get("output") or [], ensure_ascii=False),
+                json.dumps(response.get("usage") or {}, ensure_ascii=False),
+                response.get("previous_response_id"),
+                json.dumps(response.get("metadata") or {}, ensure_ascii=False),
+            ),
+        )
+
+
+def _responses_store_get(response_id: str) -> dict[str, Any] | None:
+    with _responses_db() as conn:
+        row = conn.execute(
+            "SELECT response_json FROM responses WHERE id = ? AND deleted = 0",
+            (response_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return json.loads(row["response_json"])
+
+
+def _responses_store_get_input_items(response_id: str) -> list[dict[str, Any]] | None:
+    with _responses_db() as conn:
+        row = conn.execute(
+            "SELECT input_items_json FROM responses WHERE id = ? AND deleted = 0",
+            (response_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return json.loads(row["input_items_json"])
+
+
+def _responses_store_delete(response_id: str) -> bool:
+    with _responses_db() as conn:
+        cur = conn.execute(
+            "UPDATE responses SET deleted = 1, updated_at = ? WHERE id = ? AND deleted = 0",
+            (int(time.time()), response_id),
+        )
+        return cur.rowcount > 0
+
+
+def _responses_store_update_status(response_id: str, status: str) -> dict[str, Any] | None:
+    response = _responses_store_get(response_id)
+    if not response:
+        return None
+    response["status"] = status
+    if status == "cancelled":
+        response["error"] = {"message": "Response cancelled.", "type": "cancelled", "code": "cancelled"}
+    _responses_store_save(response, _responses_store_get_input_items(response_id) or [])
+    return response
+
+
+def _new_response_id() -> str:
+    return "resp_" + uuid.uuid4().hex
 
 
 def _get_settings() -> Settings:
@@ -499,6 +633,319 @@ def _openai_error_response(
         },
         status_code=status_code,
     )
+
+
+def _responses_message_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        texts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                texts.append(part)
+            elif isinstance(part, dict):
+                ptype = part.get("type")
+                if ptype in {"input_text", "output_text", "text"} and part.get("text") is not None:
+                    texts.append(str(part.get("text")))
+        return "\n".join(t for t in texts if t)
+    return str(content)
+
+
+def _responses_content_to_chat(content: Any) -> Any:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return _responses_message_text(content)
+    out: list[dict[str, Any]] = []
+    for part in content:
+        if isinstance(part, str):
+            out.append({"type": "text", "text": part})
+            continue
+        if not isinstance(part, dict):
+            continue
+        ptype = part.get("type")
+        if ptype in {"input_text", "text"}:
+            out.append({"type": "text", "text": str(part.get("text") or "")})
+        elif ptype == "input_image":
+            image_url = part.get("image_url") or part.get("url")
+            if not image_url:
+                raise HTTPException(status_code=400, detail="input_image requires image_url or url.")
+            out.append({"type": "image_url", "image_url": {"url": image_url}})
+        elif ptype in {"input_file", "file", "input_audio", "audio"}:
+            raise HTTPException(status_code=400, detail=f"Unsupported Responses input content type: {ptype}")
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported Responses input content type: {ptype}")
+    return out
+
+
+def _normalize_responses_input(input_value: Any, *, instructions: str | None = None) -> tuple[list[ChatMessage], list[dict[str, Any]]]:
+    messages: list[ChatMessage] = []
+    input_items: list[dict[str, Any]] = []
+    if instructions:
+        messages.append(ChatMessage(role="system", content=instructions))
+        input_items.append({
+            "id": "item_" + uuid.uuid4().hex,
+            "type": "message",
+            "role": "system",
+            "content": [{"type": "input_text", "text": instructions}],
+        })
+
+    if isinstance(input_value, str):
+        messages.append(ChatMessage(role="user", content=input_value))
+        input_items.append({
+            "id": "item_" + uuid.uuid4().hex,
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": input_value}],
+        })
+        return messages, input_items
+
+    if not isinstance(input_value, list):
+        raise HTTPException(status_code=400, detail="Responses input must be a string or list of input items.")
+
+    for item in input_value:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=400, detail="Responses input list items must be objects.")
+        item_type = item.get("type", "message")
+        if item_type == "message":
+            role = str(item.get("role") or "user")
+            if role == "developer":
+                role = "system"
+            if role not in {"system", "user", "assistant"}:
+                raise HTTPException(status_code=400, detail=f"Unsupported Responses message role: {role}")
+            content = item.get("content", "")
+            chat_content = _responses_content_to_chat(content)
+            messages.append(ChatMessage(role=role, content=chat_content))
+            input_items.append({
+                "id": str(item.get("id") or ("item_" + uuid.uuid4().hex)),
+                "type": "message",
+                "role": role,
+                "content": content if isinstance(content, list) else [{"type": "input_text", "text": str(content)}],
+            })
+        elif item_type == "function_call_output":
+            call_id = str(item.get("call_id") or item.get("id") or "")
+            output = item.get("output", "")
+            messages.append(ChatMessage(role="tool", content=str(output), tool_call_id=call_id))
+            input_items.append({
+                "id": str(item.get("id") or ("item_" + uuid.uuid4().hex)),
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": str(output),
+            })
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported Responses input item type: {item_type}")
+    return messages, input_items
+
+
+def _responses_previous_messages(previous_response_id: str | None) -> list[ChatMessage]:
+    if not previous_response_id:
+        return []
+    previous = _responses_store_get(previous_response_id)
+    if not previous:
+        raise HTTPException(status_code=404, detail=f"Previous response '{previous_response_id}' not found.")
+    messages: list[ChatMessage] = []
+    previous_items = _responses_store_get_input_items(previous_response_id) or []
+    for item in previous_items:
+        if item.get("type") == "message":
+            role = str(item.get("role") or "user")
+            if role == "developer":
+                role = "system"
+            if role in {"system", "user", "assistant"}:
+                messages.append(ChatMessage(role=role, content=_responses_content_to_chat(item.get("content", ""))))
+        elif item.get("type") == "function_call_output":
+            messages.append(ChatMessage(
+                role="tool",
+                content=str(item.get("output") or ""),
+                tool_call_id=str(item.get("call_id") or item.get("id") or ""),
+            ))
+    for item in previous.get("output") or []:
+        if item.get("type") == "message":
+            messages.append(ChatMessage(role="assistant", content=_responses_message_text(item.get("content"))))
+        elif item.get("type") == "function_call":
+            messages.append(ChatMessage(
+                role="assistant",
+                content=None,
+                tool_calls=[{
+                    "id": item.get("call_id") or item.get("id"),
+                    "type": "function",
+                    "function": {"name": item.get("name"), "arguments": item.get("arguments") or "{}"},
+                }],
+            ))
+    return messages
+
+
+def _responses_validate_tools(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    if not tools:
+        return None
+    normalized: list[dict[str, Any]] = []
+    for tool in tools:
+        if not isinstance(tool, dict) or tool.get("type") != "function":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported Responses tool type: {tool.get('type') if isinstance(tool, dict) else tool}",
+            )
+        if isinstance(tool.get("function"), dict):
+            if not tool["function"].get("name"):
+                raise HTTPException(status_code=400, detail="Responses function tool requires a name.")
+            normalized.append(tool)
+        else:
+            if not tool.get("name"):
+                raise HTTPException(status_code=400, detail="Responses function tool requires a name.")
+            normalized.append({
+                "type": "function",
+                "function": {
+                    "name": tool.get("name"),
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("parameters") or {"type": "object", "properties": {}},
+                },
+            })
+    return normalized
+
+
+def _responses_tool_choice(tool_choice: Any) -> Any:
+    if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+        return {"type": "function", "function": {"name": tool_choice.get("name") or (tool_choice.get("function") or {}).get("name")}}
+    return tool_choice
+
+
+def _chat_response_to_dict(result: Any) -> dict[str, Any]:
+    if isinstance(result, JSONResponse):
+        return json.loads(result.body)
+    if hasattr(result, "model_dump"):
+        return result.model_dump()
+    if isinstance(result, dict):
+        return result
+    raise RuntimeError("Unsupported chat completion response type.")
+
+
+def _responses_usage(chat_usage: dict[str, Any]) -> dict[str, int]:
+    return {
+        "input_tokens": int(chat_usage.get("prompt_tokens") or chat_usage.get("input_tokens") or 0),
+        "output_tokens": int(chat_usage.get("completion_tokens") or chat_usage.get("output_tokens") or 0),
+        "total_tokens": int(chat_usage.get("total_tokens") or 0),
+    }
+
+
+def _responses_output_from_chat(chat: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    choice = (chat.get("choices") or [{}])[0]
+    message = choice.get("message") or {}
+    output: list[dict[str, Any]] = []
+    output_texts: list[str] = []
+    content = message.get("content")
+    if content:
+        output_texts.append(str(content))
+        output.append({
+            "id": "msg_" + uuid.uuid4().hex,
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": str(content), "annotations": []}],
+        })
+    for tc in message.get("tool_calls") or []:
+        fn = tc.get("function") or {}
+        output.append({
+            "id": str(tc.get("id") or ("fc_" + uuid.uuid4().hex)),
+            "type": "function_call",
+            "status": "completed",
+            "call_id": str(tc.get("id") or ("call_" + uuid.uuid4().hex)),
+            "name": str(fn.get("name") or ""),
+            "arguments": str(fn.get("arguments") or "{}"),
+        })
+    return output, "\n".join(output_texts)
+
+
+def _responses_build_object(
+    *,
+    response_id: str,
+    req: ResponseCreateRequest,
+    chat: dict[str, Any],
+    input_items: list[dict[str, Any]],
+    status: str = "completed",
+) -> dict[str, Any]:
+    output, output_text = _responses_output_from_chat(chat)
+    created = int(time.time())
+    return {
+        "id": response_id,
+        "object": "response",
+        "created_at": created,
+        "status": status,
+        "background": bool(req.background),
+        "error": None,
+        "incomplete_details": None,
+        "instructions": req.instructions,
+        "max_output_tokens": req.max_output_tokens,
+        "model": req.model,
+        "output": output,
+        "output_text": output_text,
+        "parallel_tool_calls": bool(req.parallel_tool_calls),
+        "previous_response_id": req.previous_response_id,
+        "store": bool(req.store),
+        "temperature": req.temperature,
+        "tool_choice": req.tool_choice,
+        "tools": req.tools or [],
+        "top_p": req.top_p,
+        "truncation": req.truncation or "disabled",
+        "usage": _responses_usage(chat.get("usage") or {}),
+        "metadata": req.metadata or {},
+        "input_items": input_items,
+    }
+
+
+async def _responses_generate(req: ResponseCreateRequest) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    tools = _responses_validate_tools(req.tools)
+    current_messages, input_items = _normalize_responses_input(req.input, instructions=req.instructions)
+    messages = _responses_previous_messages(req.previous_response_id) + current_messages
+    chat_req = ChatCompletionRequest(
+        model=req.model,
+        messages=messages,
+        temperature=req.temperature,
+        max_tokens=req.max_output_tokens,
+        top_p=req.top_p,
+        stream=False,
+        user=req.user,
+        tools=tools,
+        tool_choice=_responses_tool_choice(req.tool_choice),
+    )
+    chat = _chat_response_to_dict(await chat_completions(chat_req))
+    response = _responses_build_object(
+        response_id=_new_response_id(),
+        req=req,
+        chat=chat,
+        input_items=input_items,
+    )
+    return response, input_items
+
+
+def _responses_sse(response: dict[str, Any]):
+    def evt(name: str, payload: dict[str, Any]) -> str:
+        data = {"type": name, **payload}
+        return f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    def gen():
+        yield evt("response.created", {"response": {**response, "status": "queued", "output": [], "output_text": ""}})
+        yield evt("response.in_progress", {"response": {**response, "status": "in_progress", "output": [], "output_text": ""}})
+        for index, item in enumerate(response.get("output") or []):
+            yield evt("response.output_item.added", {"output_index": index, "item": item})
+            if item.get("type") == "message":
+                for content_index, part in enumerate(item.get("content") or []):
+                    yield evt("response.content_part.added", {"output_index": index, "content_index": content_index, "part": part})
+                    text = str(part.get("text") or "")
+                    if text:
+                        yield evt("response.output_text.delta", {"output_index": index, "content_index": content_index, "delta": text})
+                        yield evt("response.output_text.done", {"output_index": index, "content_index": content_index, "text": text})
+                    yield evt("response.content_part.done", {"output_index": index, "content_index": content_index, "part": part})
+            elif item.get("type") == "function_call":
+                args = str(item.get("arguments") or "")
+                if args:
+                    yield evt("response.function_call_arguments.delta", {"output_index": index, "item_id": item.get("id"), "delta": args})
+                yield evt("response.function_call_arguments.done", {"output_index": index, "item_id": item.get("id"), "arguments": args})
+            yield evt("response.output_item.done", {"output_index": index, "item": item})
+        yield evt("response.completed", {"response": response})
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 @app.middleware("http")
@@ -1530,6 +1977,123 @@ async def chat_completions(req: ChatCompletionRequest):
         ],
         usage=ChatUsage(**_usage_from_response(None, messages=req.messages, completion=text)),
     )
+
+
+@app.post("/v1/responses")
+async def create_response(req: ResponseCreateRequest):
+    if req.background:
+        response = {
+            "id": _new_response_id(),
+            "object": "response",
+            "created_at": int(time.time()),
+            "status": "queued",
+            "background": True,
+            "error": None,
+            "incomplete_details": None,
+            "instructions": req.instructions,
+            "max_output_tokens": req.max_output_tokens,
+            "model": req.model,
+            "output": [],
+            "output_text": "",
+            "parallel_tool_calls": bool(req.parallel_tool_calls),
+            "previous_response_id": req.previous_response_id,
+            "store": bool(req.store),
+            "temperature": req.temperature,
+            "tool_choice": req.tool_choice,
+            "tools": req.tools or [],
+            "top_p": req.top_p,
+            "truncation": req.truncation or "disabled",
+            "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+            "metadata": req.metadata or {},
+            "input_items": [],
+        }
+        _, input_items = _normalize_responses_input(req.input, instructions=req.instructions)
+        response["input_items"] = input_items
+        if req.store:
+            _responses_store_save(response, input_items)
+        if req.stream:
+            return _responses_sse(response)
+        return JSONResponse(response)
+
+    response, input_items = await _responses_generate(req)
+    if req.store:
+        _responses_store_save(response, input_items)
+    if req.stream:
+        return _responses_sse(response)
+    return JSONResponse(response)
+
+
+@app.post("/v1/responses/input_tokens")
+async def count_response_input_tokens(req: ResponseInputTokensRequest):
+    messages, _items = _normalize_responses_input(req.input, instructions=req.instructions)
+    return {
+        "object": "response.input_tokens",
+        "input_tokens": _estimate_prompt_tokens(messages),
+    }
+
+
+@app.get("/v1/responses/{response_id}")
+async def retrieve_response(response_id: str):
+    response = _responses_store_get(response_id)
+    if not response:
+        raise HTTPException(status_code=404, detail=f"Response '{response_id}' not found.")
+    return JSONResponse(response)
+
+
+@app.delete("/v1/responses/{response_id}")
+async def delete_response(response_id: str):
+    if not _responses_store_delete(response_id):
+        raise HTTPException(status_code=404, detail=f"Response '{response_id}' not found.")
+    return {"id": response_id, "object": "response.deleted", "deleted": True}
+
+
+@app.post("/v1/responses/{response_id}/cancel")
+async def cancel_response(response_id: str):
+    response = _responses_store_get(response_id)
+    if not response:
+        raise HTTPException(status_code=404, detail=f"Response '{response_id}' not found.")
+    if response.get("status") in {"queued", "in_progress"}:
+        response = _responses_store_update_status(response_id, "cancelled") or response
+    return JSONResponse(response)
+
+
+@app.get("/v1/responses/{response_id}/input_items")
+async def list_response_input_items(response_id: str):
+    items = _responses_store_get_input_items(response_id)
+    if items is None:
+        raise HTTPException(status_code=404, detail=f"Response '{response_id}' not found.")
+    return {
+        "object": "list",
+        "data": items,
+        "first_id": items[0]["id"] if items else None,
+        "last_id": items[-1]["id"] if items else None,
+        "has_more": False,
+    }
+
+
+@app.post("/v1/responses/{response_id}/compact")
+async def compact_response(response_id: str):
+    response = _responses_store_get(response_id)
+    if not response:
+        raise HTTPException(status_code=404, detail=f"Response '{response_id}' not found.")
+    compact_input = (
+        "Summarize the following prior response into a compact context message. "
+        "Preserve user intent, tool results, and important facts.\n\n"
+        + json.dumps({
+            "input_items": _responses_store_get_input_items(response_id) or [],
+            "output": response.get("output") or [],
+            "output_text": response.get("output_text") or "",
+        }, ensure_ascii=False)
+    )
+    req = ResponseCreateRequest(
+        model=str(response.get("model") or "gemini-3-flash"),
+        input=compact_input,
+        store=True,
+        metadata={"compact_of": response_id},
+    )
+    compacted, input_items = await _responses_generate(req)
+    _responses_store_save(compacted, input_items)
+    return JSONResponse(compacted)
 
 
 @app.get("/health")

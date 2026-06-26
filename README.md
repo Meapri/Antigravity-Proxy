@@ -15,6 +15,7 @@ endpoint backed by Google Search grounding.
 
 - OpenAI-compatible model listing: `GET /v1/models`
 - OpenAI-compatible chat completions: `POST /v1/chat/completions`
+- OpenAI-compatible Responses API shim: `POST /v1/responses`
 - Streaming chat responses, including tool-call deltas
 - OpenAI-style function calling / tool calls
 - Vision input through OpenAI `image_url` content parts
@@ -105,6 +106,7 @@ ANTIGRAVITY_CLIENT_FILE=~/.hermes/auth/google_antigravity_client.json
 ```bash
 ANTIGRAVITY_PROXY_MODEL=gemini-3.5-flash-high
 ANTIGRAVITY_PROXY_IMAGE_MODEL=gemini-3.1-flash-image
+ANTIGRAVITY_RESPONSES_DB=data/responses.sqlite3
 ANTIGRAVITY_PROJECT_ID=
 ```
 
@@ -167,6 +169,49 @@ curl http://127.0.0.1:8765/v1/chat/completions \
   }'
 ```
 
+Responses:
+
+```bash
+curl http://127.0.0.1:8765/v1/responses \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Gemini 3.5 Flash (High)",
+    "input": "Say hello in one short sentence."
+  }'
+```
+
+Responses streaming:
+
+```bash
+curl http://127.0.0.1:8765/v1/responses \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Gemini 3.5 Flash (High)",
+    "input": "Stream one sentence.",
+    "stream": true
+  }'
+```
+
+Retrieve stored response:
+
+```bash
+curl http://127.0.0.1:8765/v1/responses/resp_your_response_id
+```
+
+List response input items:
+
+```bash
+curl http://127.0.0.1:8765/v1/responses/resp_your_response_id/input_items
+```
+
+Count response input tokens:
+
+```bash
+curl http://127.0.0.1:8765/v1/responses/input_tokens \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Count these tokens approximately."}'
+```
+
 Tool call:
 
 ```bash
@@ -226,6 +271,44 @@ response = client.chat.completions.create(
 
 print(response.choices[0].message.content)
 ```
+
+Responses API example:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:8765/v1",
+    api_key="not-used",
+)
+
+response = client.responses.create(
+    model="Gemini 3.5 Flash (High)",
+    input="Explain this proxy in one sentence.",
+)
+
+print(response.output_text)
+```
+
+## Responses API Compatibility
+
+Implemented:
+
+- `POST /v1/responses`
+- `GET /v1/responses/{response_id}`
+- `DELETE /v1/responses/{response_id}`
+- `POST /v1/responses/{response_id}/cancel`
+- `GET /v1/responses/{response_id}/input_items`
+- `POST /v1/responses/input_tokens`
+- `POST /v1/responses/{response_id}/compact`
+- durable response storage through SQLite
+- `previous_response_id`
+- `store=false`
+- text, image input, custom function tools, and streaming response events
+
+Unsupported OpenAI-hosted tools are rejected with an OpenAI-style 400 error,
+including file search, hosted web search, code interpreter, computer use, MCP,
+shell, and apply-patch style tools. Use custom function tools instead.
 
 ## Hermes Custom Provider Example
 
