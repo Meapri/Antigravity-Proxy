@@ -335,6 +335,35 @@ def test_gemini_embeddings_are_deterministic():
     assert len(batch.json()["embeddings"][0]["values"]) == 16
 
 
+def test_gemini_embeddings_respect_task_type_title_and_snake_case():
+    client = TestClient(proxy.app)
+
+    base = client.post("/v1beta/models/gemini-3-flash-agent:embedContent", json={
+        "content": {"parts": [{"text": "same document"}]},
+        "output_dimensionality": 16,
+    })
+    retrieval = client.post("/v1beta/models/gemini-3-flash-agent:embedContent", json={
+        "content": {"parts": [{"text": "same document"}]},
+        "output_dimensionality": 16,
+        "task_type": "RETRIEVAL_DOCUMENT",
+        "title": "Atlas Plan",
+    })
+    batch = client.post("/v1beta/models/gemini-3-flash-agent:batchEmbedContents", json={
+        "requests": [{
+            "content": {"parts": [{"text": "same document"}]},
+            "output_dimensionality": 16,
+            "task_type": "RETRIEVAL_QUERY",
+        }]
+    })
+
+    assert base.status_code == 200
+    assert retrieval.status_code == 200
+    assert batch.status_code == 200
+    assert len(base.json()["embedding"]["values"]) == 16
+    assert len(batch.json()["embeddings"][0]["values"]) == 16
+    assert base.json()["embedding"]["values"] != retrieval.json()["embedding"]["values"]
+
+
 def test_gemini_legacy_embed_text_methods():
     client = TestClient(proxy.app)
 

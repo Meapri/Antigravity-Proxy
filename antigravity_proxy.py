@@ -395,6 +395,8 @@ _GEMINI_KEY_ALIASES = {
     "image_config": "imageConfig",
     "speech_config": "speechConfig",
     "routing_config": "routingConfig",
+    "output_dimensionality": "outputDimensionality",
+    "task_type": "taskType",
     "display_name": "displayName",
     "target_uri": "targetUri",
     "event_types": "eventTypes",
@@ -852,8 +854,13 @@ def _gemini_embedding_values(text: str, *, dimensions: int = 768) -> list[float]
 
 def _gemini_embedding_from_request(body: dict[str, Any]) -> dict[str, Any]:
     content = body.get("content") or {}
-    output_dim = body.get("outputDimensionality") or body.get("output_dimensionality") or 768
-    text = _gemini_content_text(content)
+    output_dim = body.get("outputDimensionality") or 768
+    seed_parts = [_gemini_content_text(content)]
+    if body.get("taskType"):
+        seed_parts.append(f"taskType:{body['taskType']}")
+    if body.get("title"):
+        seed_parts.append(f"title:{body['title']}")
+    text = "\n".join(str(part) for part in seed_parts if part is not None)
     return {"embedding": {"values": _gemini_embedding_values(text, dimensions=int(output_dim))}}
 
 
@@ -5182,8 +5189,13 @@ async def gemini_embed_text(model_name: str, request: Request):
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
         text = str(body.get("text") or _gemini_legacy_prompt_text(body))
-        output_dim = int(body.get("outputDimensionality") or body.get("output_dimensionality") or 768)
-        return {"embedding": {"value": _gemini_embedding_values(text, dimensions=output_dim)}}
+        output_dim = int(body.get("outputDimensionality") or 768)
+        seed_parts = [text]
+        if body.get("taskType"):
+            seed_parts.append(f"taskType:{body['taskType']}")
+        if body.get("title"):
+            seed_parts.append(f"title:{body['title']}")
+        return {"embedding": {"value": _gemini_embedding_values("\n".join(seed_parts), dimensions=output_dim)}}
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
@@ -5207,10 +5219,16 @@ async def gemini_batch_embed_text(model_name: str, request: Request):
         for item in texts:
             if isinstance(item, dict):
                 text = str(item.get("text") or _gemini_legacy_prompt_text(item))
-                output_dim = int(item.get("outputDimensionality") or item.get("output_dimensionality") or 768)
+                output_dim = int(item.get("outputDimensionality") or 768)
+                seed_parts = [text]
+                if item.get("taskType"):
+                    seed_parts.append(f"taskType:{item['taskType']}")
+                if item.get("title"):
+                    seed_parts.append(f"title:{item['title']}")
+                text = "\n".join(seed_parts)
             else:
                 text = str(item)
-                output_dim = int(body.get("outputDimensionality") or body.get("output_dimensionality") or 768)
+                output_dim = int(body.get("outputDimensionality") or 768)
             embeddings.append({"value": _gemini_embedding_values(text, dimensions=output_dim)})
         return {"embeddings": embeddings}
     except HTTPException as exc:
