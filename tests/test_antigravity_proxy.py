@@ -460,15 +460,18 @@ def test_gemini_embeddings_accept_latest_config_and_contents_forms():
     configured = client.post("/v1beta/models/gemini-3-flash-agent:embedContent", json={
         "contents": ["alpha", "beta"],
         "config": {
-            "outputDimensionality": 14,
-            "taskType": "RETRIEVAL_DOCUMENT",
+            "output_dimensionality": "14",
+            "task_type": "retrieval document",
             "title": "SDK Config",
+            "auto_truncate": "false",
+            "document_ocr": "true",
+            "audio_track_extraction": "0",
         },
     })
     wrapped = client.post("/v1/models/gemini-3-flash-agent:batchEmbedContents", json={
         "requests": [{
             "contents": [{"parts": [{"text": "gamma"}]}, {"parts": [{"text": "delta"}]}],
-            "embed_content_config": {"output_dimensionality": 11},
+            "embed_content_config": {"output_dimensionality": "11", "task_type": "code retrieval query"},
         }]
     })
 

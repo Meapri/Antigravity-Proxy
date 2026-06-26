@@ -416,6 +416,9 @@ _GEMINI_KEY_ALIASES = {
     "embedContentConfig": "embedContentConfig",
     "output_dimensionality": "outputDimensionality",
     "task_type": "taskType",
+    "auto_truncate": "autoTruncate",
+    "document_ocr": "documentOcr",
+    "audio_track_extraction": "audioTrackExtraction",
     "display_name": "displayName",
     "target_uri": "targetUri",
     "update_mask": "updateMask",
@@ -564,6 +567,34 @@ def _gemini_normalize_generation_config(value: Any) -> Any:
     for key in ("responseLogprobs",):
         if key in out:
             out[key] = _gemini_bool_value(out[key])
+    return out
+
+
+def _gemini_normalize_embedding_config(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    out = _gemini_normalize_request(value)
+    if "outputDimensionality" in out:
+        out["outputDimensionality"] = _gemini_int_value(out["outputDimensionality"])
+    for key in ("autoTruncate", "documentOcr", "audioTrackExtraction"):
+        if key in out:
+            out[key] = _gemini_bool_value(out[key])
+    task_type = out.get("taskType")
+    if isinstance(task_type, str):
+        normalized = task_type.strip().upper().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "UNSPECIFIED": "TASK_TYPE_UNSPECIFIED",
+            "TASK_TYPE_UNSPECIFIED": "TASK_TYPE_UNSPECIFIED",
+            "RETRIEVAL_QUERY": "RETRIEVAL_QUERY",
+            "RETRIEVAL_DOCUMENT": "RETRIEVAL_DOCUMENT",
+            "SEMANTIC_SIMILARITY": "SEMANTIC_SIMILARITY",
+            "CLASSIFICATION": "CLASSIFICATION",
+            "CLUSTERING": "CLUSTERING",
+            "QUESTION_ANSWERING": "QUESTION_ANSWERING",
+            "FACT_VERIFICATION": "FACT_VERIFICATION",
+            "CODE_RETRIEVAL_QUERY": "CODE_RETRIEVAL_QUERY",
+        }
+        out["taskType"] = aliases.get(normalized, task_type)
     return out
 
 
@@ -1071,11 +1102,11 @@ def _gemini_embedding_config(body: dict[str, Any]) -> dict[str, Any]:
     for key in ("config", "embedContentConfig"):
         value = body.get(key)
         if isinstance(value, dict):
-            config.update(_gemini_normalize_request(value))
-    for key in ("outputDimensionality", "taskType", "title"):
+            config.update(_gemini_normalize_embedding_config(value))
+    for key in ("outputDimensionality", "taskType", "title", "autoTruncate", "documentOcr", "audioTrackExtraction"):
         if body.get(key) is not None:
             config[key] = body[key]
-    return config
+    return _gemini_normalize_embedding_config(config)
 
 
 def _gemini_embedding_content_items(body: dict[str, Any]) -> list[Any]:
