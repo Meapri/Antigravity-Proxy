@@ -461,6 +461,18 @@ def _gemini_error_response(message: Any, *, status_code: int, status: str | None
     )
 
 
+def _gemini_status_for_http(status_code: int) -> str:
+    if status_code == 404:
+        return "NOT_FOUND"
+    if status_code == 501:
+        return "UNIMPLEMENTED"
+    if status_code == 403:
+        return "PERMISSION_DENIED"
+    if status_code == 401:
+        return "UNAUTHENTICATED"
+    return "INVALID_ARGUMENT"
+
+
 def _gemini_count_tokens_request(body: dict[str, Any]) -> list[ChatMessage]:
     payload = body.get("generateContentRequest") if isinstance(body.get("generateContentRequest"), dict) else body
     contents = payload.get("contents") or []
@@ -2100,6 +2112,26 @@ def _gemini_apply_file_search(body: dict[str, Any]) -> dict[str, Any]:
     else:
         merged.pop("tools", None)
     return merged
+
+
+def _gemini_reject_unsupported_builtin_tools(body: dict[str, Any]) -> None:
+    tools = body.get("tools") if isinstance(body.get("tools"), list) else []
+    unsupported = {
+        "codeExecution": "code_execution",
+        "url_context": "url_context",
+    }
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        for key, display in unsupported.items():
+            if key in tool:
+                raise HTTPException(
+                    status_code=501,
+                    detail=(
+                        f"Gemini tool '{display}' is recognized but not implemented by this "
+                        "Antigravity-backed proxy."
+                    ),
+                )
 
 
 def _gemini_tuned_root() -> Path:
@@ -5547,6 +5579,7 @@ async def gemini_generate_content(model_name: str, request: Request):
             })
         body = _gemini_apply_cached_content(body)
         body = _gemini_apply_file_search(body)
+        _gemini_reject_unsupported_builtin_tools(body)
         body = _gemini_inline_local_files(body)
         body.pop("model", None)
         if request.query_params.get("alt") == "sse" or request.query_params.get("stream", "").lower() == "true":
@@ -5558,7 +5591,7 @@ async def gemini_generate_content(model_name: str, request: Request):
         )
         return JSONResponse(_gemini_unwrap_response(data))
     except HTTPException as exc:
-        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        status = _gemini_status_for_http(exc.status_code)
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
     except Exception as exc:
         _upstream = ""
@@ -6210,10 +6243,11 @@ async def gemini_stream_generate_content(model_name: str, request: Request):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
         body = _gemini_apply_cached_content(body)
         body = _gemini_apply_file_search(body)
+        _gemini_reject_unsupported_builtin_tools(body)
         body = _gemini_inline_local_files(body)
         body.pop("model", None)
     except HTTPException as exc:
-        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        status = _gemini_status_for_http(exc.status_code)
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
     except Exception as exc:
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")

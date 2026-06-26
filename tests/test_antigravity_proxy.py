@@ -444,6 +444,26 @@ def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
     assert seen["request"]["tools"] == [{"google_search": {}}]
 
 
+def test_gemini_generate_content_rejects_unsupported_builtin_tools():
+    client = TestClient(proxy.app)
+
+    url_context = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": [{"role": "user", "parts": [{"text": "read url"}]}],
+        "tools": [{"urlContext": {}}],
+    })
+    code_execution = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": [{"role": "user", "parts": [{"text": "run code"}]}],
+        "tools": [{"code_execution": {}}],
+    })
+
+    assert url_context.status_code == 501
+    assert url_context.json()["error"]["status"] == "UNIMPLEMENTED"
+    assert "url_context" in url_context.json()["error"]["message"]
+    assert code_execution.status_code == 501
+    assert code_execution.json()["error"]["status"] == "UNIMPLEMENTED"
+    assert "code_execution" in code_execution.json()["error"]["message"]
+
+
 def test_gemini_generate_content_alt_sse(monkeypatch):
     class FakeClient:
         async def generate_raw_stream_async(self, *, request, model=""):

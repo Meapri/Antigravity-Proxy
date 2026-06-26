@@ -504,7 +504,11 @@ The Gemini compatibility layer forwards native Gemini request fields such as
 `tools`, and `toolConfig` to Antigravity. It accepts both common camelCase and
 snake_case SDK spellings for fields such as `generation_config`,
 `response_mime_type`, `inline_data`, `file_data`, `googleSearch`,
-`urlContext`, and `codeExecution`.
+`urlContext`, and `codeExecution`. `googleSearch` is forwarded as
+`google_search`, and local `file_search` tools are converted into retrieved
+context. `urlContext` and `codeExecution` are recognized but return
+`UNIMPLEMENTED` because the current Antigravity backend does not expose those
+hosted tools.
 
 Files API example:
 
