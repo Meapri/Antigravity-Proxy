@@ -709,6 +709,9 @@ The upload endpoint also supports Gemini resumable upload starts through
 `X-Goog-Upload-Command: query`, `upload`, and `upload, finalize` with
 `X-Goog-Upload-Offset`. Upload metadata accepts both official `file` objects
 and SDK-style `config` wrappers such as `{"config": {"mimeType": "text/plain"}}`.
+Uploaded local files include a Gemini-style `expirationTime` 48 hours after
+creation; metadata-only registered external files preserve an explicit
+`expirationTime` only when supplied.
 
 Metadata-only File creation is also available through the official metadata
 URI:

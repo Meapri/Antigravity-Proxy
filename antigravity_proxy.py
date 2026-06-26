@@ -2480,6 +2480,10 @@ def _gemini_file_resource(meta: dict[str, Any]) -> dict[str, Any]:
     return resource
 
 
+def _gemini_file_expiration_iso(now: int) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + 48 * 60 * 60))
+
+
 def _gemini_store_file(data: bytes, *, mime_type: str | None = None, display_name: str | None = None) -> dict[str, Any]:
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
@@ -2502,6 +2506,7 @@ def _gemini_store_file(data: bytes, *, mime_type: str | None = None, display_nam
         "updateTime": now,
         "createTimeIso": iso,
         "updateTimeIso": iso,
+        "expirationTimeIso": _gemini_file_expiration_iso(now),
         "sha256Hash": digest,
         "uri": f"files/{file_id}",
         "downloadUri": f"files/{file_id}:download",

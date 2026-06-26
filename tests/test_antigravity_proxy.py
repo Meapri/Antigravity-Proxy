@@ -1941,6 +1941,7 @@ def test_gemini_files_upload_and_file_data_inline_conversion(tmp_path, monkeypat
     assert file_resource["sha256Hash"] == "84d+ij2Y+AnZ+EQGD76ihkpLZpgKIv8iKXAU0MFo2y4="
     assert file_resource["downloadUri"].endswith(":download")
     assert file_resource["source"] == "UPLOADED"
+    assert file_resource["expirationTime"]
 
     listed = client.get("/v1beta/files")
     assert listed.status_code == 200
@@ -2076,6 +2077,7 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     assert official_file["displayName"] == "official.txt"
     assert official_file["uri"] == "gs://bucket/official.txt"
     assert official_file["source"] == "REGISTERED"
+    assert official_file.get("expirationTime") is None
     official_download = client.get(f"/v1beta/{official_file['name']}:download")
     assert official_download.status_code == 404
 
@@ -2175,6 +2177,7 @@ def test_gemini_resumable_file_upload(tmp_path, monkeypatch):
     file_resource = finished.json()["file"]
     assert file_resource["displayName"] == "resumable.txt"
     assert file_resource["mimeType"] == "text/plain"
+    assert file_resource["expirationTime"]
 
     started_with_config = client.post(
         "/upload/v1beta/files",
