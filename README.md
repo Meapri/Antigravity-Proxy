@@ -937,7 +937,10 @@ Notes:
 - Corpora are stored locally under `data/gemini_corpora` by default; override
   with `ANTIGRAVITY_GEMINI_CORPORA_DIR`.
 - Batch operations are stored locally under `data/gemini_operations` by default;
-  override with `ANTIGRAVITY_GEMINI_OPERATIONS_DIR`.
+  override with `ANTIGRAVITY_GEMINI_OPERATIONS_DIR`. The top-level
+  `operations.list` endpoint supports `filter` terms for common fields such as
+  `done`, `name`, `metadata.*`, and `error.status`, plus
+  `returnPartialSuccess` / `return_partial_success`.
 - Batch resources are stored locally under `data/gemini_batches` by default;
   override with `ANTIGRAVITY_GEMINI_BATCHES_DIR`.
 - Interactions are stored locally under `data/gemini_interactions` by default;

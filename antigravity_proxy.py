@@ -2018,6 +2018,43 @@ def _gemini_batch_filter_matches(batch: dict[str, Any], operation: dict[str, Any
     return True
 
 
+def _gemini_operation_filter_matches(operation: dict[str, Any], filter_expr: str | None) -> bool:
+    if not filter_expr:
+        return True
+    aliases = {
+        "operation": "name",
+        "operation.name": "name",
+        "metadata.batch_resource": "metadata.batchResource",
+        "metadata.batch_resource.state": "metadata.batchResource.state",
+        "metadata.batch_resource.display_name": "metadata.batchResource.displayName",
+        "error.status": "error.status",
+    }
+    terms = re.split(r"\s+(?:AND|and)\s+", filter_expr.strip())
+    for term in terms:
+        term = term.strip()
+        if not term:
+            continue
+        match = re.match(r"^([\w.]+)\s*(!=|=|:)\s*(.+)$", term)
+        if not match:
+            continue
+        field, operator, expected_raw = match.groups()
+        expected = expected_raw.strip().strip("\"'")
+        actual = _gemini_get_path_value(operation, aliases.get(field, field))
+        if isinstance(actual, bool):
+            expected_value: Any = expected.lower() == "true"
+        else:
+            expected_value = expected
+        actual_text = str(actual or "")
+        expected_text = str(expected_value)
+        if operator == "=" and actual != expected_value and actual_text != expected_text:
+            return False
+        if operator == "!=" and (actual == expected_value or actual_text == expected_text):
+            return False
+        if operator == ":" and expected_text.lower() not in actual_text.lower():
+            return False
+    return True
+
+
 def _gemini_interactions_root() -> Path:
     return Path(os.getenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", "data/gemini_interactions")).expanduser()
 
@@ -8224,13 +8261,21 @@ async def gemini_stream_generate_content(model_name: str, request: Request):
 
 @app.get("/v1/operations")
 @app.get("/v1beta/operations")
-async def gemini_list_operations(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+async def gemini_list_operations(
+    pageSize: int = Query(default=100, ge=1, le=1000),
+    pageToken: str | None = None,
+    filter: str | None = None,
+    returnPartialSuccess: bool = False,
+):
     index = _gemini_load_operations_index()
-    operations = list(index.values())
+    operations = [operation for operation in index.values() if _gemini_operation_filter_matches(operation, filter)]
     operations.sort(key=lambda item: item.get("name") or "")
     start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
     end = start + pageSize
-    return {"operations": operations[start:end], "nextPageToken": str(end) if end < len(operations) else ""}
+    response = {"operations": operations[start:end], "nextPageToken": str(end) if end < len(operations) else ""}
+    if returnPartialSuccess:
+        response["unreachable"] = []
+    return response
 
 
 @app.get("/v1/operations/{operation_id:path}")

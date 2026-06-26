@@ -1078,7 +1078,7 @@ def test_gemini_batch_generate_content_operation(tmp_path, monkeypatch):
     assert fetched.status_code == 200
     assert fetched.json()["name"] == operation["name"]
     assert listed.status_code == 200
-    assert listed.json()["operations"][0]["name"] == operation["name"]
+    assert operation["name"] in {item["name"] for item in listed.json()["operations"]}
     assert waited.status_code == 200
     assert waited.json()["name"] == operation["name"]
     assert batch.status_code == 200
@@ -1102,8 +1102,20 @@ def test_gemini_operations_v1_aliases(tmp_path, monkeypatch):
         "metadata": {"model": "models/gemini-3-flash-agent"},
         "done": False,
     })
+    proxy._gemini_store_operation({
+        "name": "operations/op_other_model",
+        "metadata": {"model": "models/other"},
+        "done": True,
+    })
 
     listed = client.get("/v1/operations")
+    filtered = client.get(
+        "/v1/operations",
+        params={
+            "filter": 'done=false AND metadata.model="models/gemini-3-flash-agent"',
+            "return_partial_success": "true",
+        },
+    )
     fetched = client.get(f"/v1/{operation['name']}")
     waited = client.post(f"/v1/{operation['name']}:wait")
     cancelled = client.post(f"/v1/{operation['name']}:cancel")
@@ -1112,7 +1124,10 @@ def test_gemini_operations_v1_aliases(tmp_path, monkeypatch):
     missing = client.get(f"/v1/{operation['name']}")
 
     assert listed.status_code == 200
-    assert listed.json()["operations"][0]["name"] == operation["name"]
+    assert operation["name"] in {item["name"] for item in listed.json()["operations"]}
+    assert filtered.status_code == 200
+    assert [item["name"] for item in filtered.json()["operations"]] == [operation["name"]]
+    assert filtered.json()["unreachable"] == []
     assert fetched.status_code == 200
     assert fetched.json()["done"] is False
     assert waited.status_code == 200
