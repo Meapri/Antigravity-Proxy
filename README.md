@@ -665,6 +665,8 @@ SDK transport-only options such as `httpOptions`, `requestOptions`,
 `apiVersion`, and `baseUrl` are ignored rather than forwarded as API payload.
 `response_format` / `responseFormat` wrappers are mapped into
 `generationConfig.responseMimeType` and `generationConfig.responseSchema`.
+Common schema aliases such as `property_ordering`, `any_of`, `min_items`, and
+`min_length` are normalized to Gemini/OpenAPI-style camelCase fields.
 Generate responses are normalized with Gemini-style `modelVersion`,
 `responseId`, candidate `index`, `finishReason`, model-role content parts, and
 `usageMetadata` token counts when the upstream response omits or partially

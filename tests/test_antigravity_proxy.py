@@ -560,6 +560,11 @@ def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
             "schema": {
                 "properties": {"answer": {"type": "string"}},
                 "required": ["answer"],
+                "property_ordering": ["answer"],
+                "any_of": [
+                    {"properties": {"answer": {"type": "string"}}},
+                    {"properties": {"answer": {"type": "string", "min_length": 1}}},
+                ],
             },
         },
         "tools": [{"googleSearch": {}}],
@@ -577,6 +582,11 @@ def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
     assert seen["request"]["generationConfig"]["responseSchema"] == {
         "properties": {"answer": {"type": "string"}},
         "required": ["answer"],
+        "propertyOrdering": ["answer"],
+        "anyOf": [
+            {"properties": {"answer": {"type": "string"}}, "type": "object"},
+            {"properties": {"answer": {"type": "string", "minLength": 1}}, "type": "object"},
+        ],
         "type": "object",
     }
     assert seen["request"]["generationConfig"]["maxOutputTokens"] == 32

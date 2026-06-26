@@ -4217,6 +4217,17 @@ def _save_thought_sig(key: str, val: str) -> None:
 _SCHEMA_KEEP = {
     "type", "description", "properties", "required", "items",
     "enum", "nullable", "format", "minimum", "maximum",
+    "minItems", "maxItems", "minLength", "maxLength",
+    "propertyOrdering", "anyOf",
+}
+
+_SCHEMA_KEY_ALIASES = {
+    "min_items": "minItems",
+    "max_items": "maxItems",
+    "min_length": "minLength",
+    "max_length": "maxLength",
+    "property_ordering": "propertyOrdering",
+    "any_of": "anyOf",
 }
 
 
@@ -4391,13 +4402,16 @@ def _sanitize_schema(schema: Any) -> Any:
         schema["type"] = "object"
 
     out: dict[str, Any] = {}
-    for k, v in schema.items():
+    for raw_key, v in schema.items():
+        k = _SCHEMA_KEY_ALIASES.get(str(raw_key), raw_key)
         if k not in _SCHEMA_KEEP:
             continue
         if k == "properties" and isinstance(v, dict):
             out[k] = {pk: _sanitize_schema(pv) for pk, pv in v.items()}
         elif k == "items":
             out[k] = _sanitize_schema(v)
+        elif k == "anyOf" and isinstance(v, list):
+            out[k] = [_sanitize_schema(item) for item in v]
         else:
             out[k] = v
 
