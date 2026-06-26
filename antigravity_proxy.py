@@ -2209,8 +2209,10 @@ def _gemini_save_fss_index(index: dict[str, dict[str, Any]]) -> None:
 
 def _gemini_fss_name(name: str) -> str:
     key = name.strip().strip("/")
-    if key.startswith("v1beta/"):
-        key = key[len("v1beta/"):]
+    for prefix in ("v1beta/", "v1/"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+            break
     if key.startswith("fileSearchStores/"):
         return key
     return "fileSearchStores/" + key
@@ -2925,7 +2927,7 @@ def _websocket_api_key_valid(websocket: WebSocket) -> bool:
 
 
 def _gemini_stable_alias_path(path: str) -> str:
-    if path.startswith("/upload/v1/files"):
+    if path.startswith("/upload/v1/files") or path.startswith("/upload/v1/fileSearchStores"):
         return path
     if path.startswith("/upload/v1/"):
         return "/upload/v1beta/" + path[len("/upload/v1/"):]
@@ -2934,7 +2936,6 @@ def _gemini_stable_alias_path(path: str) -> str:
     suffix = path[len("/v1/"):]
     stable_prefixes = (
         "corpora",
-        "fileSearchStores",
     )
     if suffix.startswith(stable_prefixes):
         return "/v1beta/" + suffix
@@ -5018,6 +5019,7 @@ async def gemini_delete_corpus_permission(corpus_id: str, permission_id: str):
     return JSONResponse({})
 
 
+@app.post("/v1/fileSearchStores")
 @app.post("/v1beta/fileSearchStores")
 async def gemini_create_file_search_store(request: Request):
     try:
@@ -5032,6 +5034,7 @@ async def gemini_create_file_search_store(request: Request):
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.get("/v1/fileSearchStores")
 @app.get("/v1beta/fileSearchStores")
 async def gemini_list_file_search_stores(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
     stores = [_gemini_fss_resource(meta) for meta in _gemini_load_fss_index().values()]
@@ -5041,6 +5044,7 @@ async def gemini_list_file_search_stores(pageSize: int = Query(default=100, ge=1
     return {"fileSearchStores": stores[start:end], "nextPageToken": str(end) if end < len(stores) else ""}
 
 
+@app.get("/v1/fileSearchStores/{store_id}")
 @app.get("/v1beta/fileSearchStores/{store_id}")
 async def gemini_get_file_search_store(store_id: str):
     meta = _gemini_get_fss_meta(store_id)
@@ -5049,6 +5053,7 @@ async def gemini_get_file_search_store(store_id: str):
     return _gemini_fss_resource(meta)
 
 
+@app.delete("/v1/fileSearchStores/{store_id}")
 @app.delete("/v1beta/fileSearchStores/{store_id}")
 async def gemini_delete_file_search_store(store_id: str):
     name = _gemini_fss_name(store_id)
@@ -5060,6 +5065,7 @@ async def gemini_delete_file_search_store(store_id: str):
     return JSONResponse({})
 
 
+@app.post("/v1/fileSearchStores/{store_id}:importFile")
 @app.post("/v1beta/fileSearchStores/{store_id}:importFile")
 async def gemini_import_file_to_file_search_store(store_id: str, request: Request):
     try:
@@ -5088,7 +5094,9 @@ async def gemini_import_file_to_file_search_store(store_id: str, request: Reques
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.post("/upload/v1/fileSearchStores/{store_id}:uploadToFileSearchStore")
 @app.post("/upload/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore")
+@app.post("/v1/fileSearchStores/{store_id}:uploadToFileSearchStore")
 @app.post("/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore")
 async def gemini_upload_to_file_search_store(store_id: str, request: Request):
     try:
@@ -5127,6 +5135,7 @@ async def gemini_upload_to_file_search_store(store_id: str, request: Request):
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.get("/v1/fileSearchStores/{store_id}/documents")
 @app.get("/v1beta/fileSearchStores/{store_id}/documents")
 async def gemini_list_file_search_documents(store_id: str, pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
     meta = _gemini_get_fss_meta(store_id)
@@ -5139,6 +5148,7 @@ async def gemini_list_file_search_documents(store_id: str, pageSize: int = Query
     return {"documents": docs[start:end], "nextPageToken": str(end) if end < len(docs) else ""}
 
 
+@app.get("/v1/fileSearchStores/{store_id}/media/{document_id:path}")
 @app.get("/v1beta/fileSearchStores/{store_id}/media/{document_id:path}")
 async def gemini_download_file_search_document_media(store_id: str, document_id: str):
     meta = _gemini_get_fss_meta(store_id)
@@ -5154,6 +5164,7 @@ async def gemini_download_file_search_document_media(store_id: str, document_id:
     return Response(content=content, media_type=doc.get("mimeType") or "application/octet-stream")
 
 
+@app.get("/v1/fileSearchStores/{store_id}/operations")
 @app.get("/v1beta/fileSearchStores/{store_id}/operations")
 async def gemini_list_file_search_operations(store_id: str, pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
     if not _gemini_get_fss_meta(store_id):
@@ -5165,6 +5176,7 @@ async def gemini_list_file_search_operations(store_id: str, pageSize: int = Quer
     )
 
 
+@app.get("/v1/fileSearchStores/{store_id}/operations/{operation_id:path}")
 @app.get("/v1beta/fileSearchStores/{store_id}/operations/{operation_id:path}")
 async def gemini_get_file_search_operation(store_id: str, operation_id: str):
     operation = _gemini_get_operation(f"fileSearchStores/{store_id}/operations/{operation_id}")
@@ -5173,11 +5185,13 @@ async def gemini_get_file_search_operation(store_id: str, operation_id: str):
     return operation
 
 
+@app.get("/v1/fileSearchStores/{store_id}/upload/operations/{operation_id:path}")
 @app.get("/v1beta/fileSearchStores/{store_id}/upload/operations/{operation_id:path}")
 async def gemini_get_file_search_upload_operation(store_id: str, operation_id: str):
     return await gemini_get_file_search_operation(store_id, operation_id)
 
 
+@app.post("/v1/fileSearchStores/{store_id}/operations/{operation_id:path}:wait")
 @app.post("/v1beta/fileSearchStores/{store_id}/operations/{operation_id:path}:wait")
 async def gemini_wait_file_search_operation(store_id: str, operation_id: str):
     operation = _gemini_get_operation(f"fileSearchStores/{store_id}/operations/{operation_id}")
@@ -5186,11 +5200,13 @@ async def gemini_wait_file_search_operation(store_id: str, operation_id: str):
     return operation
 
 
+@app.post("/v1/fileSearchStores/{store_id}/upload/operations/{operation_id:path}:wait")
 @app.post("/v1beta/fileSearchStores/{store_id}/upload/operations/{operation_id:path}:wait")
 async def gemini_wait_file_search_upload_operation(store_id: str, operation_id: str):
     return await gemini_wait_file_search_operation(store_id, operation_id)
 
 
+@app.post("/v1/fileSearchStores/{store_id}/operations/{operation_id:path}:cancel")
 @app.post("/v1beta/fileSearchStores/{store_id}/operations/{operation_id:path}:cancel")
 async def gemini_cancel_file_search_operation(store_id: str, operation_id: str):
     operation = _gemini_get_operation(f"fileSearchStores/{store_id}/operations/{operation_id}")
@@ -5199,11 +5215,13 @@ async def gemini_cancel_file_search_operation(store_id: str, operation_id: str):
     return JSONResponse({})
 
 
+@app.post("/v1/fileSearchStores/{store_id}/upload/operations/{operation_id:path}:cancel")
 @app.post("/v1beta/fileSearchStores/{store_id}/upload/operations/{operation_id:path}:cancel")
 async def gemini_cancel_file_search_upload_operation(store_id: str, operation_id: str):
     return await gemini_cancel_file_search_operation(store_id, operation_id)
 
 
+@app.delete("/v1/fileSearchStores/{store_id}/operations/{operation_id:path}")
 @app.delete("/v1beta/fileSearchStores/{store_id}/operations/{operation_id:path}")
 async def gemini_delete_file_search_operation(store_id: str, operation_id: str):
     operation = _gemini_get_operation(f"fileSearchStores/{store_id}/operations/{operation_id}")
@@ -5216,11 +5234,13 @@ async def gemini_delete_file_search_operation(store_id: str, operation_id: str):
     return JSONResponse({})
 
 
+@app.delete("/v1/fileSearchStores/{store_id}/upload/operations/{operation_id:path}")
 @app.delete("/v1beta/fileSearchStores/{store_id}/upload/operations/{operation_id:path}")
 async def gemini_delete_file_search_upload_operation(store_id: str, operation_id: str):
     return await gemini_delete_file_search_operation(store_id, operation_id)
 
 
+@app.get("/v1/fileSearchStores/{store_id}/documents/{document_id:path}")
 @app.get("/v1beta/fileSearchStores/{store_id}/documents/{document_id:path}")
 async def gemini_get_file_search_document(store_id: str, document_id: str):
     meta = _gemini_get_fss_meta(store_id)
@@ -5232,6 +5252,7 @@ async def gemini_get_file_search_document(store_id: str, document_id: str):
     return _gemini_document_resource(doc)
 
 
+@app.delete("/v1/fileSearchStores/{store_id}/documents/{document_id:path}")
 @app.delete("/v1beta/fileSearchStores/{store_id}/documents/{document_id:path}")
 async def gemini_delete_file_search_document(store_id: str, document_id: str):
     index = _gemini_load_fss_index()

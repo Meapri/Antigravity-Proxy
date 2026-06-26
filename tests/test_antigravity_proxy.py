@@ -1644,7 +1644,7 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
     client = TestClient(proxy.app)
 
-    created = client.post("/v1beta/fileSearchStores", json={"displayName": "notes"})
+    created = client.post("/v1/fileSearchStores", json={"displayName": "notes"})
     assert created.status_code == 200
     store_name = created.json()["name"]
     store_id = store_name.split("/", 1)[1]
@@ -1655,52 +1655,66 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
         headers={"Content-Type": "text/plain"},
     ).json()["file"]
 
-    imported = client.post(f"/v1beta/fileSearchStores/{store_id}:importFile", json={"fileName": uploaded_file["name"]})
+    imported = client.post(f"/v1/fileSearchStores/{store_id}:importFile", json={"fileName": uploaded_file["name"]})
     assert imported.status_code == 200
     imported_doc = imported.json()["response"]["document"]
 
     uploaded_doc = client.post(
-        f"/upload/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore?displayName=direct.txt",
+        f"/upload/v1/fileSearchStores/{store_id}:uploadToFileSearchStore?displayName=direct.txt",
         content=b"direct document",
         headers={"Content-Type": "text/plain"},
     )
     assert uploaded_doc.status_code == 200
 
-    listed = client.get(f"/v1beta/fileSearchStores/{store_id}/documents")
+    listed_stores = client.get("/v1/fileSearchStores")
+    fetched_store = client.get(f"/v1/{store_name}")
+    listed = client.get(f"/v1/fileSearchStores/{store_id}/documents")
+    assert listed_stores.status_code == 200
+    assert listed_stores.json()["fileSearchStores"][0]["name"] == store_name
+    assert fetched_store.status_code == 200
+    assert fetched_store.json()["name"] == store_name
     assert listed.status_code == 200
     assert len(listed.json()["documents"]) == 2
 
-    fetched = client.get(f"/v1beta/{imported_doc['name']}")
+    fetched = client.get(f"/v1/{imported_doc['name']}")
     assert fetched.status_code == 200
     assert fetched.json()["displayName"] == "source.txt"
 
-    operation = client.get(f"/v1beta/{imported.json()['name']}")
+    operation = client.get(f"/v1/{imported.json()['name']}")
     assert operation.status_code == 200
     assert operation.json()["done"] is True
 
     uploaded_op_id = uploaded_doc.json()["name"].split("/", 1)[1]
-    nested_operation = client.get(f"/v1beta/fileSearchStores/{store_id}/{imported.json()['name']}")
-    nested_operations = client.get(f"/v1beta/fileSearchStores/{store_id}/operations")
-    waited_operation = client.post(f"/v1beta/fileSearchStores/{store_id}/{imported.json()['name']}:wait")
-    upload_operation = client.get(f"/v1beta/fileSearchStores/{store_id}/upload/operations/{uploaded_op_id}")
-    waited_upload_operation = client.post(f"/v1beta/fileSearchStores/{store_id}/upload/operations/{uploaded_op_id}:wait")
-    media = client.get(f"/v1beta/fileSearchStores/{store_id}/media/{imported_doc['name'].rsplit('/', 1)[-1]}")
+    nested_operation = client.get(f"/v1/fileSearchStores/{store_id}/{imported.json()['name']}")
+    nested_operations = client.get(f"/v1/fileSearchStores/{store_id}/operations")
+    waited_operation = client.post(f"/v1/fileSearchStores/{store_id}/{imported.json()['name']}:wait")
+    cancelled_operation = client.post(f"/v1/fileSearchStores/{store_id}/{imported.json()['name']}:cancel")
+    upload_operation = client.get(f"/v1/fileSearchStores/{store_id}/upload/operations/{uploaded_op_id}")
+    waited_upload_operation = client.post(f"/v1/fileSearchStores/{store_id}/upload/operations/{uploaded_op_id}:wait")
+    cancelled_upload_operation = client.post(f"/v1/fileSearchStores/{store_id}/upload/operations/{uploaded_op_id}:cancel")
+    media = client.get(f"/v1/fileSearchStores/{store_id}/media/{imported_doc['name'].rsplit('/', 1)[-1]}")
     assert nested_operation.status_code == 200
     assert nested_operation.json()["name"] == imported.json()["name"]
     assert nested_operations.status_code == 200
     assert nested_operations.json()["operations"][0]["name"] == imported.json()["name"]
     assert waited_operation.status_code == 200
     assert waited_operation.json()["name"] == imported.json()["name"]
+    assert cancelled_operation.status_code == 200
+    assert cancelled_operation.json() == {}
     assert upload_operation.status_code == 200
     assert upload_operation.json()["name"] == uploaded_doc.json()["name"]
     assert waited_upload_operation.status_code == 200
     assert waited_upload_operation.json()["name"] == uploaded_doc.json()["name"]
+    assert cancelled_upload_operation.status_code == 200
+    assert cancelled_upload_operation.json() == {}
     assert media.status_code == 200
     assert media.content == b"source document"
 
-    deleted_doc = client.delete(f"/v1beta/{imported_doc['name']}")
-    deleted_store = client.delete(f"/v1beta/{store_name}")
+    deleted_upload_operation = client.delete(f"/v1/fileSearchStores/{store_id}/upload/operations/{uploaded_op_id}")
+    deleted_doc = client.delete(f"/v1/{imported_doc['name']}")
+    deleted_store = client.delete(f"/v1/{store_name}")
 
+    assert deleted_upload_operation.status_code == 200
     assert deleted_doc.status_code == 200
     assert deleted_store.status_code == 200
 
