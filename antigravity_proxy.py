@@ -389,6 +389,8 @@ _GEMINI_KEY_ALIASES = {
     "max_output_tokens": "maxOutputTokens",
     "candidate_count": "candidateCount",
     "stop_sequences": "stopSequences",
+    "top_p": "topP",
+    "top_k": "topK",
     "response_logprobs": "responseLogprobs",
     "logprobs": "logprobs",
     "presence_penalty": "presencePenalty",
@@ -440,6 +442,37 @@ _GEMINI_KEY_ALIASES = {
     "functionResponse": "functionResponse",
 }
 
+_GEMINI_GENERATE_CONFIG_TOP_LEVEL_KEYS = {
+    "systemInstruction",
+    "safetySettings",
+    "tools",
+    "toolConfig",
+    "cachedContent",
+    "labels",
+}
+
+_GEMINI_GENERATION_CONFIG_KEYS = {
+    "temperature",
+    "topP",
+    "topK",
+    "candidateCount",
+    "maxOutputTokens",
+    "stopSequences",
+    "responseMimeType",
+    "responseSchema",
+    "responseLogprobs",
+    "logprobs",
+    "presencePenalty",
+    "frequencyPenalty",
+    "seed",
+    "thinkingConfig",
+    "responseModalities",
+    "mediaResolution",
+    "imageConfig",
+    "speechConfig",
+    "routingConfig",
+}
+
 
 def _gemini_normalize_function_calling_config(value: Any) -> Any:
     if not isinstance(value, dict):
@@ -475,6 +508,31 @@ def _gemini_normalize_request(value: Any) -> Any:
         out["toolConfig"]["functionCallingConfig"] = _gemini_normalize_function_calling_config(
             out["toolConfig"]["functionCallingConfig"]
         )
+    return out
+
+
+def _gemini_apply_generate_config(body: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(body, dict):
+        return body
+    config = body.get("config")
+    if not isinstance(config, dict):
+        return body
+    out = {key: value for key, value in body.items() if key != "config"}
+    config = _gemini_normalize_request(config)
+    gen = dict(out.get("generationConfig") or {}) if isinstance(out.get("generationConfig"), dict) else {}
+    for key, value in config.items():
+        if value is None:
+            continue
+        if key in _GEMINI_GENERATE_CONFIG_TOP_LEVEL_KEYS:
+            out.setdefault(key, value)
+        elif key == "responseFormat":
+            out.setdefault("responseFormat", value)
+        elif key in _GEMINI_GENERATION_CONFIG_KEYS:
+            gen.setdefault(key, value)
+        else:
+            out.setdefault(key, value)
+    if gen:
+        out["generationConfig"] = gen
     return out
 
 
@@ -642,6 +700,7 @@ def _gemini_normalize_generate_body(body: dict[str, Any]) -> dict[str, Any]:
 def _gemini_count_tokens_request(body: dict[str, Any]) -> list[ChatMessage]:
     payload = body.get("generateContentRequest") if isinstance(body.get("generateContentRequest"), dict) else body
     if isinstance(payload, dict):
+        payload = _gemini_apply_generate_config(payload)
         payload = _gemini_normalize_generate_body(payload)
         payload = _gemini_apply_cached_content(payload)
         payload = _gemini_apply_file_search(payload)
@@ -6136,6 +6195,7 @@ async def gemini_predict(model_name: str, request: Request):
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body = _gemini_apply_generate_config(body)
         body = _gemini_apply_response_format(body)
         body = _gemini_normalize_generate_body(body)
         if _model_capabilities(model)["image_generation"]:
@@ -6377,6 +6437,7 @@ async def gemini_generate_content(model_name: str, request: Request):
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body = _gemini_apply_generate_config(body)
         body = _gemini_apply_response_format(body)
         body = _gemini_normalize_generate_body(body)
         if _model_capabilities(model)["image_generation"]:
@@ -6495,6 +6556,7 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
         if not isinstance(item, dict):
             raise HTTPException(status_code=400, detail="batchGenerateContent request items must be objects.")
         req_body = _gemini_normalize_request(dict(item))
+        req_body = _gemini_apply_generate_config(req_body)
         req_body = _gemini_apply_response_format(req_body)
         req_body = _gemini_normalize_generate_body(req_body)
         req_body = _gemini_apply_cached_content(req_body)
@@ -7168,6 +7230,7 @@ async def gemini_stream_generate_content(model_name: str, request: Request):
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body = _gemini_apply_generate_config(body)
         body = _gemini_apply_response_format(body)
         body = _gemini_normalize_generate_body(body)
         body = _gemini_apply_cached_content(body)

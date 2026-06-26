@@ -589,6 +589,43 @@ def test_gemini_generate_content_accepts_sdk_content_unions(monkeypatch):
     assert counted.json()["totalTokens"] > 0
 
 
+def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "hi",
+        "config": {
+            "system_instruction": "answer tersely",
+            "max_output_tokens": 17,
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "response_mime_type": "application/json",
+            "response_schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}},
+            "tool_config": {"function_calling_config": {"mode": "none"}},
+            "labels": {"source": "sdk"},
+        },
+    })
+
+    assert response.status_code == 200
+    assert "config" not in seen["request"]
+    assert seen["request"]["systemInstruction"] == {"role": "system", "parts": [{"text": "answer tersely"}]}
+    assert seen["request"]["labels"] == {"source": "sdk"}
+    assert seen["request"]["toolConfig"]["functionCallingConfig"] == {"mode": "NONE"}
+    assert seen["request"]["generationConfig"]["maxOutputTokens"] == 17
+    assert seen["request"]["generationConfig"]["temperature"] == 0.2
+    assert seen["request"]["generationConfig"]["topP"] == 0.9
+    assert seen["request"]["generationConfig"]["responseMimeType"] == "application/json"
+    assert seen["request"]["generationConfig"]["responseSchema"]["type"] == "object"
+
+
 def test_gemini_generate_content_rejects_unsupported_builtin_tools():
     client = TestClient(proxy.app)
 

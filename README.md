@@ -646,6 +646,9 @@ hosted tools. `toolConfig.functionCallingConfig.mode` and
 `countTokens` also normalize SDK content-union inputs such as string
 `contents`, part dictionaries, part arrays, and string `systemInstruction`
 values into Gemini REST `Content` objects before forwarding.
+They also accept the common SDK-style top-level `config` object and merge it
+into Gemini REST fields such as `generationConfig`, `systemInstruction`,
+`toolConfig`, `safetySettings`, `tools`, `cachedContent`, and `labels`.
 `response_format` / `responseFormat` wrappers are mapped into
 `generationConfig.responseMimeType` and `generationConfig.responseSchema`.
 Generate responses are normalized with Gemini-style `modelVersion`,
