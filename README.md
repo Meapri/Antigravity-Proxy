@@ -456,6 +456,11 @@ Implemented Gemini-compatible routes:
 - `GET /v1beta/corpora/{corpus}/permissions/{permission}`
 - `PATCH /v1beta/corpora/{corpus}/permissions/{permission}`
 - `DELETE /v1beta/corpora/{corpus}/permissions/{permission}`
+- `GET /v1/operations`
+- `GET /v1/operations/{operation}`
+- `POST /v1/operations/{operation}:wait`
+- `POST /v1/operations/{operation}:cancel`
+- `DELETE /v1/operations/{operation}`
 - `GET /v1beta/operations`
 - `GET /v1beta/operations/{operation}`
 - `POST /v1beta/operations/{operation}:wait`

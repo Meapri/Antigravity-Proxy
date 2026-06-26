@@ -682,6 +682,38 @@ def test_gemini_batch_generate_content_operation(tmp_path, monkeypatch):
     assert deleted.status_code == 200
 
 
+def test_gemini_operations_v1_aliases(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    client = TestClient(proxy.app)
+    operation = proxy._gemini_store_operation({
+        "name": "operations/op_v1_alias",
+        "metadata": {"model": "models/gemini-3-flash-agent"},
+        "done": False,
+    })
+
+    listed = client.get("/v1/operations")
+    fetched = client.get(f"/v1/{operation['name']}")
+    waited = client.post(f"/v1/{operation['name']}:wait")
+    cancelled = client.post(f"/v1/{operation['name']}:cancel")
+    cancelled_fetched = client.get(f"/v1/{operation['name']}")
+    deleted = client.delete(f"/v1/{operation['name']}")
+    missing = client.get(f"/v1/{operation['name']}")
+
+    assert listed.status_code == 200
+    assert listed.json()["operations"][0]["name"] == operation["name"]
+    assert fetched.status_code == 200
+    assert fetched.json()["done"] is False
+    assert waited.status_code == 200
+    assert waited.json()["name"] == operation["name"]
+    assert cancelled.status_code == 200
+    assert cancelled.json() == {}
+    assert cancelled_fetched.status_code == 200
+    assert cancelled_fetched.json()["done"] is True
+    assert cancelled_fetched.json()["error"]["status"] == "CANCELLED"
+    assert deleted.status_code == 200
+    assert missing.status_code == 404
+
+
 def test_gemini_batch_wrapped_request_bodies(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))

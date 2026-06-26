@@ -949,8 +949,10 @@ def _gemini_save_operations_index(index: dict[str, dict[str, Any]]) -> None:
 
 def _gemini_operation_name(name: str) -> str:
     key = name.strip().strip("/")
-    if key.startswith("v1beta/"):
-        key = key[len("v1beta/"):]
+    for prefix in ("v1beta/", "v1/"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+            break
     if key.startswith("operations/"):
         return key
     return "operations/" + key
@@ -2927,7 +2929,6 @@ def _gemini_stable_alias_path(path: str) -> str:
         "corpora",
         "fileSearchStores",
         "generatedFiles",
-        "operations",
         "tunedModels",
         "webhooks",
     )
@@ -6630,6 +6631,7 @@ async def gemini_stream_generate_content(model_name: str, request: Request):
     return _gemini_streaming_response(body=body, antigravity_model=str(model["antigravity_model"]))
 
 
+@app.get("/v1/operations")
 @app.get("/v1beta/operations")
 async def gemini_list_operations(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
     index = _gemini_load_operations_index()
@@ -6640,6 +6642,7 @@ async def gemini_list_operations(pageSize: int = Query(default=100, ge=1, le=100
     return {"operations": operations[start:end], "nextPageToken": str(end) if end < len(operations) else ""}
 
 
+@app.get("/v1/operations/{operation_id:path}")
 @app.get("/v1beta/operations/{operation_id:path}")
 async def gemini_get_operation(operation_id: str):
     operation = _gemini_get_operation(operation_id)
@@ -6648,6 +6651,7 @@ async def gemini_get_operation(operation_id: str):
     return operation
 
 
+@app.post("/v1/operations/{operation_id:path}:cancel")
 @app.post("/v1beta/operations/{operation_id:path}:cancel")
 async def gemini_cancel_operation(operation_id: str):
     operation = _gemini_get_operation(operation_id)
@@ -6660,6 +6664,7 @@ async def gemini_cancel_operation(operation_id: str):
     return JSONResponse({})
 
 
+@app.post("/v1/operations/{operation_id:path}:wait")
 @app.post("/v1beta/operations/{operation_id:path}:wait")
 async def gemini_wait_operation(operation_id: str):
     operation = _gemini_get_operation(operation_id)
@@ -6668,6 +6673,7 @@ async def gemini_wait_operation(operation_id: str):
     return operation
 
 
+@app.delete("/v1/operations/{operation_id:path}")
 @app.delete("/v1beta/operations/{operation_id:path}")
 async def gemini_delete_operation(operation_id: str):
     name = _gemini_operation_name(operation_id)
