@@ -369,6 +369,7 @@ Implemented Gemini-compatible routes:
 - `POST /v1beta/models/{model}:generateMessage`
 - `POST /v1beta/models/{model}:generateAnswer`
 - `POST /v1beta/models/{model}:generateImages`
+- `POST /v1beta/models/{model}:generateVideos`
 - `POST /v1beta/models/{model}:predict`
 - `POST /v1beta/models/{model}:predictLongRunning`
 - `POST /v1beta/interactions`
@@ -606,6 +607,16 @@ Generated files:
 - Generated files are stored locally under `data/gemini_generated_files`;
   override with `ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR`.
 
+Video generation:
+
+- Veo-style model names such as `veo-*` are recognized as Gemini video model
+  resources and expose `generateVideos` plus `predictLongRunning`.
+- Video generation requests are stored as Gemini long-running `operations/*`
+  and can be retrieved through the normal operations endpoints.
+- Because the current Antigravity backend does not expose native video
+  generation, video operations currently complete with an explicit
+  `UNIMPLEMENTED` error instead of returning a 404 or silently mapping to text.
+
 Live API:
 
 - The Gemini Live WebSocket envelope is implemented for text turn flows:
@@ -656,9 +667,10 @@ Notes:
   `webhooks.ping`, `batches.completed`, and `interactions.completed` callback
   events to enabled webhooks, stores delivery attempts, and signs callbacks
   with `X-Goog-Webhook-Signature` when a signing secret exists.
-- Realtime Live audio/video, real model tuning/training, true async
-  long-running jobs, semantic Google embeddings, and semantic/vector
-  `tools.file_search` retrieval are not fully implemented yet.
+- Native Veo video generation, realtime Live audio/video, real model
+  tuning/training, true async long-running jobs, semantic Google embeddings,
+  and semantic/vector `tools.file_search` retrieval are not fully implemented
+  yet.
 
 ## Responses API Compatibility
 

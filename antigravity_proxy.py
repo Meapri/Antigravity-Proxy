@@ -280,6 +280,38 @@ def _gemini_model_name(model: dict[str, Any]) -> str:
     return "models/" + _gemini_model_id(model)
 
 
+def _gemini_resource_model_id(model_name: str) -> str:
+    key = model_name.strip().strip("/")
+    if key.startswith("models/"):
+        key = key[len("models/"):]
+    return key.replace("%20", " ")
+
+
+def _is_gemini_video_model_id(model_id: str) -> bool:
+    return _gemini_resource_model_id(model_id).lower().startswith("veo-")
+
+
+def _gemini_video_model_resource(model_id: str) -> dict[str, Any]:
+    normalized_id = _gemini_resource_model_id(model_id)
+    return {
+        "name": "models/" + normalized_id,
+        "version": normalized_id,
+        "displayName": normalized_id,
+        "description": "Gemini-compatible video generation model placeholder",
+        "inputTokenLimit": 32768,
+        "outputTokenLimit": 0,
+        "supportedGenerationMethods": ["predictLongRunning", "generateVideos"],
+        "capabilities": {
+            "chat": False,
+            "tools": False,
+            "vision": False,
+            "streaming": False,
+            "imageGeneration": False,
+            "videoGeneration": True,
+        },
+    }
+
+
 def _gemini_model_resource(model: dict[str, Any]) -> dict[str, Any]:
     caps = _model_capabilities(model)
     if caps["image_generation"]:
@@ -333,10 +365,7 @@ def _gemini_model_resource(model: dict[str, Any]) -> dict[str, Any]:
 
 
 def _resolve_gemini_model(model_name: str) -> dict[str, Any]:
-    key = model_name.strip().strip("/")
-    if key.startswith("models/"):
-        key = key[len("models/"):]
-    decoded = key.replace("%20", " ")
+    decoded = _gemini_resource_model_id(model_name)
     model = _MODEL_MAP.get(decoded) or _MODEL_MAP.get(decoded.lower())
     if not model:
         raise HTTPException(status_code=404, detail=f"Gemini model '{model_name}' not found.")
@@ -3859,9 +3888,13 @@ async def gemini_list_models():
 
 @app.get("/v1beta/models/{model_name:path}/operations")
 async def gemini_list_model_operations(model_name: str, pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
-    model = _resolve_gemini_model(model_name)
+    if _is_gemini_video_model_id(model_name):
+        model_resource = "models/" + _gemini_resource_model_id(model_name)
+    else:
+        model = _resolve_gemini_model(model_name)
+        model_resource = _gemini_model_name(model)
     return _gemini_operation_list_response(
-        _gemini_operations_for_scope("model", _gemini_model_name(model)),
+        _gemini_operations_for_scope("model", model_resource),
         pageSize,
         pageToken,
     )
@@ -3908,6 +3941,8 @@ async def gemini_get_model(model_name: str):
     try:
         model = _resolve_gemini_model(model_name)
     except HTTPException as exc:
+        if _is_gemini_video_model_id(model_name):
+            return _gemini_video_model_resource(model_name)
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status="NOT_FOUND")
     return _gemini_model_resource(model)
 
@@ -5235,10 +5270,54 @@ async def gemini_generate_images(model_name: str, request: Request):
         return _gemini_error_response(f"Antigravity image generation error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
+def _gemini_video_unimplemented_operation(model_name: str, body: dict[str, Any]) -> dict[str, Any]:
+    model_id = _gemini_resource_model_id(model_name)
+    now = _gemini_now_iso()
+    return _gemini_store_operation({
+        "name": "operations/generateVideos-" + uuid.uuid4().hex,
+        "metadata": {
+            "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.GenerateVideosOperationMetadata",
+            "model": "models/" + model_id,
+            "createTime": now,
+            "endTime": now,
+            "request": {k: v for k, v in body.items() if k in {"prompt", "instances", "parameters", "config"}},
+        },
+        "done": True,
+        "error": {
+            "code": 12,
+            "message": "Video generation is recognized by the Gemini compatibility layer, but the current Antigravity backend does not expose native video generation.",
+            "status": "UNIMPLEMENTED",
+        },
+    })
+
+
+@app.post("/v1beta/models/{model_name:path}:generateVideos")
+async def gemini_generate_videos(model_name: str, request: Request):
+    """Gemini/Veo-compatible video generation operation placeholder."""
+    try:
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        if not _is_gemini_video_model_id(model_name):
+            _resolve_gemini_model(model_name)
+        return _gemini_video_unimplemented_operation(model_name, body)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini generateVideos failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
 @app.post("/v1beta/models/{model_name:path}:predictLongRunning")
 async def gemini_predict_long_running(model_name: str, request: Request):
     """Gemini/Vertex-compatible predictLongRunning as a completed operation."""
     try:
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        if _is_gemini_video_model_id(model_name):
+            return _gemini_video_unimplemented_operation(model_name, body)
         prediction = await gemini_predict(model_name, request)
         if isinstance(prediction, JSONResponse):
             return prediction

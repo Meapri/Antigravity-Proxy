@@ -186,6 +186,43 @@ def test_gemini_models_and_count_tokens():
     assert counted.json()["totalTokens"] > 0
 
 
+def test_gemini_video_model_and_generate_videos_operation(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    client = TestClient(proxy.app)
+
+    model = client.get("/v1beta/models/veo-3.1-generate-preview")
+    generated = client.post("/v1beta/models/veo-3.1-generate-preview:generateVideos", json={
+        "prompt": "make a short clip",
+    })
+    predicted = client.post("/v1beta/models/veo-3.1-generate-preview:predictLongRunning", json={
+        "instances": [{"prompt": "make another short clip"}],
+    })
+
+    assert model.status_code == 200
+    assert model.json()["name"] == "models/veo-3.1-generate-preview"
+    assert "generateVideos" in model.json()["supportedGenerationMethods"]
+    assert model.json()["capabilities"]["videoGeneration"] is True
+
+    assert generated.status_code == 200
+    generated_body = generated.json()
+    assert generated_body["done"] is True
+    assert generated_body["error"]["status"] == "UNIMPLEMENTED"
+    assert generated_body["metadata"]["model"] == "models/veo-3.1-generate-preview"
+
+    op_id = generated_body["name"].split("/", 1)[1]
+    fetched = client.get(f"/v1beta/operations/{op_id}")
+    model_operation = client.get(f"/v1beta/models/veo-3.1-generate-preview/operations/{op_id}")
+    model_operations = client.get("/v1beta/models/veo-3.1-generate-preview/operations")
+    assert fetched.status_code == 200
+    assert fetched.json()["name"] == generated_body["name"]
+    assert model_operation.status_code == 200
+    assert model_operations.status_code == 200
+    assert generated_body["name"] in {item["name"] for item in model_operations.json()["operations"]}
+
+    assert predicted.status_code == 200
+    assert predicted.json()["error"]["status"] == "UNIMPLEMENTED"
+
+
 def test_gemini_model_aliases_resolve_for_public_style_names(monkeypatch):
     seen = {}
 
