@@ -200,6 +200,32 @@ def test_gemini_models_and_count_tokens():
     assert {item["modality"] for item in counted_media.json()["promptTokensDetails"]} >= {"TEXT", "IMAGE"}
 
 
+def test_gemini_count_tokens_applies_generate_content_request_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR", str(tmp_path / "gemini_cached"))
+    client = TestClient(proxy.app)
+
+    created = client.post("/v1beta/cachedContents", json={
+        "model": "models/gemini-3-flash-agent",
+        "contents": [{"role": "user", "parts": [{"text": "cached context with several extra words"}]}],
+    })
+    assert created.status_code == 200
+    cache_name = created.json()["name"]
+
+    uncached = client.post("/v1beta/models/gemini-3-flash-agent:countTokens", json={
+        "contents": [{"role": "user", "parts": [{"text": "new prompt"}]}],
+    })
+    counted = client.post("/v1beta/models/gemini-3-flash-agent:countTokens", json={
+        "generateContentRequest": {
+            "cachedContent": cache_name,
+            "contents": [{"role": "user", "parts": [{"text": "new prompt"}]}],
+        }
+    })
+
+    assert uncached.status_code == 200
+    assert counted.status_code == 200
+    assert counted.json()["totalTokens"] > uncached.json()["totalTokens"]
+
+
 def test_gemini_video_model_and_generate_videos_operation(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
     client = TestClient(proxy.app)

@@ -500,6 +500,9 @@ def _gemini_status_for_http(status_code: int) -> str:
 
 def _gemini_count_tokens_request(body: dict[str, Any]) -> list[ChatMessage]:
     payload = body.get("generateContentRequest") if isinstance(body.get("generateContentRequest"), dict) else body
+    if isinstance(payload, dict):
+        payload = _gemini_apply_cached_content(payload)
+        payload = _gemini_apply_file_search(payload)
     contents = payload.get("contents") or []
     if isinstance(contents, dict):
         contents = [contents]

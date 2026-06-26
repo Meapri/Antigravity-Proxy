@@ -654,7 +654,8 @@ Notes:
 - `countTokens` is approximate because Antigravity's internal endpoint does not
   expose a separate Gemini token-count RPC. Responses include `totalTokens`,
   `promptTokensDetails`, and `cacheTokensDetails` fields for Gemini SDK
-  compatibility.
+  compatibility. `generateContentRequest` wrappers are accepted, and local
+  `cachedContent` / `file_search` context is expanded before counting.
 - Files are stored locally under `data/gemini_files` by default; override with
   `ANTIGRAVITY_GEMINI_FILES_DIR`.
 - Cached contents are stored locally under `data/gemini_cached_contents` by
