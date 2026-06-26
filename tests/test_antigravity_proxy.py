@@ -1058,6 +1058,14 @@ def test_gemini_batch_wrapped_request_bodies(tmp_path, monkeypatch):
             "requests": [{"contents": [{"role": "user", "parts": [{"text": "method"}]}]}],
         }
     })
+    generated_request_wrapped = client.post("/v1beta/models/gemini-3-flash-agent:batchGenerateContent", json={
+        "requests": [{
+            "metadata": {"key": "row-1"},
+            "request": {
+                "contents": [{"role": "user", "parts": [{"text": "request wrapped"}]}],
+            },
+        }]
+    })
     embedded = client.post("/v1beta/batches", json={
         "embedContentBatch": {
             "model": "models/gemini-3-flash-agent",
@@ -1065,6 +1073,18 @@ def test_gemini_batch_wrapped_request_bodies(tmp_path, monkeypatch):
             "requests": [{
                 "content": {"parts": [{"text": "embed wrapped"}]},
                 "outputDimensionality": 8,
+            }],
+        }
+    })
+    embedded_request_wrapped = client.post("/v1beta/batches", json={
+        "embedContentBatch": {
+            "model": "models/gemini-3-flash-agent",
+            "displayName": "wrapped embed request",
+            "requests": [{
+                "embedContentRequest": {
+                    "content": {"parts": [{"text": "embed request wrapped"}]},
+                    "config": {"output_dimensionality": 6},
+                },
             }],
         }
     })
@@ -1082,12 +1102,16 @@ def test_gemini_batch_wrapped_request_bodies(tmp_path, monkeypatch):
     assert generated.json()["metadata"]["requestCount"] == 1
     assert generated.json()["metadata"]["stats"]["successfulRequestCount"] == "1"
     assert generated.json()["response"]["responses"][0]["candidates"][0]["content"]["parts"][0]["text"] == "method"
+    assert generated_request_wrapped.status_code == 200
+    assert generated_request_wrapped.json()["response"]["responses"][0]["candidates"][0]["content"]["parts"][0]["text"] == "request wrapped"
     assert embedded.status_code == 200
     assert embedded.json()["metadata"]["batchResource"]["displayName"] == "wrapped embed"
     assert embedded.json()["metadata"]["state"] == "BATCH_STATE_SUCCEEDED"
     assert embedded.json()["metadata"]["stats"]["successfulRequestCount"] == "1"
     assert embedded.json()["response"]["embeddings"][0]["values"]
     assert len(embedded.json()["response"]["embeddings"][0]["values"]) == 8
+    assert embedded_request_wrapped.status_code == 200
+    assert len(embedded_request_wrapped.json()["response"]["embeddings"][0]["values"]) == 6
     assert wrong_method.status_code == 400
 
 

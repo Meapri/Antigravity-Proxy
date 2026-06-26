@@ -766,14 +766,18 @@ Embeddings and batch operations:
   an immediately completed local operation and batch resource.
 - `batchGenerateContent` runs requests synchronously through Antigravity and
   stores immediately completed `operations/*` and `batches/*` results with
-  Gemini `BATCH_STATE_*` status values and `stats` counters.
+  Gemini `BATCH_STATE_*` status values and `stats` counters. Inline batch
+  items may be plain request objects or SDK/REST wrapper items such as
+  `{"request": {...}}` / `{"generateContentRequest": {...}}`.
 - `batches.create` accepts inline `requests` plus `model` and returns a
   completed Gemini operation named `batches/*`; the local batch resource is
   preserved under `metadata.batchResource`. It also accepts common SDK wrapper bodies
   such as `{"batch": {...}}`, `{"generateContentBatch": {...}}`, and
   `{"embedContentBatch": {...}}`; embed wrappers are completed with local
-  deterministic embeddings. It is intended for Gemini SDK/REST management
-  compatibility; it does not run true asynchronous Batch Mode jobs.
+  deterministic embeddings, and embed request items may use
+  `{"request": {...}}` / `{"embedContentRequest": {...}}`. It is intended for
+  Gemini SDK/REST management compatibility; it does not run true asynchronous
+  Batch Mode jobs.
 - `batches.updateGenerateContentBatch` and `batches.updateEmbedContentBatch`
   accept wrapper bodies plus `updateMask` / `update_mask` for `displayName`
   and `priority`, and return the same completed `batches/*` operation view.

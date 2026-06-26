@@ -1414,6 +1414,18 @@ def _gemini_embedding_from_request(body: dict[str, Any]) -> dict[str, Any]:
     return {"embeddings": embeddings, "embedding": embeddings[0]}
 
 
+def _gemini_batch_request_item(item: dict[str, Any], *wrapper_keys: str) -> dict[str, Any]:
+    for key in wrapper_keys:
+        wrapped = item.get(key)
+        if isinstance(wrapped, dict):
+            out = dict(wrapped)
+            for outer_key in ("model", "config", "generationConfig", "embedContentConfig", "outputDimensionality", "taskType", "title"):
+                if outer_key in item and outer_key not in out:
+                    out[outer_key] = item[outer_key]
+            return out
+    return dict(item)
+
+
 def _gemini_batch_embedding_from_request(body: dict[str, Any]) -> dict[str, Any]:
     requests = body.get("requests")
     if not isinstance(requests, list):
@@ -1422,7 +1434,9 @@ def _gemini_batch_embedding_from_request(body: dict[str, Any]) -> dict[str, Any]
     for item in requests:
         if not isinstance(item, dict):
             raise HTTPException(status_code=400, detail="batchEmbedContents request items must be objects.")
-        embedded = _gemini_embedding_from_request(_gemini_normalize_request(item))
+        embedded = _gemini_embedding_from_request(
+            _gemini_normalize_request(_gemini_batch_request_item(item, "request", "embedContentRequest"))
+        )
         embeddings.extend(embedded.get("embeddings") or [embedded["embedding"]])
     return {"embeddings": embeddings}
 
@@ -6826,7 +6840,9 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
     for item in requests:
         if not isinstance(item, dict):
             raise HTTPException(status_code=400, detail="batchGenerateContent request items must be objects.")
-        req_body = _gemini_normalize_request(dict(item))
+        req_body = _gemini_normalize_request(
+            _gemini_batch_request_item(item, "request", "generateContentRequest")
+        )
         req_body = _gemini_apply_generate_config(req_body)
         req_body = _gemini_apply_response_format(req_body)
         req_body = _gemini_normalize_generate_body(req_body)
