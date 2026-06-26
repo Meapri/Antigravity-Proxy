@@ -248,6 +248,25 @@ def test_gemini_embeddings_are_deterministic():
     assert len(batch.json()["embeddings"][0]["values"]) == 16
 
 
+def test_gemini_legacy_embed_text_methods():
+    client = TestClient(proxy.app)
+
+    single = client.post("/v1beta/models/gemini-3-flash-agent:embedText", json={
+        "text": "legacy embed",
+        "outputDimensionality": 12,
+    })
+    batch = client.post("/v1/models/gemini-3-flash-agent:batchEmbedText", json={
+        "texts": ["one", "two"],
+        "outputDimensionality": 10,
+    })
+
+    assert single.status_code == 200
+    assert len(single.json()["embedding"]["value"]) == 12
+    assert batch.status_code == 200
+    assert len(batch.json()["embeddings"]) == 2
+    assert len(batch.json()["embeddings"][0]["value"]) == 10
+
+
 def test_gemini_async_batch_embed_and_batch_update(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
@@ -334,6 +353,36 @@ def test_gemini_predict_and_predict_long_running(monkeypatch):
     model_operation = client.get(f"/v1beta/models/gemini-3-flash-agent/operations/{op_id}")
     assert model_operation.status_code == 200
     assert model_operation.json()["name"] == long_running.json()["name"]
+
+
+def test_gemini_legacy_text_message_answer_and_token_methods(monkeypatch):
+    seen = []
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen.append(request)
+            text = request["contents"][0]["parts"][0]["text"]
+            return {"response": {"candidates": [{"content": {"parts": [{"text": f"legacy:{text}"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    text = client.post("/v1beta/models/gemini-3-flash-agent:generateText", json={"prompt": {"text": "hello text"}})
+    message = client.post("/v1beta/models/gemini-3-flash-agent:generateMessage", json={"prompt": {"messages": [{"content": "hello msg"}]}})
+    answer = client.post("/v1/models/gemini-3-flash-agent:generateAnswer", json={"text": "hello answer"})
+    counted_text = client.post("/v1beta/models/gemini-3-flash-agent:countTextTokens", json={"prompt": {"text": "count these"}})
+    counted_message = client.post("/v1beta/models/gemini-3-flash-agent:countMessageTokens", json={"message": {"content": "count msg"}})
+
+    assert text.status_code == 200
+    assert text.json()["candidates"][0]["output"] == "legacy:hello text"
+    assert message.status_code == 200
+    assert message.json()["candidates"][0]["content"] == "legacy:hello msg"
+    assert answer.status_code == 200
+    assert answer.json()["answer"]["content"] == "legacy:hello answer"
+    assert counted_text.status_code == 200
+    assert counted_text.json()["tokenCount"] > 0
+    assert counted_message.status_code == 200
+    assert counted_message.json()["tokenCount"] > 0
 
 
 def test_gemini_stream_generate_content_sse(monkeypatch):

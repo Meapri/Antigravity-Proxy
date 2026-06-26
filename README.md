@@ -350,10 +350,17 @@ Implemented Gemini-compatible routes:
 - `POST /v1beta/models/{model}:generateContent`
 - `POST /v1beta/models/{model}:streamGenerateContent`
 - `POST /v1beta/models/{model}:countTokens`
+- `POST /v1beta/models/{model}:countTextTokens`
+- `POST /v1beta/models/{model}:countMessageTokens`
 - `POST /v1beta/models/{model}:embedContent`
 - `POST /v1beta/models/{model}:batchEmbedContents`
+- `POST /v1beta/models/{model}:embedText`
+- `POST /v1beta/models/{model}:batchEmbedText`
 - `POST /v1beta/models/{model}:asyncBatchEmbedContent`
 - `POST /v1beta/models/{model}:batchGenerateContent`
+- `POST /v1beta/models/{model}:generateText`
+- `POST /v1beta/models/{model}:generateMessage`
+- `POST /v1beta/models/{model}:generateAnswer`
 - `POST /v1beta/models/{model}:predict`
 - `POST /v1beta/models/{model}:predictLongRunning`
 - `POST /v1beta/interactions`
@@ -535,6 +542,10 @@ Embeddings and batch operations:
   compatibility; it does not run true asynchronous Batch Mode jobs.
 - `predict` and `predictLongRunning` are mapped to Gemini `generateContent`
   requests and return prediction/operation-shaped compatibility responses.
+- Legacy `generateText`, `generateMessage`, `generateAnswer`, `embedText`,
+  `batchEmbedText`, `countTextTokens`, and `countMessageTokens` are accepted and
+  mapped onto the newer local `generateContent`, embedding, and token-count
+  compatibility paths.
 
 File search stores:
 

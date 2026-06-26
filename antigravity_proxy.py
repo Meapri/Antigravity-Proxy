@@ -550,6 +550,63 @@ def _gemini_predict_to_generate_body(body: dict[str, Any]) -> dict[str, Any]:
     return request_body
 
 
+def _gemini_legacy_prompt_text(body: dict[str, Any]) -> str:
+    prompt = body.get("prompt")
+    if isinstance(prompt, dict):
+        if prompt.get("text") is not None:
+            return str(prompt["text"])
+        messages = prompt.get("messages")
+        if isinstance(messages, list):
+            return "\n".join(_msg_text(item.get("content") if isinstance(item, dict) else item) for item in messages)
+    if isinstance(prompt, str):
+        return prompt
+    if body.get("text") is not None:
+        return str(body["text"])
+    message = body.get("message")
+    if isinstance(message, dict):
+        if message.get("content") is not None:
+            return _msg_text(message["content"])
+        if message.get("text") is not None:
+            return str(message["text"])
+    return _msg_text(body.get("contents") or body.get("input") or "")
+
+
+def _gemini_legacy_body_to_generate(body: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(body.get("contents"), list):
+        return dict(body)
+    text = _gemini_legacy_prompt_text(body)
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Legacy Gemini request requires prompt, text, message, or contents.")
+    out: dict[str, Any] = {"contents": [{"role": "user", "parts": [{"text": text}]}]}
+    for key in ("safetySettings", "generationConfig", "tools", "toolConfig"):
+        if key in body:
+            out[key] = body[key]
+    for old_key, new_key in (
+        ("temperature", "temperature"),
+        ("candidateCount", "candidateCount"),
+        ("topP", "topP"),
+        ("topK", "topK"),
+        ("maxOutputTokens", "maxOutputTokens"),
+    ):
+        if old_key in body:
+            out.setdefault("generationConfig", {})[new_key] = body[old_key]
+    return out
+
+
+async def _gemini_legacy_generate(model_name: str, body: dict[str, Any]) -> dict[str, Any]:
+    model = _resolve_gemini_model(model_name)
+    request_body = _gemini_legacy_body_to_generate(body)
+    request_body = _gemini_apply_cached_content(request_body)
+    request_body = _gemini_apply_file_search(request_body)
+    request_body = _gemini_inline_local_files(request_body)
+    data = await asyncio.to_thread(
+        _get_client().generate_raw,
+        request=request_body,
+        model=str(model["antigravity_model"]),
+    )
+    return _gemini_unwrap_response(data)
+
+
 def _gemini_embedding_values(text: str, *, dimensions: int = 768) -> list[float]:
     dimensions = max(1, min(int(dimensions or 768), 3072))
     values: list[float] = []
@@ -4491,6 +4548,54 @@ async def gemini_batch_embed_contents(model_name: str, request: Request):
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.post("/v1beta/models/{model_name:path}:embedText")
+async def gemini_embed_text(model_name: str, request: Request):
+    """Legacy Gemini embedText endpoint mapped to deterministic local vectors."""
+    try:
+        _resolve_gemini_model(model_name)
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        text = str(body.get("text") or _gemini_legacy_prompt_text(body))
+        output_dim = int(body.get("outputDimensionality") or body.get("output_dimensionality") or 768)
+        return {"embedding": {"value": _gemini_embedding_values(text, dimensions=output_dim)}}
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini embedText failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.post("/v1beta/models/{model_name:path}:batchEmbedText")
+async def gemini_batch_embed_text(model_name: str, request: Request):
+    """Legacy Gemini batchEmbedText endpoint mapped to deterministic local vectors."""
+    try:
+        _resolve_gemini_model(model_name)
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        texts = body.get("texts") or body.get("requests") or []
+        if not isinstance(texts, list):
+            raise HTTPException(status_code=400, detail="batchEmbedText requires texts or requests array.")
+        embeddings = []
+        for item in texts:
+            if isinstance(item, dict):
+                text = str(item.get("text") or _gemini_legacy_prompt_text(item))
+                output_dim = int(item.get("outputDimensionality") or item.get("output_dimensionality") or 768)
+            else:
+                text = str(item)
+                output_dim = int(body.get("outputDimensionality") or body.get("output_dimensionality") or 768)
+            embeddings.append({"value": _gemini_embedding_values(text, dimensions=output_dim)})
+        return {"embeddings": embeddings}
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini batchEmbedText failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
 @app.post("/v1beta/models/{model_name:path}:asyncBatchEmbedContent")
 async def gemini_async_batch_embed_content(model_name: str, request: Request):
     """Gemini-compatible asyncBatchEmbedContent as an immediately completed operation."""
@@ -4599,6 +4704,97 @@ async def gemini_predict_long_running(model_name: str, request: Request):
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
     except Exception as exc:
         log.exception("Gemini predictLongRunning failed")
+        return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
+
+
+@app.post("/v1beta/models/{model_name:path}:countTextTokens")
+async def gemini_count_text_tokens(model_name: str, request: Request):
+    """Legacy Gemini countTextTokens endpoint mapped to local token estimation."""
+    try:
+        _resolve_gemini_model(model_name)
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        text = _gemini_legacy_prompt_text(body)
+        return {"tokenCount": _estimate_tokens(text)}
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+
+
+@app.post("/v1beta/models/{model_name:path}:countMessageTokens")
+async def gemini_count_message_tokens(model_name: str, request: Request):
+    """Legacy Gemini countMessageTokens endpoint mapped to local token estimation."""
+    return await gemini_count_text_tokens(model_name, request)
+
+
+@app.post("/v1beta/models/{model_name:path}:generateText")
+async def gemini_generate_text(model_name: str, request: Request):
+    """Legacy Gemini generateText endpoint mapped to generateContent."""
+    try:
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        response = await _gemini_legacy_generate(model_name, body)
+        candidates = []
+        for candidate in response.get("candidates") or []:
+            if not isinstance(candidate, dict):
+                continue
+            text = _gemini_content_text(candidate.get("content") or {})
+            candidates.append({
+                "output": text,
+                "safetyRatings": candidate.get("safetyRatings") or candidate.get("safety_ratings") or [],
+            })
+        return {"candidates": candidates, "filters": [], "usageMetadata": response.get("usageMetadata") or {}}
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini generateText failed")
+        return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
+
+
+@app.post("/v1beta/models/{model_name:path}:generateMessage")
+async def gemini_generate_message(model_name: str, request: Request):
+    """Legacy Gemini generateMessage endpoint mapped to generateContent."""
+    try:
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        response = await _gemini_legacy_generate(model_name, body)
+        messages = []
+        for candidate in response.get("candidates") or []:
+            if isinstance(candidate, dict):
+                messages.append({"author": "1", "content": _gemini_content_text(candidate.get("content") or {})})
+        return {"candidates": messages, "messages": messages, "usageMetadata": response.get("usageMetadata") or {}}
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini generateMessage failed")
+        return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
+
+
+@app.post("/v1beta/models/{model_name:path}:generateAnswer")
+async def gemini_generate_answer(model_name: str, request: Request):
+    """Legacy Semantic Retriever generateAnswer endpoint mapped to generateContent."""
+    try:
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        response = await _gemini_legacy_generate(model_name, body)
+        text = _gemini_response_text(response)
+        return {
+            "answer": {"content": text},
+            "answerableProbability": 1.0 if text else 0.0,
+            "inputFeedback": {},
+            "usageMetadata": response.get("usageMetadata") or {},
+        }
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini generateAnswer failed")
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
