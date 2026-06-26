@@ -1589,53 +1589,94 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_CORPORA_DIR", str(tmp_path / "corpora"))
     client = TestClient(proxy.app)
 
-    created = client.post("/v1beta/corpora", json={"displayName": "Knowledge"})
+    created = client.post("/v1/corpora", json={"displayName": "Knowledge"})
     assert created.status_code == 200
     corpus_name = created.json()["name"]
     corpus_id = corpus_name.split("/", 1)[1]
 
-    document = client.post(f"/v1beta/corpora/{corpus_id}/documents", json={"displayName": "Launch notes"})
+    listed_corpora = client.get("/v1/corpora")
+    fetched_corpus = client.get(f"/v1/{corpus_name}")
+    patched_corpus = client.patch(f"/v1/{corpus_name}", json={"displayName": "Knowledge updated"})
+
+    assert listed_corpora.status_code == 200
+    assert listed_corpora.json()["corpora"][0]["name"] == corpus_name
+    assert fetched_corpus.status_code == 200
+    assert fetched_corpus.json()["displayName"] == "Knowledge"
+    assert patched_corpus.status_code == 200
+    assert patched_corpus.json()["displayName"] == "Knowledge updated"
+
+    document = client.post(f"/v1/corpora/{corpus_id}/documents", json={"displayName": "Launch notes"})
     assert document.status_code == 200
     doc_name = document.json()["name"]
     doc_id = doc_name.rsplit("/", 1)[-1]
 
-    chunk = client.post(f"/v1beta/corpora/{corpus_id}/documents/{doc_id}/chunks", json={
+    listed_docs = client.get(f"/v1/corpora/{corpus_id}/documents")
+    fetched_doc = client.get(f"/v1/{doc_name}")
+    patched_doc = client.patch(f"/v1/{doc_name}", json={"displayName": "Launch notes updated"})
+
+    assert listed_docs.status_code == 200
+    assert listed_docs.json()["documents"][0]["name"] == doc_name
+    assert fetched_doc.status_code == 200
+    assert fetched_doc.json()["displayName"] == "Launch notes"
+    assert patched_doc.status_code == 200
+    assert patched_doc.json()["displayName"] == "Launch notes updated"
+
+    chunk = client.post(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks", json={
         "data": {"stringValue": "Project Atlas launch window is October."},
     })
     assert chunk.status_code == 200
     chunk_id = chunk.json()["name"].rsplit("/", 1)[-1]
 
-    queried = client.post(f"/v1beta/corpora/{corpus_id}:query", json={"query": "Atlas October"})
-    doc_queried = client.post(f"/v1beta/corpora/{corpus_id}/documents/{doc_id}:query", json={"query": "launch"})
-    listed_chunks = client.get(f"/v1beta/corpora/{corpus_id}/documents/{doc_id}/chunks")
-    fetched_chunk = client.get(f"/v1beta/corpora/{corpus_id}/documents/{doc_id}/chunks/{chunk_id}")
-    patched_chunk = client.patch(f"/v1beta/corpora/{corpus_id}/documents/{doc_id}/chunks/{chunk_id}", json={
+    batch_created = client.post(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks:batchCreate", json={
+        "requests": [{"chunk": {"chunkId": "batch_one", "data": {"stringValue": "Batch chunk text"}}}],
+    })
+    batch_updated = client.post(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks:batchUpdate", json={
+        "requests": [{"chunk": {"name": "batch_one", "data": {"stringValue": "Batch chunk updated"}}}],
+    })
+
+    queried = client.post(f"/v1/corpora/{corpus_id}:query", json={"query": "Atlas October"})
+    doc_queried = client.post(f"/v1/corpora/{corpus_id}/documents/{doc_id}:query", json={"query": "launch"})
+    listed_chunks = client.get(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks")
+    fetched_chunk = client.get(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks/{chunk_id}")
+    patched_chunk = client.patch(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks/{chunk_id}", json={
         "data": {"stringValue": "Project Atlas moved to November."},
     })
 
+    assert batch_created.status_code == 200
+    assert batch_created.json()["chunks"][0]["name"].endswith("/chunks/batch_one")
+    assert batch_updated.status_code == 200
+    assert batch_updated.json()["chunks"][0]["data"]["stringValue"] == "Batch chunk updated"
     assert queried.status_code == 200
     assert queried.json()["relevantChunks"][0]["chunk"]["name"] == chunk.json()["name"]
     assert doc_queried.status_code == 200
-    assert listed_chunks.json()["chunks"][0]["name"] == chunk.json()["name"]
+    assert chunk.json()["name"] in {item["name"] for item in listed_chunks.json()["chunks"]}
     assert fetched_chunk.json()["data"]["stringValue"].endswith("October.")
     assert patched_chunk.json()["data"]["stringValue"].endswith("November.")
 
-    perm = client.post(f"/v1beta/corpora/{corpus_id}/permissions", json={
+    batch_deleted = client.post(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks:batchDelete", json={
+        "names": [f"{doc_name}/chunks/batch_one"],
+    })
+    assert batch_deleted.status_code == 200
+
+    perm = client.post(f"/v1/corpora/{corpus_id}/permissions", json={
         "emailAddress": "reader@example.com",
         "role": "READER",
     })
     perm_id = perm.json()["name"].rsplit("/", 1)[-1]
-    fetched_perm = client.get(f"/v1beta/corpora/{corpus_id}/permissions/{perm_id}")
-    patched_perm = client.patch(f"/v1beta/corpora/{corpus_id}/permissions/{perm_id}", json={"role": "WRITER"})
+    listed_perms = client.get(f"/v1/corpora/{corpus_id}/permissions")
+    fetched_perm = client.get(f"/v1/corpora/{corpus_id}/permissions/{perm_id}")
+    patched_perm = client.patch(f"/v1/corpora/{corpus_id}/permissions/{perm_id}", json={"role": "WRITER"})
 
     assert perm.status_code == 200
+    assert listed_perms.status_code == 200
+    assert listed_perms.json()["permissions"][0]["role"] == "READER"
     assert fetched_perm.json()["role"] == "READER"
     assert patched_perm.json()["role"] == "WRITER"
 
-    assert client.delete(f"/v1beta/corpora/{corpus_id}/documents/{doc_id}/chunks/{chunk_id}").status_code == 200
-    assert client.delete(f"/v1beta/corpora/{corpus_id}/permissions/{perm_id}").status_code == 200
-    assert client.delete(f"/v1beta/corpora/{corpus_id}/documents/{doc_id}").status_code == 200
-    assert client.delete(f"/v1beta/corpora/{corpus_id}").status_code == 200
+    assert client.delete(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks/{chunk_id}").status_code == 200
+    assert client.delete(f"/v1/corpora/{corpus_id}/permissions/{perm_id}").status_code == 200
+    assert client.delete(f"/v1/corpora/{corpus_id}/documents/{doc_id}").status_code == 200
+    assert client.delete(f"/v1/{corpus_name}").status_code == 200
 
 
 def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):

@@ -2078,8 +2078,10 @@ def _gemini_save_corpora_index(index: dict[str, dict[str, Any]]) -> None:
 
 def _gemini_corpus_name(name: str) -> str:
     key = name.strip().strip("/")
-    if key.startswith("v1beta/"):
-        key = key[len("v1beta/"):]
+    for prefix in ("v1beta/", "v1/"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+            break
     if key.startswith("corpora/"):
         return key.split("/documents/", 1)[0].split("/permissions/", 1)[0]
     return "corpora/" + key
@@ -2088,8 +2090,10 @@ def _gemini_corpus_name(name: str) -> str:
 def _gemini_corpus_document_name(corpus_name: str, document: str) -> str:
     corpus_key = _gemini_corpus_name(corpus_name)
     key = document.strip().strip("/")
-    if key.startswith("v1beta/"):
-        key = key[len("v1beta/"):]
+    for prefix in ("v1beta/", "v1/"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+            break
     if key.startswith(corpus_key + "/documents/"):
         return key.split("/chunks/", 1)[0]
     if "/documents/" in key:
@@ -2100,8 +2104,10 @@ def _gemini_corpus_document_name(corpus_name: str, document: str) -> str:
 def _gemini_corpus_chunk_name(corpus_name: str, document: str, chunk: str) -> str:
     doc_key = _gemini_corpus_document_name(corpus_name, document)
     key = chunk.strip().strip("/")
-    if key.startswith("v1beta/"):
-        key = key[len("v1beta/"):]
+    for prefix in ("v1beta/", "v1/"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+            break
     if key.startswith(doc_key + "/chunks/"):
         return key
     if "/chunks/" in key:
@@ -2112,8 +2118,10 @@ def _gemini_corpus_chunk_name(corpus_name: str, document: str, chunk: str) -> st
 def _gemini_corpus_permission_name(corpus_name: str, permission: str) -> str:
     corpus_key = _gemini_corpus_name(corpus_name)
     key = permission.strip().strip("/")
-    if key.startswith("v1beta/"):
-        key = key[len("v1beta/"):]
+    for prefix in ("v1beta/", "v1/"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+            break
     if key.startswith(corpus_key + "/permissions/"):
         return key
     if "/permissions/" in key:
@@ -2934,9 +2942,7 @@ def _gemini_stable_alias_path(path: str) -> str:
     if not path.startswith("/v1/"):
         return path
     suffix = path[len("/v1/"):]
-    stable_prefixes = (
-        "corpora",
-    )
+    stable_prefixes: tuple[str, ...] = ()
     if suffix.startswith(stable_prefixes):
         return "/v1beta/" + suffix
     if suffix.startswith("models/") and (":" in suffix or "/operations/" in suffix):
@@ -4610,6 +4616,7 @@ async def gemini_delete_cached_content(cache_id: str):
     return JSONResponse({})
 
 
+@app.post("/v1/corpora")
 @app.post("/v1beta/corpora")
 async def gemini_create_corpus(request: Request):
     try:
@@ -4621,6 +4628,7 @@ async def gemini_create_corpus(request: Request):
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT")
 
 
+@app.get("/v1/corpora")
 @app.get("/v1beta/corpora")
 async def gemini_list_corpora(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
     corpora = [_gemini_corpus_resource(meta) for meta in _gemini_load_corpora_index().values()]
@@ -4630,6 +4638,7 @@ async def gemini_list_corpora(pageSize: int = Query(default=100, ge=1, le=1000),
     return {"corpora": corpora[start:end], "nextPageToken": str(end) if end < len(corpora) else ""}
 
 
+@app.post("/v1/corpora/{corpus_id}:query")
 @app.post("/v1beta/corpora/{corpus_id}:query")
 async def gemini_query_corpus(corpus_id: str, request: Request):
     meta = _gemini_load_corpora_index().get(_gemini_corpus_name(corpus_id))
@@ -4641,6 +4650,7 @@ async def gemini_query_corpus(corpus_id: str, request: Request):
     return _gemini_corpus_query(meta, query, top_k=top_k)
 
 
+@app.get("/v1/corpora/{corpus_id}")
 @app.get("/v1beta/corpora/{corpus_id}")
 async def gemini_get_corpus(corpus_id: str):
     meta = _gemini_load_corpora_index().get(_gemini_corpus_name(corpus_id))
@@ -4649,6 +4659,7 @@ async def gemini_get_corpus(corpus_id: str):
     return _gemini_corpus_resource(meta)
 
 
+@app.patch("/v1/corpora/{corpus_id}")
 @app.patch("/v1beta/corpora/{corpus_id}")
 async def gemini_patch_corpus(corpus_id: str, request: Request):
     index = _gemini_load_corpora_index()
@@ -4665,6 +4676,7 @@ async def gemini_patch_corpus(corpus_id: str, request: Request):
     return _gemini_corpus_resource(meta)
 
 
+@app.delete("/v1/corpora/{corpus_id}")
 @app.delete("/v1beta/corpora/{corpus_id}")
 async def gemini_delete_corpus(corpus_id: str):
     name = _gemini_corpus_name(corpus_id)
@@ -4676,6 +4688,7 @@ async def gemini_delete_corpus(corpus_id: str):
     return JSONResponse({})
 
 
+@app.post("/v1/corpora/{corpus_id}/documents")
 @app.post("/v1beta/corpora/{corpus_id}/documents")
 async def gemini_create_corpus_document(corpus_id: str, request: Request):
     index = _gemini_load_corpora_index()
@@ -4707,6 +4720,7 @@ async def gemini_create_corpus_document(corpus_id: str, request: Request):
     return _gemini_document_resource(doc)
 
 
+@app.get("/v1/corpora/{corpus_id}/documents")
 @app.get("/v1beta/corpora/{corpus_id}/documents")
 async def gemini_list_corpus_documents(corpus_id: str, pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
     meta = _gemini_load_corpora_index().get(_gemini_corpus_name(corpus_id))
@@ -4719,6 +4733,7 @@ async def gemini_list_corpus_documents(corpus_id: str, pageSize: int = Query(def
     return {"documents": docs[start:end], "nextPageToken": str(end) if end < len(docs) else ""}
 
 
+@app.post("/v1/corpora/{corpus_id}/documents/{document_id:path}:query")
 @app.post("/v1beta/corpora/{corpus_id}/documents/{document_id:path}:query")
 async def gemini_query_corpus_document(corpus_id: str, document_id: str, request: Request):
     meta = _gemini_load_corpora_index().get(_gemini_corpus_name(corpus_id))
@@ -4773,6 +4788,7 @@ def _gemini_upsert_corpus_chunk(doc: dict[str, Any], doc_name: str, body: dict[s
     return chunk
 
 
+@app.post("/v1/corpora/{corpus_id}/documents/{document_id:path}/chunks:batchCreate")
 @app.post("/v1beta/corpora/{corpus_id}/documents/{document_id:path}/chunks:batchCreate")
 async def gemini_batch_create_corpus_chunks(corpus_id: str, document_id: str, request: Request):
     try:
@@ -4792,11 +4808,13 @@ async def gemini_batch_create_corpus_chunks(corpus_id: str, document_id: str, re
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
 
 
+@app.post("/v1/corpora/{corpus_id}/documents/{document_id:path}/chunks:batchUpdate")
 @app.post("/v1beta/corpora/{corpus_id}/documents/{document_id:path}/chunks:batchUpdate")
 async def gemini_batch_update_corpus_chunks(corpus_id: str, document_id: str, request: Request):
     return await gemini_batch_create_corpus_chunks(corpus_id, document_id, request)
 
 
+@app.post("/v1/corpora/{corpus_id}/documents/{document_id:path}/chunks:batchDelete")
 @app.post("/v1beta/corpora/{corpus_id}/documents/{document_id:path}/chunks:batchDelete")
 async def gemini_batch_delete_corpus_chunks(corpus_id: str, document_id: str, request: Request):
     try:
@@ -4816,6 +4834,7 @@ async def gemini_batch_delete_corpus_chunks(corpus_id: str, document_id: str, re
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
 
 
+@app.post("/v1/corpora/{corpus_id}/documents/{document_id:path}/chunks")
 @app.post("/v1beta/corpora/{corpus_id}/documents/{document_id:path}/chunks")
 async def gemini_create_corpus_chunk(corpus_id: str, document_id: str, request: Request):
     try:
@@ -4832,6 +4851,7 @@ async def gemini_create_corpus_chunk(corpus_id: str, document_id: str, request: 
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
 
 
+@app.get("/v1/corpora/{corpus_id}/documents/{document_id:path}/chunks")
 @app.get("/v1beta/corpora/{corpus_id}/documents/{document_id:path}/chunks")
 async def gemini_list_corpus_chunks(corpus_id: str, document_id: str, pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
     try:
@@ -4845,6 +4865,7 @@ async def gemini_list_corpus_chunks(corpus_id: str, document_id: str, pageSize: 
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status="NOT_FOUND")
 
 
+@app.get("/v1/corpora/{corpus_id}/documents/{document_id:path}/chunks/{chunk_id:path}")
 @app.get("/v1beta/corpora/{corpus_id}/documents/{document_id:path}/chunks/{chunk_id:path}")
 async def gemini_get_corpus_chunk(corpus_id: str, document_id: str, chunk_id: str):
     try:
@@ -4857,6 +4878,7 @@ async def gemini_get_corpus_chunk(corpus_id: str, document_id: str, chunk_id: st
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status="NOT_FOUND")
 
 
+@app.patch("/v1/corpora/{corpus_id}/documents/{document_id:path}/chunks/{chunk_id:path}")
 @app.patch("/v1beta/corpora/{corpus_id}/documents/{document_id:path}/chunks/{chunk_id:path}")
 async def gemini_patch_corpus_chunk(corpus_id: str, document_id: str, chunk_id: str, request: Request):
     try:
@@ -4874,6 +4896,7 @@ async def gemini_patch_corpus_chunk(corpus_id: str, document_id: str, chunk_id: 
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
 
 
+@app.delete("/v1/corpora/{corpus_id}/documents/{document_id:path}/chunks/{chunk_id:path}")
 @app.delete("/v1beta/corpora/{corpus_id}/documents/{document_id:path}/chunks/{chunk_id:path}")
 async def gemini_delete_corpus_chunk(corpus_id: str, document_id: str, chunk_id: str):
     try:
@@ -4890,6 +4913,7 @@ async def gemini_delete_corpus_chunk(corpus_id: str, document_id: str, chunk_id:
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status="NOT_FOUND")
 
 
+@app.get("/v1/corpora/{corpus_id}/documents/{document_id:path}")
 @app.get("/v1beta/corpora/{corpus_id}/documents/{document_id:path}")
 async def gemini_get_corpus_document(corpus_id: str, document_id: str):
     meta = _gemini_load_corpora_index().get(_gemini_corpus_name(corpus_id))
@@ -4901,6 +4925,7 @@ async def gemini_get_corpus_document(corpus_id: str, document_id: str):
     return _gemini_document_resource(doc)
 
 
+@app.patch("/v1/corpora/{corpus_id}/documents/{document_id:path}")
 @app.patch("/v1beta/corpora/{corpus_id}/documents/{document_id:path}")
 async def gemini_patch_corpus_document(corpus_id: str, document_id: str, request: Request):
     index = _gemini_load_corpora_index()
@@ -4924,6 +4949,7 @@ async def gemini_patch_corpus_document(corpus_id: str, document_id: str, request
     return _gemini_document_resource(doc)
 
 
+@app.delete("/v1/corpora/{corpus_id}/documents/{document_id:path}")
 @app.delete("/v1beta/corpora/{corpus_id}/documents/{document_id:path}")
 async def gemini_delete_corpus_document(corpus_id: str, document_id: str):
     index = _gemini_load_corpora_index()
@@ -4941,6 +4967,7 @@ async def gemini_delete_corpus_document(corpus_id: str, document_id: str):
     return JSONResponse({})
 
 
+@app.get("/v1/corpora/{corpus_id}/permissions")
 @app.get("/v1beta/corpora/{corpus_id}/permissions")
 async def gemini_list_corpus_permissions(corpus_id: str):
     meta = _gemini_load_corpora_index().get(_gemini_corpus_name(corpus_id))
@@ -4949,6 +4976,7 @@ async def gemini_list_corpus_permissions(corpus_id: str):
     return {"permissions": list((meta.get("permissions") or {}).values())}
 
 
+@app.post("/v1/corpora/{corpus_id}/permissions")
 @app.post("/v1beta/corpora/{corpus_id}/permissions")
 async def gemini_create_corpus_permission(corpus_id: str, request: Request):
     index = _gemini_load_corpora_index()
@@ -4970,6 +4998,7 @@ async def gemini_create_corpus_permission(corpus_id: str, request: Request):
     return perm
 
 
+@app.get("/v1/corpora/{corpus_id}/permissions/{permission_id:path}")
 @app.get("/v1beta/corpora/{corpus_id}/permissions/{permission_id:path}")
 async def gemini_get_corpus_permission(corpus_id: str, permission_id: str):
     meta = _gemini_load_corpora_index().get(_gemini_corpus_name(corpus_id))
@@ -4981,6 +5010,7 @@ async def gemini_get_corpus_permission(corpus_id: str, permission_id: str):
     return perm
 
 
+@app.patch("/v1/corpora/{corpus_id}/permissions/{permission_id:path}")
 @app.patch("/v1beta/corpora/{corpus_id}/permissions/{permission_id:path}")
 async def gemini_patch_corpus_permission(corpus_id: str, permission_id: str, request: Request):
     index = _gemini_load_corpora_index()
@@ -5003,6 +5033,7 @@ async def gemini_patch_corpus_permission(corpus_id: str, permission_id: str, req
     return perm
 
 
+@app.delete("/v1/corpora/{corpus_id}/permissions/{permission_id:path}")
 @app.delete("/v1beta/corpora/{corpus_id}/permissions/{permission_id:path}")
 async def gemini_delete_corpus_permission(corpus_id: str, permission_id: str):
     index = _gemini_load_corpora_index()
