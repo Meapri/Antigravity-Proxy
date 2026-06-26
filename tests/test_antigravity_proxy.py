@@ -1219,6 +1219,22 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     assert video.status_code == 200
     assert video.json()["file"]["videoMetadata"]["videoDuration"] == "3s"
 
+    for idx in range(12):
+        created = client.post("/v1beta/files:register", json={
+            "file": {"displayName": f"page-{idx}.txt", "uri": f"gs://bucket/page-{idx}.txt"}
+        })
+        assert created.status_code == 200
+
+    default_page = client.get("/v1beta/files")
+    second_page = client.get(f"/v1beta/files?page_token={default_page.json()['nextPageToken']}")
+    too_large_page = client.get("/v1beta/files?pageSize=101")
+
+    assert len(default_page.json()["files"]) == 10
+    assert default_page.json()["nextPageToken"]
+    assert second_page.status_code == 200
+    assert second_page.json()["files"]
+    assert too_large_page.status_code == 422
+
     fetched = client.get(f"/v1beta/{file_resource['name']}")
     downloaded = client.get(f"/v1beta/{file_resource['name']}:download")
 

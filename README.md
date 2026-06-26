@@ -664,7 +664,8 @@ Notes:
 - Files are stored locally under `data/gemini_files` by default; override with
   `ANTIGRAVITY_GEMINI_FILES_DIR`. File resources include Gemini-style
   `downloadUri`, `source`, base64 `sha256Hash`, and video metadata fields when
-  available.
+  available. `files.list` uses Gemini's default page size of 10 and maximum
+  page size of 100.
 - Cached contents are stored locally under `data/gemini_cached_contents` by
   default; override with `ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR`.
 - Corpora are stored locally under `data/gemini_corpora` by default; override

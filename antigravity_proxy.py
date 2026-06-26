@@ -4273,7 +4273,7 @@ async def gemini_get_model(model_name: str):
 
 
 @app.get("/v1beta/files")
-async def gemini_list_files(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+async def gemini_list_files(pageSize: int = Query(default=10, ge=1, le=100), pageToken: str | None = None):
     """Gemini-compatible local Files API listing."""
     index = _gemini_load_files_index()
     files = [_gemini_file_resource(meta) for meta in index.values()]
