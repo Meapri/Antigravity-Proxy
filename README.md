@@ -350,6 +350,8 @@ Implemented Gemini-compatible routes:
 - `GET /v1beta/interactions/{interaction}`
 - `POST /v1beta/interactions/{interaction}:cancel`
 - `DELETE /v1beta/interactions/{interaction}`
+- `WS /ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`
+- `WS /v1beta/live`
 - `POST /v1beta/batches`
 - `GET /v1beta/batches`
 - `GET /v1beta/batches/{batch}`
@@ -558,6 +560,15 @@ Generated files:
 - Generated files are stored locally under `data/gemini_generated_files`;
   override with `ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR`.
 
+Live API:
+
+- The Gemini Live WebSocket envelope is implemented for text turn flows:
+  `setup` returns `setupComplete`, and `clientContent` with `turnComplete`
+  produces `serverContent.modelTurn`.
+- Realtime audio/video `realtimeInput` is explicitly rejected with
+  `UNIMPLEMENTED` because the current Antigravity backend is request/response
+  oriented and does not expose native bidirectional media streaming.
+
 Notes:
 
 - Model names are exposed as Gemini resources like
@@ -582,9 +593,9 @@ Notes:
   override with `ANTIGRAVITY_GEMINI_FILE_SEARCH_STORES_DIR`.
 - Tuned model metadata and permissions are stored locally under
   `data/gemini_tuned_models`; override with `ANTIGRAVITY_GEMINI_TUNED_MODELS_DIR`.
-- Live API, real model tuning/training, true async long-running jobs, semantic
-  Google embeddings, and semantic/vector `tools.file_search` retrieval are not
-  fully implemented yet.
+- Realtime Live audio/video, real model tuning/training, true async
+  long-running jobs, semantic Google embeddings, and semantic/vector
+  `tools.file_search` retrieval are not fully implemented yet.
 
 ## Responses API Compatibility
 

@@ -32,7 +32,7 @@ import sys
 from email import policy
 from email.parser import BytesParser
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
@@ -481,6 +481,47 @@ def _gemini_interaction_contents(body: dict[str, Any]) -> list[dict[str, Any]]:
     if not contents:
         raise HTTPException(status_code=400, detail="Interaction input did not contain any supported content.")
     return contents
+
+
+def _gemini_live_turns_from_message(message: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
+    client_content = message.get("clientContent") or message.get("client_content")
+    if not isinstance(client_content, dict):
+        return [], False
+    turns = client_content.get("turns") or []
+    if isinstance(turns, dict) or isinstance(turns, str):
+        turns = [turns]
+    contents: list[dict[str, Any]] = []
+    if isinstance(turns, list):
+        for turn in turns:
+            content = _gemini_message_to_content(turn)
+            if content is not None:
+                contents.append(content)
+    return contents, bool(client_content.get("turnComplete") or client_content.get("turn_complete"))
+
+
+async def _gemini_live_generate(
+    *,
+    model_name: str,
+    history: list[dict[str, Any]],
+    setup: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    model = _resolve_gemini_model(model_name)
+    body: dict[str, Any] = {"contents": history}
+    for key in ("systemInstruction", "generationConfig", "safetySettings", "tools", "toolConfig"):
+        if key in setup:
+            body[key] = setup[key]
+    body = _gemini_apply_file_search(_gemini_inline_local_files(body))
+    data = await asyncio.to_thread(
+        _get_client().generate_raw,
+        request=body,
+        model=str(model["antigravity_model"]),
+    )
+    response = _gemini_unwrap_response(data)
+    candidates = response.get("candidates") or []
+    model_turn = None
+    if candidates and isinstance(candidates[0], dict) and isinstance(candidates[0].get("content"), dict):
+        model_turn = candidates[0]["content"]
+    return response, model_turn
 
 
 def _gemini_predict_to_generate_body(body: dict[str, Any]) -> dict[str, Any]:
@@ -4854,6 +4895,83 @@ async def gemini_delete_interaction(interaction_id: str):
     index.pop(name, None)
     _gemini_save_interactions_index(index)
     return JSONResponse({})
+
+
+@app.websocket("/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent")
+@app.websocket("/v1beta/live")
+async def gemini_live_websocket(websocket: WebSocket):
+    """Gemini Live API-compatible WebSocket for text turn flows.
+
+    The Antigravity backend is request/response oriented, so this implements
+    the Live protocol envelope for setup and text clientContent turns. Realtime
+    audio/video chunks are rejected explicitly instead of being silently ignored.
+    """
+    await websocket.accept()
+    setup: dict[str, Any] = {}
+    model_name = websocket.query_params.get("model") or "models/gemini-3-flash-agent"
+    history: list[dict[str, Any]] = []
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                message = _gemini_normalize_request(json.loads(raw))
+            except json.JSONDecodeError:
+                await websocket.send_json({"error": {"code": 400, "message": "Live API messages must be JSON.", "status": "INVALID_ARGUMENT"}})
+                continue
+            if not isinstance(message, dict):
+                await websocket.send_json({"error": {"code": 400, "message": "Live API message must be an object.", "status": "INVALID_ARGUMENT"}})
+                continue
+
+            setup_msg = message.get("setup")
+            if isinstance(setup_msg, dict):
+                setup = _gemini_normalize_request(setup_msg)
+                model_name = setup.get("model") or setup.get("modelName") or model_name
+                await websocket.send_json({"setupComplete": {}})
+                continue
+
+            if isinstance(message.get("realtimeInput"), dict) or isinstance(message.get("realtime_input"), dict):
+                await websocket.send_json({
+                    "error": {
+                        "code": 400,
+                        "message": "Realtime audio/video input is not supported by this Antigravity-backed Live shim.",
+                        "status": "UNIMPLEMENTED",
+                    }
+                })
+                continue
+
+            if isinstance(message.get("toolResponse"), dict) or isinstance(message.get("tool_response"), dict):
+                await websocket.send_json({"toolCallCancellation": {"ids": []}})
+                continue
+
+            turns, turn_complete = _gemini_live_turns_from_message(message)
+            if not turns:
+                await websocket.send_json({"error": {"code": 400, "message": "Unsupported Live API message.", "status": "INVALID_ARGUMENT"}})
+                continue
+            history.extend(turns)
+            if not turn_complete:
+                await websocket.send_json({"serverContent": {"turnComplete": False}})
+                continue
+
+            try:
+                response, model_turn = await _gemini_live_generate(model_name=str(model_name), history=history, setup=setup)
+            except HTTPException as exc:
+                status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+                await websocket.send_json({"error": {"code": exc.status_code, "message": str(exc.detail), "status": status}})
+                continue
+            except Exception as exc:
+                log.exception("Gemini Live generate failed")
+                await websocket.send_json({"error": {"code": 502, "message": f"Antigravity upstream error: {exc}", "status": "UNAVAILABLE"}})
+                continue
+
+            server_content: dict[str, Any] = {"turnComplete": True}
+            if model_turn:
+                history.append(model_turn)
+                server_content["modelTurn"] = model_turn
+            if isinstance(response.get("usageMetadata"), dict):
+                server_content["usageMetadata"] = response["usageMetadata"]
+            await websocket.send_json({"serverContent": server_content})
+    except WebSocketDisconnect:
+        return
 
 
 @app.post("/v1beta/models/{model_name:path}:streamGenerateContent")

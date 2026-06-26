@@ -441,6 +441,47 @@ def test_gemini_interactions_create_previous_store_and_stream(tmp_path, monkeypa
     assert "data: [DONE]" in body
 
 
+def test_gemini_live_websocket_text_turn(monkeypatch):
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            seen["model"] = model
+            return {"response": {"candidates": [{"content": {"role": "model", "parts": [{"text": "live ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    with client.websocket_connect("/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent") as ws:
+        ws.send_json({"setup": {"model": "models/gemini-3-flash-agent"}})
+        assert ws.receive_json() == {"setupComplete": {}}
+        ws.send_json({
+            "clientContent": {
+                "turns": [{"role": "user", "parts": [{"text": "hello live"}]}],
+                "turnComplete": True,
+            }
+        })
+        response = ws.receive_json()
+
+    assert seen["model"] == "gemini-3-flash-agent"
+    assert seen["request"]["contents"][0]["parts"][0]["text"] == "hello live"
+    assert response["serverContent"]["turnComplete"] is True
+    assert response["serverContent"]["modelTurn"]["parts"][0]["text"] == "live ok"
+
+
+def test_gemini_live_websocket_rejects_realtime_media(monkeypatch):
+    client = TestClient(proxy.app)
+
+    with client.websocket_connect("/v1beta/live") as ws:
+        ws.send_json({"setup": {"model": "models/gemini-3-flash-agent"}})
+        assert ws.receive_json() == {"setupComplete": {}}
+        ws.send_json({"realtimeInput": {"mediaChunks": [{"mimeType": "audio/pcm", "data": "AAAA"}]}})
+        response = ws.receive_json()
+
+    assert response["error"]["status"] == "UNIMPLEMENTED"
+
+
 def test_gemini_files_upload_and_file_data_inline_conversion(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "gemini_files"))
     seen = {}
