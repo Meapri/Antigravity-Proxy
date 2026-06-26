@@ -847,7 +847,10 @@ Tuned models and permissions:
   `hyperparameters`, `trainingData`, `validationData`, `readerProjectNumbers`,
   and `tunedModelSource`.
 - `tunedModels/{id}:generateContent` forwards to the configured `baseModel`.
-- `permissions` are stored locally for Gemini SDK compatibility.
+- `permissions` are stored locally for Gemini SDK compatibility; corpus and
+  tuned-model permission create/patch accept `permission` wrappers plus
+  snake_case aliases such as `email_address` and `grantee_type`, normalizing
+  role/grantee enums to Gemini-style uppercase values.
 
 Generated files:
 

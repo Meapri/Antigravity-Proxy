@@ -440,6 +440,9 @@ _GEMINI_KEY_ALIASES = {
     "chunking_config": "chunkingConfig",
     "white_space_config": "whiteSpaceConfig",
     "custom_metadata": "customMetadata",
+    "permission": "permission",
+    "grantee_type": "granteeType",
+    "email_address": "emailAddress",
     "webhook_secret": "webhookSecret",
     "signing_secrets": "signingSecrets",
     "new_signing_secret": "newSigningSecret",
@@ -3000,6 +3003,33 @@ def _gemini_corpus_resource(meta: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in meta.items() if k not in {"documents", "permissions"} and v is not None}
 
 
+def _gemini_permission_body(body: Any) -> dict[str, Any]:
+    normalized = _gemini_normalize_request(body)
+    if not isinstance(normalized, dict):
+        return {}
+    wrapped = normalized.get("permission")
+    if isinstance(wrapped, dict):
+        merged = dict(wrapped)
+        for key, value in normalized.items():
+            if key != "permission" and key not in merged:
+                merged[key] = value
+        normalized = merged
+    for key in ("role", "granteeType"):
+        value = normalized.get(key)
+        if isinstance(value, str):
+            normalized[key] = value.strip().upper().replace("-", "_").replace(" ", "_")
+    return normalized
+
+
+def _gemini_permission_public_resource(name: str, body: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": name,
+        "granteeType": body.get("granteeType") or "USER",
+        "emailAddress": body.get("emailAddress"),
+        "role": body.get("role") or "READER",
+    }
+
+
 def _gemini_document_resource(doc: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in doc.items() if k not in {"chunks"} and v is not None}
 
@@ -3470,11 +3500,12 @@ def _gemini_permission_name(parent: str, permission_id: str) -> str:
 
 def _gemini_permission_resource(parent: str, perm: dict[str, Any]) -> dict[str, Any]:
     parent_name = _gemini_tuned_name(parent)
+    perm = _gemini_permission_body(perm)
     pid = str(perm.get("id") or perm.get("name", "").rsplit("/", 1)[-1] or ("perm_" + uuid.uuid4().hex))
     return {
         "name": f"{parent_name}/permissions/{pid}",
-        "granteeType": perm.get("granteeType") or perm.get("grantee_type") or "USER",
-        "emailAddress": perm.get("emailAddress") or perm.get("email_address"),
+        "granteeType": perm.get("granteeType") or "USER",
+        "emailAddress": perm.get("emailAddress"),
         "role": perm.get("role") or "READER",
     }
 
@@ -3486,7 +3517,7 @@ def _gemini_store_permission(parent: str, body: dict[str, Any]) -> dict[str, Any
     if not meta:
         raise HTTPException(status_code=404, detail=f"Tuned model '{parent}' not found.")
     permission_id = "perm_" + uuid.uuid4().hex
-    perm = _gemini_permission_resource(parent_name, {"id": permission_id, **_gemini_normalize_request(body)})
+    perm = _gemini_permission_resource(parent_name, {"id": permission_id, **_gemini_permission_body(body)})
     meta.setdefault("permissions", {})[perm["name"]] = perm
     meta["updateTime"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     index[parent_name] = meta
@@ -5991,14 +6022,10 @@ async def gemini_create_corpus_permission(corpus_id: str, request: Request):
     meta = index.get(corpus_name)
     if not meta:
         return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
-    body = _gemini_normalize_request(await request.json())
+    body = _gemini_permission_body(await request.json())
     pid = "perm_" + uuid.uuid4().hex
-    perm = {
-        "name": f"{corpus_name}/permissions/{pid}",
-        "granteeType": (body or {}).get("granteeType") or "USER",
-        "emailAddress": (body or {}).get("emailAddress"),
-        "role": (body or {}).get("role") or "READER",
-    }
+    perm_name = f"{corpus_name}/permissions/{pid}"
+    perm = _gemini_permission_public_resource(perm_name, body or {})
     meta.setdefault("permissions", {})[perm["name"]] = perm
     index[corpus_name] = meta
     _gemini_save_corpora_index(index)
@@ -6029,7 +6056,7 @@ async def gemini_patch_corpus_permission(corpus_id: str, permission_id: str, req
     perm = (meta.get("permissions") or {}).get(perm_name)
     if not perm:
         return _gemini_error_response(f"Permission '{permission_id}' not found.", status_code=404, status="NOT_FOUND")
-    body = _gemini_normalize_request(await request.json())
+    body = _gemini_permission_body(await request.json())
     if isinstance(body, dict):
         for key in ("role", "granteeType", "emailAddress"):
             if key in body:
@@ -6581,7 +6608,7 @@ async def gemini_patch_tuned_model_permission(tuned_model_id: str, permission_id
     perm = (meta.get("permissions") or {}).get(perm_name)
     if not perm:
         return _gemini_error_response(f"Permission '{permission_id}' not found.", status_code=404, status="NOT_FOUND")
-    body = _gemini_normalize_request(await request.json())
+    body = _gemini_permission_body(await request.json())
     if isinstance(body, dict):
         for key in ("role", "granteeType", "emailAddress"):
             if key in body:

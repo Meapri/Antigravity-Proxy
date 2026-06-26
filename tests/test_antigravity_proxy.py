@@ -2457,15 +2457,22 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     assert batch_deleted.status_code == 200
 
     perm = client.post(f"/v1/corpora/{corpus_id}/permissions", json={
-        "emailAddress": "reader@example.com",
-        "role": "READER",
+        "permission": {
+            "email_address": "reader@example.com",
+            "role": "reader",
+            "grantee_type": "user",
+        },
     })
     perm_id = perm.json()["name"].rsplit("/", 1)[-1]
     listed_perms = client.get(f"/v1/corpora/{corpus_id}/permissions")
     fetched_perm = client.get(f"/v1/corpora/{corpus_id}/permissions/{perm_id}")
-    patched_perm = client.patch(f"/v1/corpora/{corpus_id}/permissions/{perm_id}", json={"role": "WRITER"})
+    patched_perm = client.patch(f"/v1/corpora/{corpus_id}/permissions/{perm_id}", json={
+        "permission": {"role": "writer"}
+    })
 
     assert perm.status_code == 200
+    assert perm.json()["emailAddress"] == "reader@example.com"
+    assert perm.json()["granteeType"] == "USER"
     assert listed_perms.status_code == 200
     assert listed_perms.json()["permissions"][0]["role"] == "READER"
     assert fetched_perm.json()["role"] == "READER"
@@ -2691,16 +2698,23 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert patched.json()["tuningTask"]["hyperparameters"]["epochCount"] == 3
 
     perm = client.post("/v1/tunedModels/my_tuned/permissions", json={
-        "emailAddress": "user@example.com",
-        "role": "READER",
+        "permission": {
+            "email_address": "user@example.com",
+            "role": "reader",
+            "grantee_type": "user",
+        },
     })
     assert perm.status_code == 200
     perm_id = perm.json()["name"].rsplit("/", 1)[-1]
     listed_perms = client.get("/v1/tunedModels/my_tuned/permissions")
-    patched_perm = client.patch(f"/v1/tunedModels/my_tuned/permissions/{perm_id}", json={"role": "WRITER"})
+    patched_perm = client.patch(f"/v1/tunedModels/my_tuned/permissions/{perm_id}", json={
+        "permission": {"role": "writer"}
+    })
     promoted = client.post(f"/v1/tunedModels/my_tuned/permissions/{perm_id}:transferOwnership")
     fetched_perm = client.get(f"/v1/tunedModels/my_tuned/permissions/{perm_id}")
     assert listed_perms.status_code == 200
+    assert listed_perms.json()["permissions"][0]["emailAddress"] == "user@example.com"
+    assert listed_perms.json()["permissions"][0]["granteeType"] == "USER"
     assert listed_perms.json()["permissions"][0]["role"] == "READER"
     assert patched_perm.status_code == 200
     assert patched_perm.json()["role"] == "WRITER"
