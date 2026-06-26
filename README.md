@@ -668,6 +668,8 @@ values into Gemini REST `Content` objects before forwarding.
 They also accept the common SDK-style top-level `config` object and merge it
 into Gemini REST fields such as `generationConfig`, `systemInstruction`,
 `toolConfig`, `safetySettings`, `tools`, `cachedContent`, and `labels`.
+`service_tier` / `serviceTier` and `store` are preserved as top-level
+GenerateContent request fields.
 Content parts preserve SDK-style aliases such as `function_call`,
 `function_response`, `executable_code`, `code_execution_result`, and
 `thought_signature` as canonical Gemini REST fields.

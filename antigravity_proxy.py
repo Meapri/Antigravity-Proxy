@@ -435,6 +435,8 @@ _GEMINI_KEY_ALIASES = {
     "documentId": "documentId",
     "chunk_id": "chunkId",
     "chunkId": "chunkId",
+    "service_tier": "serviceTier",
+    "serviceTier": "serviceTier",
     "epoch_count": "epochCount",
     "batch_size": "batchSize",
     "target_uri": "targetUri",
@@ -503,6 +505,8 @@ _GEMINI_GENERATE_CONFIG_TOP_LEVEL_KEYS = {
     "toolConfig",
     "cachedContent",
     "labels",
+    "serviceTier",
+    "store",
 }
 
 _GEMINI_GENERATION_CONFIG_KEYS = {
@@ -1073,6 +1077,8 @@ def _gemini_normalize_generate_body(body: dict[str, Any]) -> dict[str, Any]:
             out.pop("safetySettings", None)
     if "toolConfig" in out:
         out["toolConfig"] = _gemini_normalize_tool_config(out.get("toolConfig"))
+    if "store" in out:
+        out["store"] = _gemini_bool_value(out.get("store"))
     return out
 
 

@@ -782,6 +782,8 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
             "response_schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}},
             "tool_config": {"function_calling_config": {"mode": "none"}},
             "labels": {"source": "sdk"},
+            "service_tier": "PRIORITY",
+            "store": "false",
             "http_options": {"api_version": "v1"},
             "api_version": "v1",
         },
@@ -794,6 +796,8 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
     assert "apiVersion" not in seen["request"]
     assert seen["request"]["systemInstruction"] == {"role": "system", "parts": [{"text": "answer tersely"}]}
     assert seen["request"]["labels"] == {"source": "sdk"}
+    assert seen["request"]["serviceTier"] == "PRIORITY"
+    assert seen["request"]["store"] is False
     assert seen["request"]["toolConfig"]["functionCallingConfig"] == {"mode": "NONE"}
     assert seen["request"]["generationConfig"]["maxOutputTokens"] == 17
     assert seen["request"]["generationConfig"]["candidateCount"] == 1
