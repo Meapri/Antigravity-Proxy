@@ -608,6 +608,10 @@ Notes:
 
 - Model names are exposed as Gemini resources like
   `models/gemini-3-flash-agent`; pass `gemini-3-flash-agent` in the path.
+- Public-style aliases such as `gemini-flash-latest`, `gemini-pro-latest`,
+  and `gemini-image-latest` resolve to matching Antigravity-backed models.
+- Model resources include `supportedGenerationMethods`, token limits, and
+  capability metadata for the local Gemini compatibility surface.
 - `countTokens` is approximate because Antigravity's internal endpoint does not
   expose a separate Gemini token-count RPC.
 - Files are stored locally under `data/gemini_files` by default; override with

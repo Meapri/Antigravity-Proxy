@@ -243,6 +243,10 @@ def _rebuild_model_map(models: list[dict[str, Any]]) -> dict[str, dict[str, Any]
 
 # Map client aliases (antigravity.py) to survive direct backend requests
 _ALIASES = {
+    "gemini-flash-latest": "gemini-3-flash-agent",
+    "gemini-pro-latest": "gemini-pro-agent",
+    "gemini-3-flash-latest": "gemini-3-flash-agent",
+    "gemini-3.5-flash-latest": "gemini-3-flash-agent",
     "gemini-3.5-flash": "gemini-3.5-flash-low",
     "gemini-3.5-flash-high": "gemini-3-flash-agent",
     "gemini-3.5-flash-medium": "gemini-3.5-flash-low",
@@ -254,6 +258,10 @@ _ALIASES = {
     "claude-opus-4.6-thinking": "claude-opus-4-6-thinking",
     "gemini-3.1-pro-high": "gemini-pro-agent",
     "gemini-3.1-pro": "gemini-3.1-pro-low",
+    "gemini-3-pro": "gemini-pro-agent",
+    "gemini-3-pro-latest": "gemini-pro-agent",
+    "gemini-3-flash-image": "gemini-3.1-flash-image",
+    "gemini-image-latest": "gemini-3.1-flash-image",
 }
 _MODELS = _normalize_models(_MODELS)
 _MODEL_MAP = _rebuild_model_map(_MODELS)
@@ -272,25 +280,53 @@ def _gemini_model_name(model: dict[str, Any]) -> str:
 
 def _gemini_model_resource(model: dict[str, Any]) -> dict[str, Any]:
     caps = _model_capabilities(model)
-    methods = [
-        "generateContent",
-        "streamGenerateContent",
-        "countTokens",
-        "embedContent",
-        "batchEmbedContents",
-        "batchGenerateContent",
-    ]
+    if caps["image_generation"]:
+        methods = ["predict", "predictLongRunning"]
+        input_limit = 32768
+        output_limit = 8192
+    elif caps["internal"]:
+        methods = []
+        input_limit = 0
+        output_limit = 0
+    else:
+        methods = [
+            "generateContent",
+            "streamGenerateContent",
+            "countTokens",
+            "embedContent",
+            "batchEmbedContents",
+            "asyncBatchEmbedContent",
+            "batchGenerateContent",
+            "predict",
+            "predictLongRunning",
+            "generateText",
+            "generateMessage",
+            "generateAnswer",
+            "embedText",
+            "batchEmbedText",
+            "countTextTokens",
+            "countMessageTokens",
+        ]
+        input_limit = 1048576
+        output_limit = 65536
     return {
         "name": _gemini_model_name(model),
         "version": _gemini_model_id(model),
         "displayName": str(model.get("id") or _gemini_model_id(model)),
         "description": "Antigravity-backed Gemini-compatible model",
-        "inputTokenLimit": 1048576,
-        "outputTokenLimit": 65536,
-        "supportedGenerationMethods": methods if not caps["internal"] else [],
+        "inputTokenLimit": input_limit,
+        "outputTokenLimit": output_limit,
+        "supportedGenerationMethods": methods,
         "temperature": 1.0,
         "topP": 0.95,
         "topK": 64,
+        "capabilities": {
+            "chat": caps["chat"],
+            "tools": caps["tools"],
+            "vision": caps["vision"],
+            "streaming": caps["streaming"],
+            "imageGeneration": caps["image_generation"],
+        },
     }
 
 

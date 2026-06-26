@@ -163,16 +163,51 @@ def test_gemini_models_and_count_tokens():
     assert first["name"].startswith("models/")
     assert "generateContent" in first["supportedGenerationMethods"]
     assert "embedContent" in first["supportedGenerationMethods"]
+    assert "generateAnswer" in first["supportedGenerationMethods"]
+    assert "asyncBatchEmbedContent" in first["supportedGenerationMethods"]
+    assert first["inputTokenLimit"] > 0
+    assert "capabilities" in first
 
     one = client.get("/v1beta/models/gemini-3-flash-agent")
     assert one.status_code == 200
     assert one.json()["name"] == "models/gemini-3-flash-agent"
+
+    image = client.get("/v1beta/models/gemini-3.1-flash-image")
+    assert image.status_code == 200
+    assert "predict" in image.json()["supportedGenerationMethods"]
+    assert "generateContent" not in image.json()["supportedGenerationMethods"]
+    assert image.json()["capabilities"]["imageGeneration"] is True
 
     counted = client.post("/v1beta/models/gemini-3-flash-agent:countTokens", json={
         "contents": [{"role": "user", "parts": [{"text": "hello world"}]}]
     })
     assert counted.status_code == 200
     assert counted.json()["totalTokens"] > 0
+
+
+def test_gemini_model_aliases_resolve_for_public_style_names(monkeypatch):
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["model"] = model
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "alias ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    fetched = client.get("/v1beta/models/gemini-flash-latest")
+    generated = client.post("/v1beta/models/gemini-flash-latest:generateContent", json={
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+    })
+    image = client.get("/v1beta/models/gemini-image-latest")
+
+    assert fetched.status_code == 200
+    assert fetched.json()["name"] == "models/gemini-3-flash-agent"
+    assert generated.status_code == 200
+    assert seen["model"] == "gemini-3-flash-agent"
+    assert image.status_code == 200
+    assert image.json()["name"] == "models/gemini-3.1-flash-image"
 
 
 def test_gemini_auth_accepts_google_api_key_styles(monkeypatch):
