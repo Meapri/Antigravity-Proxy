@@ -3438,12 +3438,26 @@ def _gemini_config_body(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _gemini_fss_resource(meta: dict[str, Any]) -> dict[str, Any]:
+    documents = list((meta.get("documents") or {}).values())
+    active_count = sum(1 for doc in documents if str(doc.get("state") or "ACTIVE").upper() == "ACTIVE")
+    pending_count = sum(1 for doc in documents if str(doc.get("state") or "").upper() in {"PENDING", "PROCESSING"})
+    failed_count = sum(1 for doc in documents if str(doc.get("state") or "").upper() == "FAILED")
+    total_size = 0
+    for doc in documents:
+        try:
+            total_size += int(doc.get("sizeBytes") or 0)
+        except (TypeError, ValueError):
+            continue
     resource = {
         "name": meta["name"],
         "displayName": meta.get("displayName") or meta["name"].split("/", 1)[-1],
         "createTime": meta.get("createTime"),
         "updateTime": meta.get("updateTime"),
-        "fileCount": len(meta.get("documents") or {}),
+        "fileCount": len(documents),
+        "activeDocumentsCount": active_count,
+        "pendingDocumentsCount": pending_count,
+        "failedDocumentsCount": failed_count,
+        "sizeBytes": str(total_size),
     }
     for key in ("embeddingModel", "chunkingConfig", "customMetadata"):
         if meta.get(key) is not None:
@@ -6661,11 +6675,20 @@ async def gemini_get_file_search_store(store_id: str):
 
 @app.delete("/v1/fileSearchStores/{store_id}")
 @app.delete("/v1beta/fileSearchStores/{store_id}")
-async def gemini_delete_file_search_store(store_id: str):
+async def gemini_delete_file_search_store(store_id: str, request: Request):
     name = _gemini_fss_name(store_id)
     index = _gemini_load_fss_index()
-    if name not in index:
+    meta = index.get(name)
+    if not meta:
         return _gemini_error_response(f"File search store '{store_id}' not found.", status_code=404, status="NOT_FOUND")
+    force = _gemini_query_bool(request, "force", "force")
+    if (meta.get("documents") or {}) and not force:
+        return _gemini_error_response(
+            "File search store contains documents. Set force=true to delete it.",
+            status_code=400,
+            status="FAILED_PRECONDITION",
+            field="force",
+        )
     index.pop(name, None)
     _gemini_save_fss_index(index)
     return JSONResponse({})

@@ -2756,6 +2756,10 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     assert listed_stores.json()["fileSearchStores"][0]["name"] == store_name
     assert fetched_store.status_code == 200
     assert fetched_store.json()["name"] == store_name
+    assert fetched_store.json()["activeDocumentsCount"] == 2
+    assert fetched_store.json()["pendingDocumentsCount"] == 0
+    assert fetched_store.json()["failedDocumentsCount"] == 0
+    assert int(fetched_store.json()["sizeBytes"]) == len(b"source document") + len(b"direct document")
     assert listed.status_code == 200
     assert len(listed.json()["documents"]) == 2
     assert listed_snake_page.status_code == 200
@@ -2800,11 +2804,15 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
 
     deleted_upload_operation = client.delete(f"/v1/fileSearchStores/{store_id}/upload/operations/{uploaded_op_id}")
     deleted_doc = client.delete(f"/v1/{imported_doc['name']}")
-    deleted_store = client.delete(f"/v1/{store_name}")
+    blocked_store_delete = client.delete(f"/v1/{store_name}")
+    forced_store_delete = client.delete(f"/v1/{store_name}?force=true")
 
     assert deleted_upload_operation.status_code == 200
     assert deleted_doc.status_code == 200
-    assert deleted_store.status_code == 200
+    assert blocked_store_delete.status_code == 400
+    assert blocked_store_delete.json()["error"]["status"] == "FAILED_PRECONDITION"
+    assert blocked_store_delete.json()["error"]["details"][0]["fieldViolations"][0]["field"] == "force"
+    assert forced_store_delete.status_code == 200
 
 
 def test_gemini_file_search_documents_list_clamps_page_size(tmp_path, monkeypatch):
