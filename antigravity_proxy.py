@@ -3970,6 +3970,13 @@ async def _validation_exception_handler(request: Request, exc: RequestValidation
     if errors:
         loc = errors[0].get("loc") or []
         param = ".".join(str(part) for part in loc if part not in {"body", "query", "path"})
+    if _is_gemini_http_path(str(request.scope.get("path") or request.url.path)):
+        return _gemini_error_response(
+            "Request validation failed.",
+            status_code=400,
+            status="INVALID_ARGUMENT",
+            field=param,
+        )
     return _openai_error_response(
         errors,
         status_code=422,

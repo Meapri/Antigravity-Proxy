@@ -674,6 +674,8 @@ Gemini compatibility errors use the `google.rpc.Status`-style
 responses include `google.rpc.BadRequest` field-violation details, and
 unsupported hosted features include `google.rpc.ErrorInfo` details so SDKs can
 distinguish unsupported proxy features from malformed requests.
+Gemini request validation failures, including invalid query parameters, return
+`400 INVALID_ARGUMENT` rather than OpenAI-style validation errors.
 
 Files API example:
 

@@ -176,7 +176,10 @@ def test_gemini_models_and_count_tokens():
     assert paged.json()["nextPageToken"] == "1"
     assert next_page.status_code == 200
     assert len(next_page.json()["models"]) == 1
-    assert too_many.status_code == 422
+    assert too_many.status_code == 400
+    assert too_many.json()["error"]["status"] == "INVALID_ARGUMENT"
+    assert too_many.json()["error"]["details"][0]["@type"] == "type.googleapis.com/google.rpc.BadRequest"
+    assert too_many.json()["error"]["details"][0]["fieldViolations"][0]["field"] == "pageSize"
 
     one = client.get("/v1beta/models/gemini-3-flash-agent")
     assert one.status_code == 200
@@ -1749,7 +1752,9 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     assert default_page.json()["nextPageToken"]
     assert second_page.status_code == 200
     assert second_page.json()["files"]
-    assert too_large_page.status_code == 422
+    assert too_large_page.status_code == 400
+    assert too_large_page.json()["error"]["status"] == "INVALID_ARGUMENT"
+    assert too_large_page.json()["error"]["details"][0]["fieldViolations"][0]["field"] == "pageSize"
 
     fetched = client.get(f"/v1beta/{file_resource['name']}")
     downloaded = client.get(f"/v1beta/{file_resource['name']}:download")
