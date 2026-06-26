@@ -92,6 +92,19 @@ def test_openai_error_response_shape():
     assert payload["error"]["code"] == "not_found"
 
 
+def test_gemini_error_status_mapping_for_quota_and_server_errors():
+    quota = proxy._gemini_error_payload("Too many requests.", status_code=429)["error"]
+    timeout = proxy._gemini_error_payload("Timed out.", status_code=504)["error"]
+    internal = proxy._gemini_error_payload("Server exploded.", status_code=500)["error"]
+
+    assert quota["status"] == "RESOURCE_EXHAUSTED"
+    assert quota["details"][0]["reason"] == "RESOURCE_EXHAUSTED"
+    assert timeout["status"] == "DEADLINE_EXCEEDED"
+    assert timeout["details"][0]["reason"] == "DEADLINE_EXCEEDED"
+    assert internal["status"] == "INTERNAL"
+    assert internal["details"][0]["reason"] == "INTERNAL"
+
+
 def test_chat_raw_path_maps_structured_output_thinking_and_grounding(monkeypatch):
     seen = {}
 

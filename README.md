@@ -678,6 +678,8 @@ Gemini request validation failures, including invalid query parameters, return
 `400 INVALID_ARGUMENT` rather than OpenAI-style validation errors.
 Unmatched Gemini routes and uncaught Gemini `HTTPException`s also return this
 Gemini error shape, while OpenAI-compatible routes keep OpenAI-style errors.
+Quota, timeout, and server-side failures map to Gemini statuses such as
+`RESOURCE_EXHAUSTED`, `DEADLINE_EXCEEDED`, `UNAVAILABLE`, or `INTERNAL`.
 
 Files API example:
 

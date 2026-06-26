@@ -635,7 +635,15 @@ def _gemini_error_payload(
             "@type": "type.googleapis.com/google.rpc.BadRequest",
             "fieldViolations": [violation],
         })
-    if reason or error_status in {"UNIMPLEMENTED", "PERMISSION_DENIED", "UNAUTHENTICATED", "UNAVAILABLE"}:
+    if reason or error_status in {
+        "UNIMPLEMENTED",
+        "PERMISSION_DENIED",
+        "UNAUTHENTICATED",
+        "RESOURCE_EXHAUSTED",
+        "DEADLINE_EXCEEDED",
+        "UNAVAILABLE",
+        "INTERNAL",
+    }:
         details.append({
             "@type": "type.googleapis.com/google.rpc.ErrorInfo",
             "reason": reason or error_status,
@@ -661,15 +669,24 @@ def _gemini_error_response(
 
 
 def _gemini_status_for_http(status_code: int) -> str:
-    if status_code == 404:
-        return "NOT_FOUND"
-    if status_code == 501:
-        return "UNIMPLEMENTED"
-    if status_code == 403:
-        return "PERMISSION_DENIED"
-    if status_code == 401:
-        return "UNAUTHENTICATED"
-    return "INVALID_ARGUMENT"
+    mapping = {
+        400: "INVALID_ARGUMENT",
+        401: "UNAUTHENTICATED",
+        403: "PERMISSION_DENIED",
+        404: "NOT_FOUND",
+        405: "UNIMPLEMENTED",
+        409: "ABORTED",
+        412: "FAILED_PRECONDITION",
+        422: "INVALID_ARGUMENT",
+        429: "RESOURCE_EXHAUSTED",
+        499: "CANCELLED",
+        500: "INTERNAL",
+        501: "UNIMPLEMENTED",
+        502: "UNAVAILABLE",
+        503: "UNAVAILABLE",
+        504: "DEADLINE_EXCEEDED",
+    }
+    return mapping.get(status_code, "INTERNAL" if status_code >= 500 else "INVALID_ARGUMENT")
 
 
 def _gemini_content_part(value: Any) -> dict[str, Any]:
