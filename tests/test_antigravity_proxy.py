@@ -325,6 +325,19 @@ def test_gemini_auth_accepts_google_api_key_styles(monkeypatch):
     assert rejected.json()["error"]["details"][0]["@type"] == "type.googleapis.com/google.rpc.ErrorInfo"
 
 
+def test_gemini_unmatched_routes_use_gemini_error_shape():
+    client = TestClient(proxy.app)
+
+    gemini_missing = client.get("/v1beta/not-a-route")
+    openai_missing = client.get("/v1/chat/completions/not-a-route")
+
+    assert gemini_missing.status_code == 404
+    assert gemini_missing.json()["error"]["status"] == "NOT_FOUND"
+    assert gemini_missing.json()["error"]["code"] == 404
+    assert openai_missing.status_code == 404
+    assert openai_missing.json()["error"]["type"] == "invalid_request_error"
+
+
 def test_gemini_v1_model_routes_do_not_break_openai_models(monkeypatch, tmp_path):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "files"))
     seen = {}

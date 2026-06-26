@@ -39,6 +39,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocket
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 try:
     from antigravity_proxy_core.antigravity import AntigravityClient
@@ -3960,6 +3961,23 @@ async def _optional_api_key_auth(request: Request, call_next):
 
 @app.exception_handler(HTTPException)
 async def _http_exception_handler(request: Request, exc: HTTPException):
+    if _is_gemini_http_path(str(request.scope.get("path") or request.url.path)):
+        return _gemini_error_response(
+            exc.detail,
+            status_code=exc.status_code,
+            status=_gemini_status_for_http(exc.status_code),
+        )
+    return _openai_error_response(exc.detail, status_code=exc.status_code)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _starlette_http_exception_handler(request: Request, exc: StarletteHTTPException):
+    if _is_gemini_http_path(str(request.scope.get("path") or request.url.path)):
+        return _gemini_error_response(
+            exc.detail,
+            status_code=exc.status_code,
+            status=_gemini_status_for_http(exc.status_code),
+        )
     return _openai_error_response(exc.detail, status_code=exc.status_code)
 
 

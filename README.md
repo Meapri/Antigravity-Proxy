@@ -676,6 +676,8 @@ unsupported hosted features include `google.rpc.ErrorInfo` details so SDKs can
 distinguish unsupported proxy features from malformed requests.
 Gemini request validation failures, including invalid query parameters, return
 `400 INVALID_ARGUMENT` rather than OpenAI-style validation errors.
+Unmatched Gemini routes and uncaught Gemini `HTTPException`s also return this
+Gemini error shape, while OpenAI-compatible routes keep OpenAI-style errors.
 
 Files API example:
 
