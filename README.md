@@ -719,8 +719,10 @@ curl http://127.0.0.1:8765/v1beta/files \
 ```
 
 `files:register` accepts Gemini's current `uris` array form and returns
-`files`; the older proxy `{"file": ...}` form remains available as a
-compatibility alias.
+`files`; common `config` fields such as `mimeType`, `source`, and
+`customMetadata` are applied to each URI, while an optional `files` array can
+provide per-URI metadata such as `displayName` or `customMetadata`. The older
+proxy `{"file": ...}` form remains available as a compatibility alias.
 
 Then pass the returned `file.uri` in `fileData.fileUri`:
 

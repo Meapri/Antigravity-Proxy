@@ -2026,7 +2026,15 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     assert config_created.json()["file"]["sizeBytes"] == "9"
 
     official_registered = client.post("/v1beta/files:register", json={
-        "uris": ["gs://bucket/one.txt", "gs://bucket/two.txt"]
+        "uris": ["gs://bucket/one.txt", "gs://bucket/two.txt"],
+        "config": {"mime_type": "text/plain", "source": "REGISTERED"},
+        "files": [
+            {
+                "display_name": "one-custom.txt",
+                "custom_metadata": [{"key": "source", "stringValue": "uris"}],
+            },
+            {"display_name": "two-custom.txt"},
+        ],
     })
     assert official_registered.status_code == 200
     official_registered_files = official_registered.json()["files"]
@@ -2035,6 +2043,9 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
         "gs://bucket/two.txt",
     ]
     assert all(item["source"] == "REGISTERED" for item in official_registered_files)
+    assert all(item["mimeType"] == "text/plain" for item in official_registered_files)
+    assert [item["displayName"] for item in official_registered_files] == ["one-custom.txt", "two-custom.txt"]
+    assert official_registered_files[0]["customMetadata"][0]["stringValue"] == "uris"
 
     video = client.post("/v1beta/files:register", json={
         "file": {

@@ -2341,6 +2341,8 @@ def _gemini_file_resource(meta: dict[str, Any]) -> dict[str, Any]:
         resource["videoMetadata"] = meta["videoMetadata"]
     elif str(resource["mimeType"]).startswith("video/"):
         resource["videoMetadata"] = {}
+    if meta.get("customMetadata") is not None:
+        resource["customMetadata"] = meta["customMetadata"]
     return resource
 
 
@@ -2387,7 +2389,7 @@ def _gemini_file_metadata(body: dict[str, Any]) -> dict[str, Any]:
     merged = dict(file_meta)
     config = normalized.get("config") if isinstance(normalized.get("config"), dict) else file_meta.get("config")
     if isinstance(config, dict):
-        for key in ("displayName", "mimeType", "name", "uri", "downloadUri", "sizeBytes", "videoMetadata"):
+        for key in ("displayName", "mimeType", "name", "uri", "downloadUri", "sizeBytes", "videoMetadata", "customMetadata", "source", "expirationTime", "sha256Hash"):
             if key in config and key not in merged:
                 merged[key] = config[key]
     return merged
@@ -2423,6 +2425,7 @@ def _gemini_register_file(body: dict[str, Any]) -> dict[str, Any]:
         "state": file_meta.get("state") or "ACTIVE",
         "source": file_meta.get("source") or "REGISTERED",
         "videoMetadata": file_meta.get("videoMetadata") or file_meta.get("video_metadata"),
+        "customMetadata": file_meta.get("customMetadata") or file_meta.get("custom_metadata") or file_meta.get("metadata"),
         "registered": True,
     }
     index = _gemini_load_files_index()
@@ -2432,19 +2435,28 @@ def _gemini_register_file(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _gemini_register_files_from_uris(body: dict[str, Any]) -> list[dict[str, Any]]:
-    uris = body.get("uris")
+    normalized = _gemini_normalize_request(body)
+    uris = normalized.get("uris")
     if not isinstance(uris, list) or not uris:
         raise HTTPException(status_code=400, detail="files.register requires a non-empty uris array.")
+    config = normalized.get("config") if isinstance(normalized.get("config"), dict) else {}
+    files_config = normalized.get("files") if isinstance(normalized.get("files"), list) else []
     files = []
-    for uri in uris:
+    for idx, uri in enumerate(uris):
         if not isinstance(uri, str) or not uri.strip():
             raise HTTPException(status_code=400, detail="files.register uris must be non-empty strings.")
+        item_config = files_config[idx] if idx < len(files_config) and isinstance(files_config[idx], dict) else {}
+        normalized_item = _gemini_normalize_request(item_config)
+        merged = dict(config)
+        merged.update(normalized_item)
         file_name = Path(urlparse(uri).path).name or "registered-file"
+        display_name = merged.get("displayName") if len(uris) == 1 or "displayName" in normalized_item else file_name
         files.append(_gemini_register_file({
-            "displayName": file_name,
+            **merged,
+            "displayName": display_name or file_name,
             "uri": uri,
-            "downloadUri": uri,
-            "source": "REGISTERED",
+            "downloadUri": merged.get("downloadUri") or uri,
+            "source": merged.get("source") or "REGISTERED",
         }))
     return files
 
