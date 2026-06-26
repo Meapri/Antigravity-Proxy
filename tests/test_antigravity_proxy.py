@@ -912,6 +912,43 @@ def test_gemini_interactions_cancel_accepts_rest_and_colon_paths(tmp_path, monke
     assert client.get("/v1beta/interactions/int_cancel_colon").json()["status"] == "cancelled"
 
 
+def test_gemini_interactions_v1_aliases(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", str(tmp_path / "interactions"))
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            text = request["contents"][-1]["parts"][0]["text"]
+            return {"response": {"candidates": [{"content": {"role": "model", "parts": [{"text": f"v1:{text}"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    created = client.post("/v1/interactions", json={"input": "hello"})
+    assert created.status_code == 200
+    body = created.json()
+    assert body["outputText"] == "v1:hello"
+
+    fetched = client.get(f"/v1/{body['name']}")
+    colon_cancelled = client.post(f"/v1/{body['name']}:cancel")
+    rest_cancelled = client.post(f"/v1/{body['name']}/cancel")
+    deleted = client.delete(f"/v1/{body['name']}")
+    missing = client.get(f"/v1/{body['name']}")
+
+    assert fetched.status_code == 200
+    assert colon_cancelled.status_code == 200
+    assert rest_cancelled.status_code == 200
+    assert deleted.status_code == 200
+    assert missing.status_code == 404
+
+    with client.stream("POST", "/v1/interactions", json={"input": "stream", "stream": True}) as streamed:
+        stream_body = streamed.read().decode()
+
+    assert streamed.status_code == 200
+    assert "interaction.created" in stream_body
+    assert "interaction.completed" in stream_body
+    assert "data: [DONE]" in stream_body
+
+
 def test_gemini_interactions_accept_content_item_aliases_and_image_model(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", str(tmp_path / "interactions"))
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR", str(tmp_path / "generated"))

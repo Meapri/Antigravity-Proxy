@@ -372,6 +372,11 @@ Implemented Gemini-compatible routes:
 - `POST /v1beta/models/{model}:generateVideos`
 - `POST /v1beta/models/{model}:predict`
 - `POST /v1beta/models/{model}:predictLongRunning`
+- `POST /v1/interactions`
+- `GET /v1/interactions/{interaction}`
+- `POST /v1/interactions/{interaction}/cancel`
+- `POST /v1/interactions/{interaction}:cancel`
+- `DELETE /v1/interactions/{interaction}`
 - `POST /v1beta/interactions`
 - `GET /v1beta/interactions/{interaction}`
 - `POST /v1beta/interactions/{interaction}/cancel`

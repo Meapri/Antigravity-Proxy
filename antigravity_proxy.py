@@ -6418,6 +6418,7 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
     return interaction
 
 
+@app.post("/v1/interactions")
 @app.post("/v1beta/interactions")
 async def gemini_create_interaction(request: Request):
     try:
@@ -6446,6 +6447,7 @@ async def gemini_create_interaction(request: Request):
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
+@app.get("/v1/interactions/{interaction_id:path}")
 @app.get("/v1beta/interactions/{interaction_id:path}")
 async def gemini_get_interaction(interaction_id: str):
     interaction = _gemini_get_interaction(interaction_id)
@@ -6465,16 +6467,19 @@ def _gemini_cancel_interaction_response(interaction_id: str):
     return interaction
 
 
+@app.post("/v1/interactions/{interaction_id:path}:cancel")
 @app.post("/v1beta/interactions/{interaction_id:path}:cancel")
 async def gemini_cancel_interaction(interaction_id: str):
     return _gemini_cancel_interaction_response(interaction_id)
 
 
+@app.post("/v1/interactions/{interaction_id:path}/cancel")
 @app.post("/v1beta/interactions/{interaction_id:path}/cancel")
 async def gemini_cancel_interaction_rest(interaction_id: str):
     return _gemini_cancel_interaction_response(interaction_id)
 
 
+@app.delete("/v1/interactions/{interaction_id:path}")
 @app.delete("/v1beta/interactions/{interaction_id:path}")
 async def gemini_delete_interaction(interaction_id: str):
     name = _gemini_interaction_name(interaction_id)
