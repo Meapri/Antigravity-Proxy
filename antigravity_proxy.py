@@ -476,6 +476,12 @@ _GEMINI_KEY_ALIASES = {
     "functionCall": "functionCall",
     "function_response": "functionResponse",
     "functionResponse": "functionResponse",
+    "thought_signature": "thoughtSignature",
+    "thoughtSignature": "thoughtSignature",
+    "executable_code": "executableCode",
+    "executableCode": "executableCode",
+    "code_execution_result": "codeExecutionResult",
+    "codeExecutionResult": "codeExecutionResult",
     "harm_category": "category",
     "harmCategory": "category",
     "harm_block_threshold": "threshold",
@@ -825,22 +831,40 @@ def _gemini_inline_data_part(value: dict[str, Any]) -> dict[str, Any] | None:
 
 def _gemini_content_part(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
-        if any(key in value for key in ("text", "inlineData", "fileData", "functionCall", "functionResponse")):
-            return value
-        inline_part = _gemini_inline_data_part(value)
+        out = _gemini_normalize_request(value)
+        if any(key in out for key in (
+            "text",
+            "inlineData",
+            "fileData",
+            "functionCall",
+            "functionResponse",
+            "executableCode",
+            "codeExecutionResult",
+        )):
+            return out
+        inline_part = _gemini_inline_data_part(out)
         if inline_part:
+            if out.get("thoughtSignature") is not None:
+                inline_part["thoughtSignature"] = out["thoughtSignature"]
+            if out.get("thought") is not None:
+                inline_part["thought"] = out["thought"]
             return inline_part
-        file_uri = value.get("uri") or value.get("fileUri") or value.get("name")
-        if file_uri and (value.get("mimeType") or value.get("mime_type") or str(file_uri).startswith("files/")):
+        file_uri = out.get("uri") or out.get("fileUri") or out.get("name")
+        if file_uri and (out.get("mimeType") or str(file_uri).startswith("files/")):
             file_data: dict[str, Any] = {"fileUri": str(file_uri)}
-            mime_type = value.get("mimeType") or value.get("mime_type")
+            mime_type = out.get("mimeType")
             if mime_type:
                 file_data["mimeType"] = str(mime_type)
-            return {"fileData": file_data}
-        if value.get("type") in {"text", "input_text", "output_text"} and value.get("text") is not None:
-            return {"text": str(value["text"])}
-        if isinstance(value.get("content"), str):
-            return {"text": value["content"]}
+            part: dict[str, Any] = {"fileData": file_data}
+            if out.get("thoughtSignature") is not None:
+                part["thoughtSignature"] = out["thoughtSignature"]
+            if out.get("thought") is not None:
+                part["thought"] = out["thought"]
+            return part
+        if out.get("type") in {"text", "input_text", "output_text"} and out.get("text") is not None:
+            return {"text": str(out["text"])}
+        if isinstance(out.get("content"), str):
+            return {"text": out["content"]}
     return {"text": "" if value is None else str(value)}
 
 

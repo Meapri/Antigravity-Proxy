@@ -668,6 +668,9 @@ values into Gemini REST `Content` objects before forwarding.
 They also accept the common SDK-style top-level `config` object and merge it
 into Gemini REST fields such as `generationConfig`, `systemInstruction`,
 `toolConfig`, `safetySettings`, `tools`, `cachedContent`, and `labels`.
+Content parts preserve SDK-style aliases such as `function_call`,
+`function_response`, `executable_code`, `code_execution_result`, and
+`thought_signature` as canonical Gemini REST fields.
 String `stopSequences` and `responseModalities` values are normalized to the
 Gemini REST list form. Numeric and boolean generation config values such as
 `maxOutputTokens`, `temperature`, `topK`, and `responseLogprobs` are coerced

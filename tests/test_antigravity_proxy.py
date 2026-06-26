@@ -700,6 +700,59 @@ def test_gemini_generate_content_accepts_sdk_content_unions(monkeypatch):
     }
     assert seen["request"]["contents"][0]["parts"][1]["text"] == "describe bytes"
 
+    part_aliases = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": [{
+            "role": "model",
+            "parts": [
+                {
+                    "function_call": {"name": "lookup", "args": {"q": "atlas"}},
+                    "thought_signature": "sig-123",
+                    "thought": True,
+                },
+                {"executable_code": {"language": "PYTHON", "code": "print(1)"}},
+                {"code_execution_result": {"outcome": "OUTCOME_OK", "output": "1"}},
+            ],
+        }]
+    })
+    assert part_aliases.status_code == 200
+    alias_parts = seen["request"]["contents"][0]["parts"]
+    assert alias_parts[0] == {
+        "functionCall": {"name": "lookup", "args": {"q": "atlas"}},
+        "thoughtSignature": "sig-123",
+        "thought": True,
+    }
+    assert alias_parts[1] == {"executableCode": {"language": "PYTHON", "code": "print(1)"}}
+    assert alias_parts[2] == {"codeExecutionResult": {"outcome": "OUTCOME_OK", "output": "1"}}
+
+
+def test_gemini_candidate_part_aliases_are_canonicalized(monkeypatch):
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            return {
+                "response": {
+                    "candidates": [{
+                        "content": {
+                            "parts": [{
+                                "function_call": {"name": "lookup", "args": {"q": "atlas"}},
+                                "thought_signature": "sig-456",
+                            }]
+                        }
+                    }]
+                }
+            }
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={"contents": "hi"})
+
+    assert response.status_code == 200
+    part = response.json()["candidates"][0]["content"]["parts"][0]
+    assert part == {
+        "functionCall": {"name": "lookup", "args": {"q": "atlas"}},
+        "thoughtSignature": "sig-456",
+    }
+
 
 def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
     seen = {}
