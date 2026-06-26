@@ -343,8 +343,9 @@ that already live under `/v1` keep their OpenAI behavior, so `/v1/models`,
 rewritten.
 
 Common SDK spelling variants are accepted for query parameters: `page_size`,
-`page_token`, `update_mask`, `upload_type`, and `display_name` are normalized
-to the Gemini REST camelCase forms. `generateContent?alt=sse` and
+`page_token`, `update_mask`, `upload_type`, `display_name`, and
+`return_partial_success` are normalized to the Gemini REST camelCase forms.
+`generateContent?alt=sse` and
 `generateContent?stream=true` are treated as streaming Gemini SSE responses.
 Streaming fallback errors use the same Gemini `error` payload and
 `google.rpc.ErrorInfo` details as non-streaming Gemini errors.
@@ -806,6 +807,10 @@ Embeddings and batch operations:
 - `batches.updateGenerateContentBatch` and `batches.updateEmbedContentBatch`
   accept wrapper bodies plus `updateMask` / `update_mask` for `displayName`
   and `priority`, and return the same completed `batches/*` operation view.
+- `batches.list` supports `filter` terms for common operation and batch fields
+  such as `done`, `displayName`, `state`, `model`, and
+  `metadata.batchResource.*`; `returnPartialSuccess` /
+  `return_partial_success` returns an empty `unreachable` list for local stores.
 - `predict` and `predictLongRunning` are mapped to Gemini `generateContent`
   requests and return prediction/operation-shaped compatibility responses.
 - Legacy `generateText`, `generateMessage`, `generateAnswer`, `embedText`,

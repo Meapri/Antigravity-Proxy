@@ -1956,6 +1956,68 @@ def _gemini_batch_operation(batch: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _gemini_get_path_value(value: Any, path: str) -> Any:
+    current = value
+    for part in path.split("."):
+        if not part:
+            continue
+        if isinstance(current, dict):
+            current = current.get(part)
+        else:
+            return None
+    return current
+
+
+def _gemini_batch_filter_matches(batch: dict[str, Any], operation: dict[str, Any], filter_expr: str | None) -> bool:
+    if not filter_expr:
+        return True
+    aliases = {
+        "batch": "name",
+        "batch.name": "name",
+        "batch.display_name": "displayName",
+        "display_name": "displayName",
+        "batch.displayName": "displayName",
+        "batch.state": "state",
+        "batch.model": "model",
+        "operation.name": "operation",
+        "metadata.batch": "metadata.batch",
+        "metadata.batchResource.name": "metadata.batchResource.name",
+        "metadata.batchResource.display_name": "metadata.batchResource.displayName",
+        "metadata.batchResource.displayName": "metadata.batchResource.displayName",
+        "metadata.batchResource.state": "metadata.batchResource.state",
+        "metadata.batchResource.model": "metadata.batchResource.model",
+    }
+    searchable = dict(batch)
+    searchable["done"] = operation.get("done")
+    searchable["metadata"] = operation.get("metadata") if isinstance(operation.get("metadata"), dict) else {}
+    terms = re.split(r"\s+(?:AND|and)\s+", filter_expr.strip())
+    for term in terms:
+        term = term.strip()
+        if not term:
+            continue
+        match = re.match(r"^([\w.]+)\s*(!=|=|:)\s*(.+)$", term)
+        if not match:
+            continue
+        field, operator, expected_raw = match.groups()
+        expected = expected_raw.strip().strip("\"'")
+        actual = _gemini_get_path_value(searchable, aliases.get(field, field))
+        if actual is None and "." in field:
+            actual = _gemini_get_path_value(operation, aliases.get(field, field))
+        if isinstance(actual, bool):
+            expected_value: Any = expected.lower() == "true"
+        else:
+            expected_value = expected
+        actual_text = str(actual or "")
+        expected_text = str(expected_value)
+        if operator == "=" and actual != expected_value and actual_text != expected_text:
+            return False
+        if operator == "!=" and (actual == expected_value or actual_text == expected_text):
+            return False
+        if operator == ":" and expected_text.lower() not in actual_text.lower():
+            return False
+    return True
+
+
 def _gemini_interactions_root() -> Path:
     return Path(os.getenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", "data/gemini_interactions")).expanduser()
 
@@ -4006,6 +4068,7 @@ def _gemini_alias_query_string(query_string: bytes) -> bytes:
             "update_mask": "updateMask",
             "upload_type": "uploadType",
             "display_name": "displayName",
+            "return_partial_success": "returnPartialSuccess",
         }.get(key, key)
         out.append((mapped, value))
     return urlencode(out, doseq=True).encode("ascii")
@@ -7385,18 +7448,30 @@ async def gemini_create_batch(request: Request):
 
 @app.get("/v1/batches")
 @app.get("/v1beta/batches")
-async def gemini_list_batches(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+async def gemini_list_batches(
+    pageSize: int = Query(default=100, ge=1, le=1000),
+    pageToken: str | None = None,
+    filter: str | None = None,
+    returnPartialSuccess: bool = False,
+):
     index = _gemini_load_batches_index()
-    batches = list(index.values())
-    batches.sort(key=lambda item: item.get("name") or "")
+    batch_items = []
+    for batch in index.values():
+        operation = _gemini_batch_operation(batch)
+        if _gemini_batch_filter_matches(batch, operation, filter):
+            batch_items.append((batch, operation))
+    batch_items.sort(key=lambda item: item[0].get("name") or "")
     start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
     end = start + pageSize
-    page = batches[start:end]
-    return {
-        "operations": [_gemini_batch_operation(batch) for batch in page],
-        "batches": page,
-        "nextPageToken": str(end) if end < len(batches) else "",
+    page = batch_items[start:end]
+    response = {
+        "operations": [operation for _batch, operation in page],
+        "batches": [batch for batch, _operation in page],
+        "nextPageToken": str(end) if end < len(batch_items) else "",
     }
+    if returnPartialSuccess:
+        response["unreachable"] = []
+    return response
 
 
 @app.get("/v1/batches/{batch_id:path}")

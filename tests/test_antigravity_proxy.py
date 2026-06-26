@@ -1342,6 +1342,8 @@ def test_gemini_snake_case_query_aliases(tmp_path, monkeypatch):
     })
 
     listed = client.get("/v1beta/batches?page_size=1&page_token=0")
+    filtered = client.get('/v1beta/batches?filter=displayName:"second"&return_partial_success=true')
+    done_filtered = client.get('/v1beta/batches?filter=done=true AND metadata.batchResource.state="BATCH_STATE_SUCCEEDED"')
     patched = client.patch(f"/v1beta/{first['name']}:updateGenerateContentBatch?update_mask=displayName", json={
         "generateContentBatch": {"displayName": "patched"},
     })
@@ -1359,6 +1361,11 @@ def test_gemini_snake_case_query_aliases(tmp_path, monkeypatch):
     assert listed.status_code == 200
     assert len(listed.json()["batches"]) == 1
     assert listed.json()["nextPageToken"] == "1"
+    assert filtered.status_code == 200
+    assert [item["metadata"]["displayName"] for item in filtered.json()["operations"]] == ["second"]
+    assert filtered.json()["unreachable"] == []
+    assert done_filtered.status_code == 200
+    assert len(done_filtered.json()["operations"]) == 2
     assert patched.status_code == 200
     assert patched.json()["metadata"]["batchResource"]["displayName"] == "patched"
     assert priority.status_code == 200
