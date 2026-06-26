@@ -933,7 +933,7 @@ def _gemini_response_text(response: dict[str, Any]) -> str:
     return "".join(texts)
 
 
-def _gemini_normalize_usage_metadata(value: Any, *, request_body: dict[str, Any] | None, response: dict[str, Any]) -> dict[str, int]:
+def _gemini_normalize_usage_metadata(value: Any, *, request_body: dict[str, Any] | None, response: dict[str, Any]) -> dict[str, Any]:
     usage = dict(value) if isinstance(value, dict) else {}
     aliases = {
         "prompt_tokens": "promptTokenCount",
@@ -942,10 +942,15 @@ def _gemini_normalize_usage_metadata(value: Any, *, request_body: dict[str, Any]
         "candidate_tokens": "candidatesTokenCount",
         "output_tokens": "candidatesTokenCount",
         "total_tokens": "totalTokenCount",
+        "thoughts_tokens": "thoughtsTokenCount",
+        "prompt_tokens_details": "promptTokensDetails",
+        "cache_tokens_details": "cacheTokensDetails",
+        "cached_content_token_count": "cachedContentTokenCount",
     }
     for old, new in aliases.items():
         if usage.get(new) is None and usage.get(old) is not None:
             usage[new] = usage[old]
+        usage.pop(old, None)
     if usage.get("promptTokenCount") is None:
         usage["promptTokenCount"] = _estimate_tokens(request_body or {})
     if usage.get("candidatesTokenCount") is None:
@@ -956,6 +961,39 @@ def _gemini_normalize_usage_metadata(value: Any, *, request_body: dict[str, Any]
         except (TypeError, ValueError):
             usage["totalTokenCount"] = _estimate_tokens(request_body or {}) + _estimate_tokens(_gemini_response_text(response))
     return usage
+
+
+def _gemini_normalize_candidate(candidate: dict[str, Any], index: int) -> dict[str, Any]:
+    out = dict(candidate)
+    aliases = {
+        "finish_reason": "finishReason",
+        "finish_message": "finishMessage",
+        "safety_ratings": "safetyRatings",
+        "citation_metadata": "citationMetadata",
+        "grounding_metadata": "groundingMetadata",
+        "avg_logprobs": "avgLogprobs",
+        "logprobs_result": "logprobsResult",
+        "token_count": "tokenCount",
+    }
+    for old, new in aliases.items():
+        if out.get(new) is None and out.get(old) is not None:
+            out[new] = out[old]
+        out.pop(old, None)
+    out.setdefault("index", index)
+    out.setdefault("finishReason", "STOP")
+    content = out.get("content")
+    if isinstance(content, dict):
+        content = dict(content)
+        content.setdefault("role", "model")
+        parts = content.get("parts")
+        if parts is None:
+            content["parts"] = []
+        elif not isinstance(parts, list):
+            content["parts"] = [_gemini_content_part(parts)]
+        else:
+            content["parts"] = [_gemini_content_part(part) for part in parts]
+        out["content"] = content
+    return out
 
 
 def _gemini_finalize_generate_response(response: dict[str, Any], *, model_name: str, request_body: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -969,21 +1007,7 @@ def _gemini_finalize_generate_response(response: dict[str, Any], *, model_name: 
         finalized_candidates: list[Any] = []
         for idx, candidate in enumerate(candidates):
             if isinstance(candidate, dict):
-                candidate = dict(candidate)
-                candidate.setdefault("index", idx)
-                candidate.setdefault("finishReason", "STOP")
-                content = candidate.get("content")
-                if isinstance(content, dict):
-                    content = dict(content)
-                    content.setdefault("role", "model")
-                    parts = content.get("parts")
-                    if parts is None:
-                        content["parts"] = []
-                    elif not isinstance(parts, list):
-                        content["parts"] = [_gemini_content_part(parts)]
-                    else:
-                        content["parts"] = [_gemini_content_part(part) for part in parts]
-                    candidate["content"] = content
+                candidate = _gemini_normalize_candidate(candidate, idx)
             finalized_candidates.append(candidate)
         out["candidates"] = finalized_candidates
     out["usageMetadata"] = _gemini_normalize_usage_metadata(
@@ -991,6 +1015,7 @@ def _gemini_finalize_generate_response(response: dict[str, Any], *, model_name: 
         request_body=request_body,
         response=out,
     )
+    out.pop("usage_metadata", None)
     return out
 
 

@@ -662,7 +662,9 @@ SDK transport-only options such as `httpOptions`, `requestOptions`,
 Generate responses are normalized with Gemini-style `modelVersion`,
 `responseId`, candidate `index`, `finishReason`, model-role content parts, and
 `usageMetadata` token counts when the upstream response omits or partially
-spells them differently.
+spells them differently. Candidate metadata aliases such as `safety_ratings`,
+`grounding_metadata`, and `avg_logprobs` are also returned in Gemini REST
+camelCase form.
 Gemini compatibility errors use the `google.rpc.Status`-style
 `error.code` / `error.message` / `error.status` shape. `INVALID_ARGUMENT`
 responses include `google.rpc.BadRequest` field-violation details, and

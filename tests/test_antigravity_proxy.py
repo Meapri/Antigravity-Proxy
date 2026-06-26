@@ -563,8 +563,16 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
                 "response": {
                     "candidates": [{
                         "content": {"parts": "hello"},
+                        "finish_reason": "MAX_TOKENS",
+                        "safety_ratings": [{"category": "HARM_CATEGORY_HARASSMENT", "probability": "LOW"}],
+                        "grounding_metadata": {"searchEntryPoint": {"renderedContent": "x"}},
+                        "avg_logprobs": -0.2,
                     }],
-                    "usage_metadata": {"prompt_tokens": 4},
+                    "usage_metadata": {
+                        "prompt_tokens": 4,
+                        "output_tokens": 2,
+                        "prompt_tokens_details": [{"modality": "TEXT", "tokenCount": 4}],
+                    },
                 }
             }
 
@@ -576,10 +584,16 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
     assert response.status_code == 200
     body = response.json()
     assert body["candidates"][0]["content"] == {"role": "model", "parts": [{"text": "hello"}]}
-    assert body["candidates"][0]["finishReason"] == "STOP"
+    assert body["candidates"][0]["finishReason"] == "MAX_TOKENS"
+    assert "finish_reason" not in body["candidates"][0]
+    assert body["candidates"][0]["safetyRatings"][0]["probability"] == "LOW"
+    assert body["candidates"][0]["groundingMetadata"]["searchEntryPoint"]["renderedContent"] == "x"
+    assert body["candidates"][0]["avgLogprobs"] == -0.2
     assert body["usageMetadata"]["promptTokenCount"] == 4
-    assert body["usageMetadata"]["candidatesTokenCount"] > 0
+    assert body["usageMetadata"]["candidatesTokenCount"] == 2
+    assert body["usageMetadata"]["promptTokensDetails"][0]["modality"] == "TEXT"
     assert body["usageMetadata"]["totalTokenCount"] >= body["usageMetadata"]["promptTokenCount"]
+    assert "usage_metadata" not in body
 
 
 def test_gemini_generate_content_accepts_sdk_content_unions(monkeypatch):
