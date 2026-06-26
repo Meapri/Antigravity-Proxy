@@ -423,6 +423,34 @@ def test_gemini_embeddings_respect_task_type_title_and_snake_case():
     assert base.json()["embedding"]["values"] != retrieval.json()["embedding"]["values"]
 
 
+def test_gemini_embeddings_accept_latest_config_and_contents_forms():
+    client = TestClient(proxy.app)
+
+    configured = client.post("/v1beta/models/gemini-3-flash-agent:embedContent", json={
+        "contents": ["alpha", "beta"],
+        "config": {
+            "outputDimensionality": 14,
+            "taskType": "RETRIEVAL_DOCUMENT",
+            "title": "SDK Config",
+        },
+    })
+    wrapped = client.post("/v1/models/gemini-3-flash-agent:batchEmbedContents", json={
+        "requests": [{
+            "contents": [{"parts": [{"text": "gamma"}]}, {"parts": [{"text": "delta"}]}],
+            "embed_content_config": {"output_dimensionality": 11},
+        }]
+    })
+
+    assert configured.status_code == 200
+    assert len(configured.json()["embeddings"]) == 2
+    assert len(configured.json()["embeddings"][0]["values"]) == 14
+    assert configured.json()["embedding"] == configured.json()["embeddings"][0]
+    assert configured.json()["embeddings"][0]["values"] != configured.json()["embeddings"][1]["values"]
+    assert wrapped.status_code == 200
+    assert len(wrapped.json()["embeddings"]) == 2
+    assert len(wrapped.json()["embeddings"][0]["values"]) == 11
+
+
 def test_gemini_legacy_embed_text_methods():
     client = TestClient(proxy.app)
 

@@ -399,6 +399,8 @@ _GEMINI_KEY_ALIASES = {
     "image_config": "imageConfig",
     "speech_config": "speechConfig",
     "routing_config": "routingConfig",
+    "embed_content_config": "embedContentConfig",
+    "embedContentConfig": "embedContentConfig",
     "output_dimensionality": "outputDimensionality",
     "task_type": "taskType",
     "display_name": "displayName",
@@ -643,6 +645,51 @@ def _gemini_content_text(content: Any) -> str:
             elif isinstance(part, str):
                 texts.append(part)
     return "\n".join(texts)
+
+
+def _gemini_embedding_config(body: dict[str, Any]) -> dict[str, Any]:
+    config: dict[str, Any] = {}
+    for key in ("config", "embedContentConfig"):
+        value = body.get(key)
+        if isinstance(value, dict):
+            config.update(_gemini_normalize_request(value))
+    for key in ("outputDimensionality", "taskType", "title"):
+        if body.get(key) is not None:
+            config[key] = body[key]
+    return config
+
+
+def _gemini_embedding_content_items(body: dict[str, Any]) -> list[Any]:
+    if body.get("content") is not None:
+        return [body["content"]]
+    contents = body.get("contents")
+    if contents is None:
+        return [{}]
+    if isinstance(contents, list):
+        return contents
+    return [contents]
+
+
+def _gemini_embedding_content(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        if isinstance(value.get("content"), dict):
+            return _gemini_embedding_content(value["content"])
+        if "parts" in value:
+            return value
+        if value.get("text") is not None:
+            return {"parts": [{"text": str(value["text"])}]}
+    if isinstance(value, list):
+        return {"parts": [_gemini_embedding_part(item) for item in value]}
+    return {"parts": [{"text": "" if value is None else str(value)}]}
+
+
+def _gemini_embedding_part(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        if "text" in value or "inlineData" in value or "fileData" in value:
+            return value
+        if value.get("type") in {"text", "input_text"} and value.get("text") is not None:
+            return {"text": str(value["text"])}
+    return {"text": "" if value is None else str(value)}
 
 
 def _gemini_response_text(response: dict[str, Any]) -> str:
@@ -1030,15 +1077,21 @@ def _gemini_embedding_values(text: str, *, dimensions: int = 768) -> list[float]
 
 
 def _gemini_embedding_from_request(body: dict[str, Any]) -> dict[str, Any]:
-    content = body.get("content") or {}
-    output_dim = body.get("outputDimensionality") or 768
-    seed_parts = [_gemini_content_text(content)]
-    if body.get("taskType"):
-        seed_parts.append(f"taskType:{body['taskType']}")
-    if body.get("title"):
-        seed_parts.append(f"title:{body['title']}")
-    text = "\n".join(str(part) for part in seed_parts if part is not None)
-    return {"embedding": {"values": _gemini_embedding_values(text, dimensions=int(output_dim))}}
+    config = _gemini_embedding_config(body)
+    output_dim = config.get("outputDimensionality") or 768
+    embeddings: list[dict[str, Any]] = []
+    for item in _gemini_embedding_content_items(body):
+        content = _gemini_embedding_content(item)
+        seed_parts = [_gemini_content_text(content)]
+        if config.get("taskType"):
+            seed_parts.append(f"taskType:{config['taskType']}")
+        if config.get("title"):
+            seed_parts.append(f"title:{config['title']}")
+        text = "\n".join(str(part) for part in seed_parts if part is not None)
+        embeddings.append({"values": _gemini_embedding_values(text, dimensions=int(output_dim))})
+    if len(embeddings) == 1:
+        return {"embedding": embeddings[0], "embeddings": embeddings}
+    return {"embeddings": embeddings, "embedding": embeddings[0]}
 
 
 def _gemini_batch_embedding_from_request(body: dict[str, Any]) -> dict[str, Any]:
@@ -1049,7 +1102,8 @@ def _gemini_batch_embedding_from_request(body: dict[str, Any]) -> dict[str, Any]
     for item in requests:
         if not isinstance(item, dict):
             raise HTTPException(status_code=400, detail="batchEmbedContents request items must be objects.")
-        embeddings.append(_gemini_embedding_from_request(_gemini_normalize_request(item))["embedding"])
+        embedded = _gemini_embedding_from_request(_gemini_normalize_request(item))
+        embeddings.extend(embedded.get("embeddings") or [embedded["embedding"]])
     return {"embeddings": embeddings}
 
 
