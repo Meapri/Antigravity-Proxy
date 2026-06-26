@@ -543,6 +543,11 @@ def test_gemini_generate_content_rejects_unsupported_builtin_tools():
     assert url_context.status_code == 501
     assert url_context.json()["error"]["status"] == "UNIMPLEMENTED"
     assert "url_context" in url_context.json()["error"]["message"]
+    assert url_context.json()["error"]["details"] == [{
+        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+        "reason": "UNIMPLEMENTED",
+        "domain": "generativelanguage.googleapis.com",
+    }]
     assert code_execution.status_code == 501
     assert code_execution.json()["error"]["status"] == "UNIMPLEMENTED"
     assert "code_execution" in code_execution.json()["error"]["message"]
@@ -1198,6 +1203,8 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
     )
     assert malformed.status_code == 400
     assert malformed.json()["error"]["status"] == "INVALID_ARGUMENT"
+    assert malformed.json()["error"]["details"][0]["@type"] == "type.googleapis.com/google.rpc.BadRequest"
+    assert malformed.json()["error"]["details"][0]["fieldViolations"][0]["description"]
 
     pinged = client.post(f"/v1/{webhook['name']}:ping")
     assert pinged.status_code == 200

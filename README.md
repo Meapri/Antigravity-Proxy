@@ -647,6 +647,11 @@ hosted tools. `toolConfig.functionCallingConfig.mode` and
 Generate responses are normalized with Gemini-style `modelVersion`,
 `responseId`, candidate `index`, `finishReason`, and `usageMetadata` when the
 upstream response omits them.
+Gemini compatibility errors use the `google.rpc.Status`-style
+`error.code` / `error.message` / `error.status` shape. `INVALID_ARGUMENT`
+responses include `google.rpc.BadRequest` field-violation details, and
+unsupported hosted features include `google.rpc.ErrorInfo` details so SDKs can
+distinguish unsupported proxy features from malformed requests.
 
 Files API example:
 

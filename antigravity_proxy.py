@@ -528,11 +528,37 @@ def _gemini_unwrap_response(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def _gemini_error_response(message: Any, *, status_code: int, status: str | None = None) -> JSONResponse:
+def _gemini_error_response(
+    message: Any,
+    *,
+    status_code: int,
+    status: str | None = None,
+    field: str | None = None,
+    reason: str | None = None,
+) -> JSONResponse:
     if not isinstance(message, str):
         message = json.dumps(message, ensure_ascii=False)
+    error_status = status or _gemini_status_for_http(status_code)
+    error: dict[str, Any] = {"code": status_code, "message": message, "status": error_status}
+    details: list[dict[str, Any]] = []
+    if error_status == "INVALID_ARGUMENT" or field:
+        violation: dict[str, Any] = {"description": message}
+        if field:
+            violation["field"] = field
+        details.append({
+            "@type": "type.googleapis.com/google.rpc.BadRequest",
+            "fieldViolations": [violation],
+        })
+    if reason or error_status in {"UNIMPLEMENTED", "PERMISSION_DENIED", "UNAUTHENTICATED", "UNAVAILABLE"}:
+        details.append({
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": reason or error_status,
+            "domain": "generativelanguage.googleapis.com",
+        })
+    if details:
+        error["details"] = details
     return JSONResponse(
-        {"error": {"code": status_code, "message": message, "status": status or _openai_error_type(status_code).upper()}},
+        {"error": error},
         status_code=status_code,
     )
 
