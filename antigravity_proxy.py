@@ -13,8 +13,11 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import json
 import logging
+import mimetypes
 import os
 import secrets
 import sqlite3
@@ -25,6 +28,8 @@ from pathlib import Path
 from typing import Any
 
 import sys
+from email import policy
+from email.parser import BytesParser
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -380,6 +385,339 @@ def _gemini_count_tokens_request(body: dict[str, Any]) -> list[ChatMessage]:
     if isinstance(system_instruction, dict):
         messages.insert(0, ChatMessage(role="system", content=system_instruction.get("parts") or []))
     return messages
+
+
+def _gemini_files_root() -> Path:
+    return Path(os.getenv("ANTIGRAVITY_GEMINI_FILES_DIR", "data/gemini_files")).expanduser()
+
+
+def _gemini_files_index_path() -> Path:
+    return _gemini_files_root() / "index.json"
+
+
+def _gemini_upload_sessions_path() -> Path:
+    return _gemini_files_root() / "upload_sessions.json"
+
+
+def _gemini_load_files_index() -> dict[str, dict[str, Any]]:
+    path = _gemini_files_index_path()
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        log.warning("Failed to read Gemini files index; starting empty.")
+    return {}
+
+
+def _gemini_load_upload_sessions() -> dict[str, dict[str, Any]]:
+    path = _gemini_upload_sessions_path()
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def _gemini_save_upload_sessions(sessions: dict[str, dict[str, Any]]) -> None:
+    root = _gemini_files_root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = _gemini_upload_sessions_path()
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(sessions, f, ensure_ascii=False, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _gemini_save_files_index(index: dict[str, dict[str, Any]]) -> None:
+    root = _gemini_files_root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = _gemini_files_index_path()
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _gemini_file_resource(meta: dict[str, Any]) -> dict[str, Any]:
+    now = int(meta.get("createTime") or time.time())
+    return {
+        "name": meta["name"],
+        "displayName": meta.get("displayName") or meta["name"].split("/", 1)[-1],
+        "mimeType": meta.get("mimeType") or "application/octet-stream",
+        "sizeBytes": str(int(meta.get("sizeBytes") or 0)),
+        "createTime": meta.get("createTimeIso") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+        "updateTime": meta.get("updateTimeIso") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+        "expirationTime": meta.get("expirationTimeIso"),
+        "sha256Hash": meta.get("sha256Hash") or "",
+        "uri": meta.get("uri") or meta["name"],
+        "state": meta.get("state") or "ACTIVE",
+    }
+
+
+def _gemini_store_file(data: bytes, *, mime_type: str | None = None, display_name: str | None = None) -> dict[str, Any]:
+    if not data:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    root = _gemini_files_root()
+    root.mkdir(parents=True, exist_ok=True)
+    file_id = "file_" + uuid.uuid4().hex
+    inferred = mimetypes.guess_type(display_name or "")[0] if display_name else None
+    mime = (mime_type or inferred or "application/octet-stream").split(";", 1)[0].strip()
+    blob_path = root / f"{file_id}.bin"
+    blob_path.write_bytes(data)
+    digest = hashlib.sha256(data).hexdigest()
+    now = int(time.time())
+    iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+    meta = {
+        "name": f"files/{file_id}",
+        "displayName": display_name or file_id,
+        "mimeType": mime,
+        "sizeBytes": len(data),
+        "createTime": now,
+        "updateTime": now,
+        "createTimeIso": iso,
+        "updateTimeIso": iso,
+        "sha256Hash": digest,
+        "uri": f"files/{file_id}",
+        "state": "ACTIVE",
+        "path": str(blob_path),
+    }
+    index = _gemini_load_files_index()
+    index[meta["name"]] = meta
+    _gemini_save_files_index(index)
+    return _gemini_file_resource(meta)
+
+
+def _gemini_get_file_meta(file_name: str) -> dict[str, Any] | None:
+    key = file_name.strip().strip("/")
+    if key.startswith("v1beta/"):
+        key = key[len("v1beta/"):]
+    if key.startswith("files/"):
+        name = key
+    elif "/files/" in key:
+        name = "files/" + key.rsplit("/files/", 1)[-1]
+    else:
+        name = "files/" + key
+    return _gemini_load_files_index().get(name)
+
+
+def _gemini_file_uri_to_inline(file_uri: str) -> dict[str, Any] | None:
+    meta = _gemini_get_file_meta(file_uri)
+    if not meta:
+        return None
+    path = Path(str(meta.get("path") or ""))
+    if not path.exists():
+        return None
+    data = base64.b64encode(path.read_bytes()).decode("ascii")
+    return {"inlineData": {"mimeType": meta.get("mimeType") or "application/octet-stream", "data": data}}
+
+
+def _gemini_inline_local_files(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_gemini_inline_local_files(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    file_data = value.get("fileData")
+    if isinstance(file_data, dict):
+        uri = str(file_data.get("fileUri") or file_data.get("uri") or "")
+        inline = _gemini_file_uri_to_inline(uri)
+        if inline:
+            return inline
+    return {key: _gemini_inline_local_files(child) for key, child in value.items()}
+
+
+def _parse_gemini_multipart_upload(content_type: str, body: bytes) -> tuple[dict[str, Any], bytes, str | None]:
+    message = BytesParser(policy=policy.default).parsebytes(
+        f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8") + body
+    )
+    metadata: dict[str, Any] = {}
+    media = b""
+    media_type: str | None = None
+    for part in message.iter_parts():
+        payload = part.get_payload(decode=True) or b""
+        ptype = part.get_content_type()
+        if ptype == "application/json" and not metadata:
+            try:
+                decoded = json.loads(payload.decode(part.get_content_charset() or "utf-8"))
+                metadata = decoded if isinstance(decoded, dict) else {}
+            except Exception:
+                metadata = {}
+        elif payload and not media:
+            media = payload
+            media_type = ptype
+    return metadata, media, media_type
+
+
+async def _gemini_upload_file_from_request(request: Request) -> dict[str, Any]:
+    content_type = request.headers.get("content-type", "")
+    body = await request.body()
+    upload_type = request.query_params.get("uploadType", "").lower()
+    display_name = request.query_params.get("displayName") or request.headers.get("x-goog-upload-file-name")
+    mime_type = request.headers.get("x-goog-upload-header-content-type")
+    metadata: dict[str, Any] = {}
+    media = body
+    if "multipart/" in content_type or upload_type == "multipart":
+        metadata, media, media_type = _parse_gemini_multipart_upload(content_type, body)
+        mime_type = mime_type or media_type
+    elif upload_type not in {"", "media"} and request.headers.get("x-goog-upload-protocol", "").lower() != "raw":
+        raise HTTPException(status_code=400, detail=f"Unsupported Gemini uploadType: {upload_type}")
+    file_meta = metadata.get("file") if isinstance(metadata.get("file"), dict) else metadata
+    if isinstance(file_meta, dict):
+        display_name = file_meta.get("displayName") or file_meta.get("display_name") or display_name
+        mime_type = file_meta.get("mimeType") or file_meta.get("mime_type") or mime_type
+    return _gemini_store_file(media, mime_type=mime_type or content_type, display_name=display_name)
+
+
+async def _gemini_start_resumable_upload(request: Request) -> JSONResponse:
+    body = await request.body()
+    metadata: dict[str, Any] = {}
+    if body:
+        try:
+            decoded = json.loads(body.decode("utf-8"))
+            metadata = decoded if isinstance(decoded, dict) else {}
+        except Exception:
+            metadata = {}
+    file_meta = metadata.get("file") if isinstance(metadata.get("file"), dict) else metadata
+    session_id = "upload_" + uuid.uuid4().hex
+    sessions = _gemini_load_upload_sessions()
+    sessions[session_id] = {
+        "displayName": file_meta.get("displayName") or file_meta.get("display_name") or request.query_params.get("displayName"),
+        "mimeType": (
+            request.headers.get("x-goog-upload-header-content-type")
+            or file_meta.get("mimeType")
+            or file_meta.get("mime_type")
+            or "application/octet-stream"
+        ),
+        "created": int(time.time()),
+    }
+    _gemini_save_upload_sessions(sessions)
+    upload_url = str(request.base_url).rstrip("/") + f"/upload/v1beta/files/{session_id}"
+    return JSONResponse(
+        {},
+        headers={
+            "X-Goog-Upload-URL": upload_url,
+            "X-Goog-Upload-Status": "active",
+        },
+    )
+
+
+async def _gemini_finish_resumable_upload(session_id: str, request: Request) -> dict[str, Any]:
+    sessions = _gemini_load_upload_sessions()
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Upload session '{session_id}' not found.")
+    data = await request.body()
+    file_resource = _gemini_store_file(
+        data,
+        mime_type=session.get("mimeType") or request.headers.get("content-type"),
+        display_name=session.get("displayName"),
+    )
+    sessions.pop(session_id, None)
+    _gemini_save_upload_sessions(sessions)
+    return file_resource
+
+
+def _gemini_cached_root() -> Path:
+    return Path(os.getenv("ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR", "data/gemini_cached_contents")).expanduser()
+
+
+def _gemini_cached_index_path() -> Path:
+    return _gemini_cached_root() / "index.json"
+
+
+def _gemini_load_cached_index() -> dict[str, dict[str, Any]]:
+    path = _gemini_cached_index_path()
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        log.warning("Failed to read Gemini cachedContents index; starting empty.")
+        return {}
+
+
+def _gemini_save_cached_index(index: dict[str, dict[str, Any]]) -> None:
+    root = _gemini_cached_root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = _gemini_cached_index_path()
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _gemini_cached_name(name: str) -> str:
+    key = name.strip().strip("/")
+    if key.startswith("v1beta/"):
+        key = key[len("v1beta/"):]
+    if key.startswith("cachedContents/"):
+        return key
+    return "cachedContents/" + key
+
+
+def _gemini_cached_resource(meta: dict[str, Any]) -> dict[str, Any]:
+    out = {k: v for k, v in meta.items() if k not in {"payload"} and v is not None}
+    return out
+
+
+def _gemini_create_cached_content(body: dict[str, Any]) -> dict[str, Any]:
+    body = _gemini_normalize_request(body)
+    now = int(time.time())
+    iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+    cache_id = "cache_" + uuid.uuid4().hex
+    ttl = body.get("ttl")
+    expire_seconds = 3600
+    if isinstance(ttl, str) and ttl.endswith("s"):
+        try:
+            expire_seconds = max(1, int(float(ttl[:-1])))
+        except ValueError:
+            expire_seconds = 3600
+    expire_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + expire_seconds))
+    meta = {
+        "name": f"cachedContents/{cache_id}",
+        "model": body.get("model"),
+        "displayName": body.get("displayName") or body.get("display_name"),
+        "createTime": iso,
+        "updateTime": iso,
+        "expireTime": body.get("expireTime") or expire_iso,
+        "usageMetadata": {"totalTokenCount": _estimate_tokens(body)},
+        "payload": body,
+    }
+    index = _gemini_load_cached_index()
+    index[meta["name"]] = meta
+    _gemini_save_cached_index(index)
+    return _gemini_cached_resource(meta)
+
+
+def _gemini_get_cached_meta(name: str) -> dict[str, Any] | None:
+    return _gemini_load_cached_index().get(_gemini_cached_name(name))
+
+
+def _gemini_apply_cached_content(body: dict[str, Any]) -> dict[str, Any]:
+    cached_name = body.get("cachedContent")
+    if not cached_name:
+        return body
+    meta = _gemini_get_cached_meta(str(cached_name))
+    if not meta:
+        raise HTTPException(status_code=404, detail=f"Cached content '{cached_name}' not found.")
+    payload = meta.get("payload") if isinstance(meta.get("payload"), dict) else {}
+    merged = dict(body)
+    cached_contents = payload.get("contents") if isinstance(payload.get("contents"), list) else []
+    current_contents = merged.get("contents") if isinstance(merged.get("contents"), list) else []
+    if cached_contents:
+        merged["contents"] = cached_contents + current_contents
+    for key in ("systemInstruction", "tools", "toolConfig"):
+        if key not in merged and key in payload:
+            merged[key] = payload[key]
+    merged.pop("cachedContent", None)
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -1993,12 +2331,146 @@ async def gemini_get_model(model_name: str):
     return _gemini_model_resource(model)
 
 
+@app.get("/v1beta/files")
+async def gemini_list_files(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+    """Gemini-compatible local Files API listing."""
+    index = _gemini_load_files_index()
+    files = [_gemini_file_resource(meta) for meta in index.values()]
+    files.sort(key=lambda item: item.get("createTime") or "")
+    start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
+    end = start + pageSize
+    return {
+        "files": files[start:end],
+        "nextPageToken": str(end) if end < len(files) else "",
+    }
+
+
+@app.get("/v1beta/files/{file_id:path}")
+async def gemini_get_file(file_id: str):
+    meta = _gemini_get_file_meta(file_id)
+    if not meta:
+        return _gemini_error_response(f"File '{file_id}' not found.", status_code=404, status="NOT_FOUND")
+    return _gemini_file_resource(meta)
+
+
+@app.delete("/v1beta/files/{file_id:path}")
+async def gemini_delete_file(file_id: str):
+    meta = _gemini_get_file_meta(file_id)
+    if not meta:
+        return _gemini_error_response(f"File '{file_id}' not found.", status_code=404, status="NOT_FOUND")
+    index = _gemini_load_files_index()
+    index.pop(meta["name"], None)
+    _gemini_save_files_index(index)
+    path = Path(str(meta.get("path") or ""))
+    if path.exists():
+        try:
+            path.unlink()
+        except OSError:
+            log.warning("Failed to remove Gemini file blob: %s", path)
+    return JSONResponse({})
+
+
+@app.post("/v1beta/files")
+@app.post("/upload/v1beta/files")
+async def gemini_upload_file(request: Request):
+    """Gemini-compatible simple media/multipart file upload."""
+    try:
+        if request.headers.get("x-goog-upload-protocol", "").lower() == "resumable":
+            return await _gemini_start_resumable_upload(request)
+        file_resource = await _gemini_upload_file_from_request(request)
+        return {"file": file_resource}
+    except HTTPException as exc:
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT")
+    except Exception as exc:
+        log.exception("Gemini file upload failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.post("/upload/v1beta/files/{session_id}")
+@app.put("/upload/v1beta/files/{session_id}")
+async def gemini_resumable_upload(session_id: str, request: Request):
+    try:
+        command = request.headers.get("x-goog-upload-command", "").lower()
+        if command and "finalize" not in command and "upload" not in command:
+            raise HTTPException(status_code=400, detail=f"Unsupported upload command: {command}")
+        return {"file": await _gemini_finish_resumable_upload(session_id, request)}
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini resumable upload failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.post("/v1beta/cachedContents")
+async def gemini_create_cached_content(request: Request):
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        return _gemini_create_cached_content(body)
+    except HTTPException as exc:
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT")
+    except Exception as exc:
+        log.exception("Gemini cachedContents create failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.get("/v1beta/cachedContents")
+async def gemini_list_cached_contents(pageSize: int = Query(default=100, ge=1, le=1000), pageToken: str | None = None):
+    index = _gemini_load_cached_index()
+    items = [_gemini_cached_resource(meta) for meta in index.values()]
+    items.sort(key=lambda item: item.get("createTime") or "")
+    start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
+    end = start + pageSize
+    return {"cachedContents": items[start:end], "nextPageToken": str(end) if end < len(items) else ""}
+
+
+@app.get("/v1beta/cachedContents/{cache_id:path}")
+async def gemini_get_cached_content(cache_id: str):
+    meta = _gemini_get_cached_meta(cache_id)
+    if not meta:
+        return _gemini_error_response(f"Cached content '{cache_id}' not found.", status_code=404, status="NOT_FOUND")
+    return _gemini_cached_resource(meta)
+
+
+@app.patch("/v1beta/cachedContents/{cache_id:path}")
+async def gemini_patch_cached_content(cache_id: str, request: Request):
+    meta = _gemini_get_cached_meta(cache_id)
+    if not meta:
+        return _gemini_error_response(f"Cached content '{cache_id}' not found.", status_code=404, status="NOT_FOUND")
+    body = await request.json()
+    if isinstance(body, dict):
+        if body.get("ttl"):
+            meta["ttl"] = body["ttl"]
+        if body.get("expireTime"):
+            meta["expireTime"] = body["expireTime"]
+        meta["updateTime"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        index = _gemini_load_cached_index()
+        index[meta["name"]] = meta
+        _gemini_save_cached_index(index)
+    return _gemini_cached_resource(meta)
+
+
+@app.delete("/v1beta/cachedContents/{cache_id:path}")
+async def gemini_delete_cached_content(cache_id: str):
+    meta = _gemini_get_cached_meta(cache_id)
+    if not meta:
+        return _gemini_error_response(f"Cached content '{cache_id}' not found.", status_code=404, status="NOT_FOUND")
+    index = _gemini_load_cached_index()
+    index.pop(meta["name"], None)
+    _gemini_save_cached_index(index)
+    return JSONResponse({})
+
+
 @app.post("/v1beta/models/{model_name:path}:countTokens")
 async def gemini_count_tokens(model_name: str, request: Request):
     """Gemini-compatible approximate countTokens endpoint."""
     try:
         _resolve_gemini_model(model_name)
         body = _gemini_normalize_request(await request.json())
+        if isinstance(body, dict):
+            body = _gemini_apply_cached_content(body)
         messages = _gemini_count_tokens_request(body if isinstance(body, dict) else {})
         return {"totalTokens": _estimate_prompt_tokens(messages)}
     except HTTPException as exc:
@@ -2016,6 +2488,8 @@ async def gemini_generate_content(model_name: str, request: Request):
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body = _gemini_apply_cached_content(body)
+        body = _gemini_inline_local_files(body)
         body.pop("model", None)
         data = await asyncio.to_thread(
             _get_client().generate_raw,
@@ -2047,6 +2521,8 @@ async def gemini_stream_generate_content(model_name: str, request: Request):
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body = _gemini_apply_cached_content(body)
+        body = _gemini_inline_local_files(body)
         body.pop("model", None)
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"

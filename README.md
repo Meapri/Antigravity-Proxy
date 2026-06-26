@@ -337,6 +337,16 @@ Implemented Gemini-compatible routes:
 - `POST /v1beta/models/{model}:generateContent`
 - `POST /v1beta/models/{model}:streamGenerateContent`
 - `POST /v1beta/models/{model}:countTokens`
+- `POST /upload/v1beta/files`
+- `POST /v1beta/files`
+- `GET /v1beta/files`
+- `GET /v1beta/files/{file}`
+- `DELETE /v1beta/files/{file}`
+- `POST /v1beta/cachedContents`
+- `GET /v1beta/cachedContents`
+- `GET /v1beta/cachedContents/{cached_content}`
+- `PATCH /v1beta/cachedContents/{cached_content}`
+- `DELETE /v1beta/cachedContents/{cached_content}`
 
 Example:
 
@@ -362,14 +372,68 @@ snake_case SDK spellings for fields such as `generation_config`,
 `response_mime_type`, `inline_data`, `file_data`, `googleSearch`,
 `urlContext`, and `codeExecution`.
 
+Files API example:
+
+```bash
+curl "http://127.0.0.1:8765/upload/v1beta/files?uploadType=media&displayName=note.txt" \
+  -H "Content-Type: text/plain" \
+  --data-binary @note.txt
+```
+
+The upload endpoint also supports the Gemini resumable upload headers
+(`X-Goog-Upload-Protocol: resumable`, `X-Goog-Upload-Command: start`, then
+`upload, finalize`) used by SDK-style file uploads.
+
+Then pass the returned `file.uri` in `fileData.fileUri`:
+
+```json
+{
+  "contents": [{
+    "role": "user",
+    "parts": [
+      {"text": "Summarize this file."},
+      {"fileData": {"mimeType": "text/plain", "fileUri": "files/file_..."}}
+    ]
+  }]
+}
+```
+
+Uploaded local file references are automatically converted to Gemini
+`inlineData` before being forwarded to Antigravity, which keeps Gemini SDK-style
+file upload flows usable even though Antigravity's internal endpoint does not
+expose a native public Files API.
+
+Cached content example:
+
+```bash
+curl http://127.0.0.1:8765/v1beta/cachedContents \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "models/gemini-3-flash-agent",
+    "contents": [{
+      "role": "user",
+      "parts": [{"text": "Reusable context"}]
+    }]
+  }'
+```
+
+Then pass the returned `name` as `cachedContent` in `generateContent`. The proxy
+merges local cached content into the outgoing Antigravity request because the
+upstream internal endpoint does not expose public Gemini cache objects.
+
 Notes:
 
 - Model names are exposed as Gemini resources like
   `models/gemini-3-flash-agent`; pass `gemini-3-flash-agent` in the path.
 - `countTokens` is approximate because Antigravity's internal endpoint does not
   expose a separate Gemini token-count RPC.
-- Files API, embeddings, tuned models, cached content management, and file
-  search store management are not implemented yet.
+- Files are stored locally under `data/gemini_files` by default; override with
+  `ANTIGRAVITY_GEMINI_FILES_DIR`.
+- Cached contents are stored locally under `data/gemini_cached_contents` by
+  default; override with `ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR`.
+- Embeddings, tuned models, batch jobs, live API, interactions, permissions,
+  long-running operations, and file search store management are not fully
+  implemented yet.
 
 ## Responses API Compatibility
 

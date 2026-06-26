@@ -226,6 +226,127 @@ def test_gemini_stream_generate_content_sse(monkeypatch):
     assert "data: [DONE]" in body
 
 
+def test_gemini_files_upload_and_file_data_inline_conversion(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "gemini_files"))
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "file ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    uploaded = client.post(
+        "/upload/v1beta/files?uploadType=media&displayName=note.txt",
+        content=b"hello file",
+        headers={"Content-Type": "text/plain"},
+    )
+    assert uploaded.status_code == 200
+    file_resource = uploaded.json()["file"]
+    assert file_resource["name"].startswith("files/file_")
+    assert file_resource["mimeType"] == "text/plain"
+
+    listed = client.get("/v1beta/files")
+    assert listed.status_code == 200
+    assert listed.json()["files"][0]["name"] == file_resource["name"]
+
+    fetched = client.get(f"/v1beta/{file_resource['name']}")
+    assert fetched.status_code == 200
+    assert fetched.json()["displayName"] == "note.txt"
+
+    generated = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": [{
+            "role": "user",
+            "parts": [
+                {"text": "read this"},
+                {"fileData": {"mimeType": "text/plain", "fileUri": file_resource["uri"]}},
+            ],
+        }]
+    })
+
+    assert generated.status_code == 200
+    parts = seen["request"]["contents"][0]["parts"]
+    assert parts[1]["inlineData"]["mimeType"] == "text/plain"
+    assert parts[1]["inlineData"]["data"]
+
+    deleted = client.delete(f"/v1beta/{file_resource['name']}")
+    assert deleted.status_code == 200
+    missing = client.get(f"/v1beta/{file_resource['name']}")
+    assert missing.status_code == 404
+
+
+def test_gemini_resumable_file_upload(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "gemini_files"))
+    client = TestClient(proxy.app)
+
+    started = client.post(
+        "/upload/v1beta/files",
+        json={"file": {"displayName": "resumable.txt", "mimeType": "text/plain"}},
+        headers={
+            "X-Goog-Upload-Protocol": "resumable",
+            "X-Goog-Upload-Command": "start",
+            "X-Goog-Upload-Header-Content-Type": "text/plain",
+        },
+    )
+    assert started.status_code == 200
+    upload_url = started.headers["x-goog-upload-url"]
+    session_path = "/" + upload_url.split("/", 3)[3]
+
+    finished = client.post(
+        session_path,
+        content=b"resumable body",
+        headers={"X-Goog-Upload-Command": "upload, finalize"},
+    )
+
+    assert finished.status_code == 200
+    file_resource = finished.json()["file"]
+    assert file_resource["displayName"] == "resumable.txt"
+    assert file_resource["mimeType"] == "text/plain"
+
+
+def test_gemini_cached_contents_merge_into_generate_request(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR", str(tmp_path / "gemini_cached"))
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "cached ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    created = client.post("/v1beta/cachedContents", json={
+        "model": "models/gemini-3-flash-agent",
+        "contents": [{"role": "user", "parts": [{"text": "cached context"}]}],
+        "systemInstruction": {"parts": [{"text": "cached system"}]},
+    })
+    assert created.status_code == 200
+    cache_name = created.json()["name"]
+
+    listed = client.get("/v1beta/cachedContents")
+    assert listed.status_code == 200
+    assert listed.json()["cachedContents"][0]["name"] == cache_name
+
+    response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "cachedContent": cache_name,
+        "contents": [{"role": "user", "parts": [{"text": "new prompt"}]}],
+    })
+
+    assert response.status_code == 200
+    assert seen["request"]["systemInstruction"]["parts"][0]["text"] == "cached system"
+    assert seen["request"]["contents"][0]["parts"][0]["text"] == "cached context"
+    assert seen["request"]["contents"][1]["parts"][0]["text"] == "new prompt"
+    assert "cachedContent" not in seen["request"]
+
+    deleted = client.delete(f"/v1beta/{cache_name}")
+    assert deleted.status_code == 200
+    missing = client.get(f"/v1beta/{cache_name}")
+    assert missing.status_code == 404
+
+
 def test_admin_refresh_requires_configured_api_key(monkeypatch):
     monkeypatch.delenv("ANTIGRAVITY_PROXY_API_KEY", raising=False)
     client = TestClient(proxy.app)
