@@ -696,6 +696,36 @@ def test_gemini_interactions_create_previous_store_and_stream(tmp_path, monkeypa
     assert "data: [DONE]" in body
 
 
+def test_gemini_interactions_cancel_accepts_rest_and_colon_paths(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", str(tmp_path / "interactions"))
+    client = TestClient(proxy.app)
+
+    proxy._gemini_store_interaction({
+        "name": "interactions/int_cancel_rest",
+        "id": "int_cancel_rest",
+        "status": "in_progress",
+        "createTime": proxy._gemini_now_iso(),
+        "updateTime": proxy._gemini_now_iso(),
+    })
+    proxy._gemini_store_interaction({
+        "name": "interactions/int_cancel_colon",
+        "id": "int_cancel_colon",
+        "status": "in_progress",
+        "createTime": proxy._gemini_now_iso(),
+        "updateTime": proxy._gemini_now_iso(),
+    })
+
+    rest = client.post("/v1beta/interactions/int_cancel_rest/cancel")
+    colon = client.post("/v1beta/interactions/int_cancel_colon:cancel")
+    missing = client.post("/v1beta/interactions/missing/cancel")
+
+    assert rest.status_code == 200
+    assert colon.status_code == 200
+    assert missing.status_code == 404
+    assert client.get("/v1beta/interactions/int_cancel_rest").json()["status"] == "cancelled"
+    assert client.get("/v1beta/interactions/int_cancel_colon").json()["status"] == "cancelled"
+
+
 def test_gemini_interactions_accept_content_item_aliases_and_image_model(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", str(tmp_path / "interactions"))
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR", str(tmp_path / "generated"))

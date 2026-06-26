@@ -374,6 +374,7 @@ Implemented Gemini-compatible routes:
 - `POST /v1beta/models/{model}:predictLongRunning`
 - `POST /v1beta/interactions`
 - `GET /v1beta/interactions/{interaction}`
+- `POST /v1beta/interactions/{interaction}/cancel`
 - `POST /v1beta/interactions/{interaction}:cancel`
 - `DELETE /v1beta/interactions/{interaction}`
 - `WS /ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`

@@ -6000,8 +6000,7 @@ async def gemini_get_interaction(interaction_id: str):
     return interaction
 
 
-@app.post("/v1beta/interactions/{interaction_id:path}:cancel")
-async def gemini_cancel_interaction(interaction_id: str):
+def _gemini_cancel_interaction_response(interaction_id: str) -> JSONResponse:
     interaction = _gemini_get_interaction(interaction_id)
     if not interaction:
         return _gemini_error_response(f"Interaction '{interaction_id}' not found.", status_code=404, status="NOT_FOUND")
@@ -6010,6 +6009,16 @@ async def gemini_cancel_interaction(interaction_id: str):
         interaction["updateTime"] = _gemini_now_iso()
         _gemini_store_interaction(interaction)
     return JSONResponse({})
+
+
+@app.post("/v1beta/interactions/{interaction_id:path}:cancel")
+async def gemini_cancel_interaction(interaction_id: str):
+    return _gemini_cancel_interaction_response(interaction_id)
+
+
+@app.post("/v1beta/interactions/{interaction_id:path}/cancel")
+async def gemini_cancel_interaction_rest(interaction_id: str):
+    return _gemini_cancel_interaction_response(interaction_id)
 
 
 @app.delete("/v1beta/interactions/{interaction_id:path}")
