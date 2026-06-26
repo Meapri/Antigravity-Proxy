@@ -384,6 +384,14 @@ _GEMINI_KEY_ALIASES = {
     "responseFormat": "responseFormat",
     "generate_content_request": "generateContentRequest",
     "generateContentRequest": "generateContentRequest",
+    "http_options": "httpOptions",
+    "httpOptions": "httpOptions",
+    "request_options": "requestOptions",
+    "requestOptions": "requestOptions",
+    "api_version": "apiVersion",
+    "apiVersion": "apiVersion",
+    "base_url": "baseUrl",
+    "baseUrl": "baseUrl",
     "json_schema": "jsonSchema",
     "jsonSchema": "jsonSchema",
     "max_output_tokens": "maxOutputTokens",
@@ -473,6 +481,15 @@ _GEMINI_GENERATION_CONFIG_KEYS = {
     "routingConfig",
 }
 
+_GEMINI_SDK_TRANSPORT_KEYS = {
+    "httpOptions",
+    "requestOptions",
+    "apiVersion",
+    "baseUrl",
+    "headers",
+    "timeout",
+}
+
 
 def _gemini_normalize_function_calling_config(value: Any) -> Any:
     if not isinstance(value, dict):
@@ -515,13 +532,15 @@ def _gemini_apply_generate_config(body: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(body, dict):
         return body
     config = body.get("config")
+    out = {key: value for key, value in body.items() if key not in _GEMINI_SDK_TRANSPORT_KEYS and key != "config"}
     if not isinstance(config, dict):
-        return body
-    out = {key: value for key, value in body.items() if key != "config"}
+        return out
     config = _gemini_normalize_request(config)
     gen = dict(out.get("generationConfig") or {}) if isinstance(out.get("generationConfig"), dict) else {}
     for key, value in config.items():
         if value is None:
+            continue
+        if key in _GEMINI_SDK_TRANSPORT_KEYS:
             continue
         if key in _GEMINI_GENERATE_CONFIG_TOP_LEVEL_KEYS:
             out.setdefault(key, value)

@@ -649,6 +649,8 @@ values into Gemini REST `Content` objects before forwarding.
 They also accept the common SDK-style top-level `config` object and merge it
 into Gemini REST fields such as `generationConfig`, `systemInstruction`,
 `toolConfig`, `safetySettings`, `tools`, `cachedContent`, and `labels`.
+SDK transport-only options such as `httpOptions`, `requestOptions`,
+`apiVersion`, and `baseUrl` are ignored rather than forwarded as API payload.
 `response_format` / `responseFormat` wrappers are mapped into
 `generationConfig.responseMimeType` and `generationConfig.responseSchema`.
 Generate responses are normalized with Gemini-style `modelVersion`,

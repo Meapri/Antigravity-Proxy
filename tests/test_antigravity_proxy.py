@@ -602,6 +602,7 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
 
     response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
         "contents": "hi",
+        "request_options": {"timeout": 1},
         "config": {
             "system_instruction": "answer tersely",
             "max_output_tokens": 17,
@@ -611,11 +612,16 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
             "response_schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}},
             "tool_config": {"function_calling_config": {"mode": "none"}},
             "labels": {"source": "sdk"},
+            "http_options": {"api_version": "v1"},
+            "api_version": "v1",
         },
     })
 
     assert response.status_code == 200
     assert "config" not in seen["request"]
+    assert "requestOptions" not in seen["request"]
+    assert "httpOptions" not in seen["request"]
+    assert "apiVersion" not in seen["request"]
     assert seen["request"]["systemInstruction"] == {"role": "system", "parts": [{"text": "answer tersely"}]}
     assert seen["request"]["labels"] == {"source": "sdk"}
     assert seen["request"]["toolConfig"]["functionCallingConfig"] == {"mode": "NONE"}
