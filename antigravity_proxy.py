@@ -31,8 +31,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from antigravity_proxy_core.antigravity import AntigravityClient
-from antigravity_proxy_core.config import Settings
+try:
+    from antigravity_proxy_core.antigravity import AntigravityClient
+    from antigravity_proxy_core.config import Settings
+except ModuleNotFoundError:  # pragma: no cover - compatibility for the original monorepo layout.
+    from rizi_kakao_agent.antigravity import AntigravityClient
+    from rizi_kakao_agent.config import Settings
 
 # ---------------------------------------------------------------------------
 # Logging
