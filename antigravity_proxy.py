@@ -1343,28 +1343,67 @@ def _gemini_interaction_usage(value: Any) -> dict[str, Any]:
     for old, new in aliases.items():
         if usage.get(new) is None and usage.get(old) is not None:
             usage[new] = usage[old]
-    snake_aliases = {
-        "inputTokens": "input_tokens",
-        "outputTokens": "output_tokens",
-        "totalTokens": "total_tokens",
-        "cachedTokens": "cached_tokens",
-        "reasoningTokens": "reasoning_tokens",
-    }
-    for old, new in snake_aliases.items():
+    snake_aliases = (
+        ("inputTokens", "input_tokens"),
+        ("inputTokens", "total_input_tokens"),
+        ("outputTokens", "output_tokens"),
+        ("outputTokens", "total_output_tokens"),
+        ("totalTokens", "total_tokens"),
+        ("cachedTokens", "cached_tokens"),
+        ("reasoningTokens", "reasoning_tokens"),
+    )
+    for old, new in snake_aliases:
         if usage.get(new) is None and usage.get(old) is not None:
             usage[new] = usage[old]
-    modality_aliases = {
-        "promptTokensDetails": "input_tokens_by_modality",
-        "candidatesTokensDetails": "output_tokens_by_modality",
+    legacy_snake_aliases = {
+        "total_input_tokens": "input_tokens",
+        "total_output_tokens": "output_tokens",
     }
-    for old, new in modality_aliases.items():
-        details = usage.get(old)
-        if usage.get(new) is None and isinstance(details, list):
-            usage[new] = {
-                str(item.get("modality") or "TEXT").lower(): int(item.get("tokenCount") or item.get("token_count") or 0)
-                for item in details
-                if isinstance(item, dict)
-            }
+    for old, new in legacy_snake_aliases.items():
+        if usage.get(new) is None and usage.get(old) is not None:
+            usage[new] = usage[old]
+
+    def _modality_entries(details: Any, fallback_total: Any) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        if isinstance(details, dict):
+            for modality, tokens in details.items():
+                try:
+                    entries.append({"modality": str(modality).upper(), "tokens": int(tokens or 0)})
+                except (TypeError, ValueError):
+                    continue
+        elif isinstance(details, list):
+            for item in details:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    entries.append({
+                        "modality": str(item.get("modality") or "TEXT").upper(),
+                        "tokens": int(item.get("tokens") or item.get("tokenCount") or item.get("token_count") or 0),
+                    })
+                except (TypeError, ValueError):
+                    continue
+        if entries:
+            return entries
+        try:
+            total = int(fallback_total or 0)
+        except (TypeError, ValueError):
+            total = 0
+        return [{"modality": "TEXT", "tokens": total}] if total > 0 else []
+
+    if usage.get("input_tokens_by_modality") is None:
+        entries = _modality_entries(
+            usage.get("promptTokensDetails"),
+            usage.get("total_input_tokens") or usage.get("inputTokens"),
+        )
+        if entries:
+            usage["input_tokens_by_modality"] = entries
+    if usage.get("output_tokens_by_modality") is None:
+        entries = _modality_entries(
+            usage.get("candidatesTokensDetails"),
+            usage.get("total_output_tokens") or usage.get("outputTokens"),
+        )
+        if entries:
+            usage["output_tokens_by_modality"] = entries
     return usage
 
 

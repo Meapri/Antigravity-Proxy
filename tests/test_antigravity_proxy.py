@@ -1682,8 +1682,14 @@ def test_gemini_interactions_create_previous_store_and_stream(tmp_path, monkeypa
     assert first_body["output"]["responseId"].startswith("resp_")
     assert first_body["usage"]["totalTokens"] > 0
     assert first_body["usage"]["total_tokens"] == first_body["usage"]["totalTokens"]
+    assert first_body["usage"]["total_input_tokens"] == first_body["usage"]["inputTokens"]
+    assert first_body["usage"]["total_output_tokens"] == first_body["usage"]["outputTokens"]
     assert first_body["usage"]["input_tokens"] == first_body["usage"]["inputTokens"]
     assert first_body["usage"]["output_tokens"] == first_body["usage"]["outputTokens"]
+    assert first_body["usage"]["input_tokens_by_modality"][0]["modality"] == "TEXT"
+    assert first_body["usage"]["input_tokens_by_modality"][0]["tokens"] == first_body["usage"]["inputTokens"]
+    assert first_body["usage"]["output_tokens_by_modality"][0]["modality"] == "TEXT"
+    assert first_body["usage"]["output_tokens_by_modality"][0]["tokens"] == first_body["usage"]["outputTokens"]
     assert first_body["usageMetadata"]["totalTokenCount"] > 0
     assert first_body["steps"][0]["type"] == "model_output"
     assert first_body["steps"][0]["content"][0]["type"] == "text"

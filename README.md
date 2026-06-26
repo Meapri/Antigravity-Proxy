@@ -1004,7 +1004,9 @@ Notes:
   exposes `object: "interaction"`, `created` / `updated`,
   `created_at` / `updated_at`, `outputText` / `output_text`, legacy
   `createTime` / `updateTime` / `usageMetadata`, and both camelCase and
-  snake_case token usage fields such as `totalTokens` / `total_tokens`.
+  snake_case token usage fields such as `totalTokens` / `total_tokens`,
+  `total_input_tokens`, `total_output_tokens`, and
+  `input_tokens_by_modality` / `output_tokens_by_modality`.
 - `background=true` creates a stored `in_progress` interaction resource without
   starting generation; it can be retrieved or cancelled by name.
 - Interaction cancel endpoints return the updated interaction resource.
