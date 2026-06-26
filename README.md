@@ -365,6 +365,7 @@ Implemented Gemini-compatible routes:
 - `POST /v1/models/{model}:generateContent`
 - `POST /v1/models/{model}:streamGenerateContent`
 - `POST /v1/models/{model}:countTokens`
+- `POST /v1/models/{model}:computeTokens`
 - `POST /v1/models/{model}:countTextTokens`
 - `POST /v1/models/{model}:countMessageTokens`
 - `POST /v1/models/{model}:embedContent`
@@ -390,6 +391,7 @@ Implemented Gemini-compatible routes:
 - `POST /v1beta/models/{model}:generateContent`
 - `POST /v1beta/models/{model}:streamGenerateContent`
 - `POST /v1beta/models/{model}:countTokens`
+- `POST /v1beta/models/{model}:computeTokens`
 - `POST /v1beta/models/{model}:countTextTokens`
 - `POST /v1beta/models/{model}:countMessageTokens`
 - `POST /v1beta/models/{model}:embedContent`
@@ -966,12 +968,13 @@ Notes:
   SDK-style `page_size` / `page_token` query aliases. Batch and operation list
   routes also accept `return_partial_success` as an alias for
   `returnPartialSuccess`.
-- `countTokens` is approximate because Antigravity's internal endpoint does not
+- `countTokens` and `computeTokens` are approximate because Antigravity's internal endpoint does not
   expose a separate Gemini token-count RPC. Responses include `totalTokens`,
   `promptTokensDetails`, `cachedContentTokenCount`, and `cacheTokensDetails`
-  fields for Gemini SDK compatibility. `generateContentRequest` wrappers,
-  string `contents`, and local `cachedContent` / `file_search` context are
-  expanded before counting.
+  fields for Gemini SDK compatibility. `computeTokens` returns deterministic
+  `tokensInfo` with stable local token IDs and base64-encoded token bytes.
+  `generateContentRequest` wrappers, string `contents`, and local
+  `cachedContent` / `file_search` context are expanded before counting.
 - Files are stored locally under `data/gemini_files` by default; override with
   `ANTIGRAVITY_GEMINI_FILES_DIR`. File resources include Gemini-style
   `downloadUri`, `source`, base64 `sha256Hash`, and video metadata fields when

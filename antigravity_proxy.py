@@ -328,6 +328,7 @@ def _gemini_model_resource(model: dict[str, Any]) -> dict[str, Any]:
             "generateContent",
             "streamGenerateContent",
             "countTokens",
+            "computeTokens",
             "embedContent",
             "batchEmbedContents",
             "asyncBatchEmbedContent",
@@ -5805,6 +5806,51 @@ def _gemini_count_tokens_response(messages: list[ChatMessage], *, cached_tokens:
     return response
 
 
+def _gemini_token_texts(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        for key in ("text", "outputText", "output_text"):
+            if value.get(key) is not None:
+                text = str(value[key])
+                tokens = re.findall(r"\S+", text)
+                return tokens or ([text] if text else [])
+    text = _msg_text(value)
+    tokens = re.findall(r"\S+", text)
+    return tokens or ([text] if text else [])
+
+
+def _gemini_compute_token_id(token: str) -> int:
+    digest = hashlib.sha256(token.encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "big") & 0x7fffffff
+
+
+def _gemini_compute_tokens_response(messages: list[ChatMessage]) -> dict[str, Any]:
+    tokens_info: list[dict[str, Any]] = []
+    for message in messages:
+        token_texts: list[str] = []
+        content = message.content
+        parts = content if isinstance(content, list) else [{"text": content}]
+        for part in parts:
+            if isinstance(part, dict) and (part.get("inlineData") or part.get("inline_data")):
+                inline = part.get("inlineData") or part.get("inline_data") or {}
+                mime_type = inline.get("mimeType") or inline.get("mime_type") or "application/octet-stream"
+                token_texts.append(f"<inline:{mime_type}>")
+                continue
+            if isinstance(part, dict) and (part.get("fileData") or part.get("file_data")):
+                file_data = part.get("fileData") or part.get("file_data") or {}
+                file_uri = file_data.get("fileUri") or file_data.get("file_uri") or file_data.get("uri") or "file"
+                token_texts.append(f"<file:{file_uri}>")
+                continue
+            token_texts.extend(_gemini_token_texts(part))
+        if not token_texts:
+            continue
+        tokens_info.append({
+            "role": "model" if message.role == "assistant" else message.role,
+            "tokenIds": [_gemini_compute_token_id(token) for token in token_texts],
+            "tokens": [base64.b64encode(token.encode("utf-8")).decode("ascii") for token in token_texts],
+        })
+    return {"tokensInfo": tokens_info}
+
+
 def _usage_from_response(
     data: dict[str, Any] | None,
     *,
@@ -7591,6 +7637,25 @@ async def gemini_count_tokens(model_name: str, request: Request):
         return _gemini_error_response(exc.detail, status_code=exc.status_code)
     except Exception as exc:
         log.exception("Gemini countTokens failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.post("/v1/models/{model_name:path}:computeTokens")
+@app.post("/v1beta/models/{model_name:path}:computeTokens")
+async def gemini_compute_tokens(model_name: str, request: Request):
+    """Gemini-compatible approximate computeTokens endpoint."""
+    try:
+        _resolve_gemini_model(model_name)
+        body = _gemini_normalize_request(await request.json())
+        if isinstance(body, dict):
+            body = _gemini_apply_cached_content(body)
+            body = _gemini_apply_file_search(body)
+        messages = _gemini_count_tokens_request(body if isinstance(body, dict) else {})
+        return _gemini_compute_tokens_response(messages)
+    except HTTPException as exc:
+        return _gemini_error_response(exc.detail, status_code=exc.status_code)
+    except Exception as exc:
+        log.exception("Gemini computeTokens failed")
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 

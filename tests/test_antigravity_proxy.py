@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 
 from fastapi import HTTPException
@@ -238,6 +239,34 @@ def test_gemini_models_and_count_tokens():
     })
     assert counted_media.status_code == 200
     assert {item["modality"] for item in counted_media.json()["promptTokensDetails"]} >= {"TEXT", "IMAGE"}
+
+
+def test_gemini_compute_tokens_accepts_wrappers_and_media():
+    client = TestClient(proxy.app)
+
+    response = client.post("/v1beta/models/gemini-3-flash-agent:computeTokens", json={
+        "request": {
+            "contents": [
+                {"role": "user", "parts": [{"text": "hello token world"}]},
+                {"role": "model", "parts": [{"text": "reply"}, {"inline_data": {"mime_type": "image/png", "data": "aW1hZ2U="}}]},
+            ],
+        }
+    })
+    v1_response = client.post("/v1/models/gemini-3-flash-agent:computeTokens", json={
+        "contents": "sdk string input",
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["tokensInfo"]) == 2
+    assert body["tokensInfo"][0]["role"] == "user"
+    assert body["tokensInfo"][1]["role"] == "model"
+    assert len(body["tokensInfo"][0]["tokenIds"]) == len(body["tokensInfo"][0]["tokens"])
+    assert base64.b64decode(body["tokensInfo"][0]["tokens"][0]).decode("utf-8") == "hello"
+    assert base64.b64decode(body["tokensInfo"][1]["tokens"][-1]).decode("utf-8") == "<inline:image/png>"
+    assert v1_response.status_code == 200
+    assert v1_response.json()["tokensInfo"][0]["role"] == "user"
+    assert "computeTokens" in client.get("/v1beta/models/gemini-3-flash-agent").json()["supportedGenerationMethods"]
 
 
 def test_gemini_count_tokens_applies_generate_content_request_cache(tmp_path, monkeypatch):
