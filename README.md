@@ -836,10 +836,15 @@ Embeddings and batch operations:
   `return_partial_success` returns an empty `unreachable` list for local stores.
 - `predict` and `predictLongRunning` are mapped to Gemini `generateContent`
   requests and return prediction/operation-shaped compatibility responses.
+  Vertex-style `instances` requests preserve the same SDK `config`,
+  `providerOptions.google`, and `processingOptions` compatibility path used by
+  `generateContent`.
 - Legacy `generateText`, `generateMessage`, `generateAnswer`, `embedText`,
   `batchEmbedText`, `countTextTokens`, and `countMessageTokens` are accepted and
   mapped onto the newer local `generateContent`, embedding, and token-count
-  compatibility paths.
+  compatibility paths. Legacy text/message generation also accepts SDK
+  `config`, `providerOptions.google`, `response_format`, and
+  `processingOptions` wrappers before forwarding to the generate path.
 
 File search stores:
 

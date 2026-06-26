@@ -1154,9 +1154,11 @@ def test_gemini_generate_content_alt_sse_error_uses_gemini_error_details(monkeyp
 
 def test_gemini_predict_and_predict_long_running(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    seen = []
 
     class FakeClient:
         def generate_raw(self, *, request, model=""):
+            seen.append(request)
             return {"response": {"candidates": [{"content": {"parts": [{"text": request["contents"][0]["parts"][0]["text"]}]}}]}}
 
     monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
@@ -1164,6 +1166,14 @@ def test_gemini_predict_and_predict_long_running(tmp_path, monkeypatch):
 
     predicted = client.post("/v1beta/models/gemini-3-flash-agent:predict", json={
         "instances": [{"text": "predict me"}],
+        "provider_options": {
+            "google": {
+                "system_instruction": "predict system",
+                "max_output_tokens": "10",
+                "tool_config": {"function_calling_config": {"mode": "none"}},
+            }
+        },
+        "processing_options": {"media_resolution": "MEDIA_RESOLUTION_LOW"},
     })
     long_running = client.post("/v1beta/models/gemini-3-flash-agent:predictLongRunning", json={
         "instances": [{"text": "later"}],
@@ -1171,6 +1181,10 @@ def test_gemini_predict_and_predict_long_running(tmp_path, monkeypatch):
 
     assert predicted.status_code == 200
     assert predicted.json()["predictions"][0]["candidates"][0]["content"]["parts"][0]["text"] == "predict me"
+    assert seen[0]["systemInstruction"]["parts"][0]["text"] == "predict system"
+    assert seen[0]["generationConfig"]["maxOutputTokens"] == 10
+    assert seen[0]["toolConfig"]["functionCallingConfig"] == {"mode": "NONE"}
+    assert "processingOptions" not in seen[0]
     assert long_running.status_code == 200
     assert long_running.json()["done"] is True
     assert long_running.json()["response"]["predictions"]
@@ -1199,7 +1213,18 @@ def test_gemini_legacy_text_message_answer_and_token_methods(monkeypatch):
     monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
     client = TestClient(proxy.app)
 
-    text = client.post("/v1beta/models/gemini-3-flash-agent:generateText", json={"prompt": {"text": "hello text"}})
+    text = client.post("/v1beta/models/gemini-3-flash-agent:generateText", json={
+        "prompt": {"text": "hello text"},
+        "provider_options": {
+            "google": {
+                "system_instruction": "legacy system",
+                "max_output_tokens": "12",
+                "tool_config": {"function_calling_config": {"mode": "none"}},
+            }
+        },
+        "response_format": "text/plain",
+        "processing_options": {"media_resolution": "MEDIA_RESOLUTION_LOW"},
+    })
     message = client.post("/v1beta/models/gemini-3-flash-agent:generateMessage", json={"prompt": {"messages": [{"content": "hello msg"}]}})
     answer = client.post("/v1/models/gemini-3-flash-agent:generateAnswer", json={"text": "hello answer"})
     counted_text = client.post("/v1beta/models/gemini-3-flash-agent:countTextTokens", json={"prompt": {"text": "count these"}})
@@ -1207,6 +1232,11 @@ def test_gemini_legacy_text_message_answer_and_token_methods(monkeypatch):
 
     assert text.status_code == 200
     assert text.json()["candidates"][0]["output"] == "legacy:hello text"
+    assert seen[0]["systemInstruction"]["parts"][0]["text"] == "legacy system"
+    assert seen[0]["generationConfig"]["maxOutputTokens"] == 12
+    assert seen[0]["generationConfig"]["responseMimeType"] == "text/plain"
+    assert seen[0]["toolConfig"]["functionCallingConfig"] == {"mode": "NONE"}
+    assert "processingOptions" not in seen[0]
     assert message.status_code == 200
     assert message.json()["candidates"][0]["content"] == "legacy:hello msg"
     assert answer.status_code == 200

@@ -1706,6 +1706,9 @@ def _gemini_predict_to_generate_body(body: dict[str, Any]) -> dict[str, Any]:
     parameters = body.get("parameters")
     if isinstance(parameters, dict):
         request_body["generationConfig"] = parameters.get("generationConfig") or parameters.get("generation_config") or parameters
+    for key in _GEMINI_GENERATE_CONFIG_TOP_LEVEL_KEYS | {"generationConfig"}:
+        if key in body and key not in request_body:
+            request_body[key] = body[key]
     return request_body
 
 
@@ -1731,13 +1734,18 @@ def _gemini_legacy_prompt_text(body: dict[str, Any]) -> str:
 
 
 def _gemini_legacy_body_to_generate(body: dict[str, Any]) -> dict[str, Any]:
+    body = _gemini_apply_generate_config(body)
     if isinstance(body.get("contents"), list):
-        return dict(body)
+        out = dict(body)
+        out.pop("prompt", None)
+        out.pop("message", None)
+        out.pop("text", None)
+        return out
     text = _gemini_legacy_prompt_text(body)
     if not text.strip():
         raise HTTPException(status_code=400, detail="Legacy Gemini request requires prompt, text, message, or contents.")
     out: dict[str, Any] = {"contents": [{"role": "user", "parts": [{"text": text}]}]}
-    for key in ("safetySettings", "generationConfig", "tools", "toolConfig"):
+    for key in ("systemInstruction", "safetySettings", "generationConfig", "tools", "toolConfig", "cachedContent", "labels", "serviceTier", "store", "processingOptions", "responseFormat"):
         if key in body:
             out[key] = body[key]
     for old_key, new_key in (
@@ -1755,8 +1763,11 @@ def _gemini_legacy_body_to_generate(body: dict[str, Any]) -> dict[str, Any]:
 async def _gemini_legacy_generate(model_name: str, body: dict[str, Any]) -> dict[str, Any]:
     model = _resolve_gemini_model(model_name)
     request_body = _gemini_legacy_body_to_generate(body)
+    request_body = _gemini_apply_response_format(request_body)
+    request_body = _gemini_normalize_generate_body(request_body)
     request_body = _gemini_apply_cached_content(request_body)
     request_body = _gemini_apply_file_search(request_body)
+    _gemini_reject_unsupported_builtin_tools(request_body)
     request_body = _gemini_inline_local_files(request_body)
     data = await asyncio.to_thread(
         _get_client().generate_raw,
