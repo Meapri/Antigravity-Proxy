@@ -413,6 +413,75 @@ def _gemini_content_text(content: Any) -> str:
     return "\n".join(texts)
 
 
+def _gemini_response_text(response: dict[str, Any]) -> str:
+    texts: list[str] = []
+    for candidate in response.get("candidates") or []:
+        if not isinstance(candidate, dict):
+            continue
+        content = candidate.get("content")
+        if not isinstance(content, dict):
+            continue
+        for part in content.get("parts") or []:
+            if isinstance(part, dict) and part.get("text") is not None:
+                texts.append(str(part["text"]))
+    return "".join(texts)
+
+
+def _gemini_message_to_content(message: Any) -> dict[str, Any] | None:
+    if isinstance(message, str):
+        return {"role": "user", "parts": [{"text": message}]}
+    if not isinstance(message, dict):
+        return None
+    if isinstance(message.get("parts"), list):
+        role = str(message.get("role") or "user")
+        return {"role": "model" if role == "assistant" else role, "parts": message["parts"]}
+    role = str(message.get("role") or "user")
+    content = message.get("content", message.get("text", message.get("input")))
+    parts: list[Any]
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                item_type = item.get("type")
+                if item_type in {"input_text", "output_text", "text"} and item.get("text") is not None:
+                    parts.append({"text": str(item["text"])})
+                elif "text" in item or "inlineData" in item or "fileData" in item:
+                    parts.append(item)
+            elif item is not None:
+                parts.append({"text": str(item)})
+    elif content is None:
+        parts = []
+    else:
+        parts = [{"text": str(content)}]
+    if not parts:
+        return None
+    return {"role": "model" if role == "assistant" else role, "parts": parts}
+
+
+def _gemini_interaction_contents(body: dict[str, Any]) -> list[dict[str, Any]]:
+    source = body.get("contents")
+    if source is None:
+        source = body.get("messages")
+    if source is None:
+        source = body.get("input")
+    if source is None:
+        raise HTTPException(status_code=400, detail="interactions.create requires contents, messages, or input.")
+    if isinstance(source, dict):
+        source = [source]
+    if isinstance(source, str):
+        source = [source]
+    if not isinstance(source, list):
+        raise HTTPException(status_code=400, detail="Interaction input must be a string, object, or array.")
+    contents: list[dict[str, Any]] = []
+    for item in source:
+        content = _gemini_message_to_content(item)
+        if content is not None:
+            contents.append(content)
+    if not contents:
+        raise HTTPException(status_code=400, detail="Interaction input did not contain any supported content.")
+    return contents
+
+
 def _gemini_embedding_values(text: str, *, dimensions: int = 768) -> list[float]:
     dimensions = max(1, min(int(dimensions or 768), 3072))
     values: list[float] = []
@@ -554,6 +623,57 @@ def _gemini_store_batch(batch: dict[str, Any]) -> dict[str, Any]:
 
 def _gemini_get_batch(name: str) -> dict[str, Any] | None:
     return _gemini_load_batches_index().get(_gemini_batch_name(name))
+
+
+def _gemini_interactions_root() -> Path:
+    return Path(os.getenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", "data/gemini_interactions")).expanduser()
+
+
+def _gemini_interactions_index_path() -> Path:
+    return _gemini_interactions_root() / "index.json"
+
+
+def _gemini_load_interactions_index() -> dict[str, dict[str, Any]]:
+    path = _gemini_interactions_index_path()
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        log.warning("Failed to read Gemini interactions index; starting empty.")
+        return {}
+
+
+def _gemini_save_interactions_index(index: dict[str, dict[str, Any]]) -> None:
+    root = _gemini_interactions_root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = _gemini_interactions_index_path()
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _gemini_interaction_name(name: str) -> str:
+    key = name.strip().strip("/")
+    if key.startswith("v1beta/"):
+        key = key[len("v1beta/"):]
+    if key.startswith("interactions/"):
+        return key
+    return "interactions/" + key
+
+
+def _gemini_store_interaction(interaction: dict[str, Any]) -> dict[str, Any]:
+    index = _gemini_load_interactions_index()
+    index[interaction["name"]] = interaction
+    _gemini_save_interactions_index(index)
+    return interaction
+
+
+def _gemini_get_interaction(name: str) -> dict[str, Any] | None:
+    return _gemini_load_interactions_index().get(_gemini_interaction_name(name))
 
 
 def _gemini_files_root() -> Path:
@@ -3547,6 +3667,131 @@ async def gemini_delete_batch(batch_id: str):
         return _gemini_error_response(f"Batch '{batch_id}' not found.", status_code=404, status="NOT_FOUND")
     index.pop(name, None)
     _gemini_save_batches_index(index)
+    return JSONResponse({})
+
+
+async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+    model_name = body.get("model") or body.get("modelName") or body.get("model_name") or "models/gemini-3-flash-agent"
+    model = _resolve_gemini_model(str(model_name))
+    contents = _gemini_interaction_contents(body)
+
+    history: list[dict[str, Any]] = []
+    previous_id = body.get("previousInteractionId") or body.get("previous_interaction_id")
+    if previous_id:
+        previous = _gemini_get_interaction(str(previous_id))
+        if previous is None:
+            raise HTTPException(status_code=404, detail=f"Interaction '{previous_id}' not found.")
+        history = list(previous.get("history") or [])
+
+    request_body: dict[str, Any] = {"contents": history + contents}
+    for key in (
+        "systemInstruction",
+        "generationConfig",
+        "safetySettings",
+        "tools",
+        "toolConfig",
+        "cachedContent",
+    ):
+        if key in body:
+            request_body[key] = body[key]
+    request_body = _gemini_apply_cached_content(request_body)
+    request_body = _gemini_apply_file_search(request_body)
+    request_body = _gemini_inline_local_files(request_body)
+    data = await asyncio.to_thread(
+        _get_client().generate_raw,
+        request=request_body,
+        model=str(model["antigravity_model"]),
+    )
+    response = _gemini_unwrap_response(data)
+    text = _gemini_response_text(response)
+    now = _gemini_now_iso()
+    interaction_name = "interactions/int_" + uuid.uuid4().hex
+    model_content = None
+    candidates = response.get("candidates") or []
+    if candidates and isinstance(candidates[0], dict) and isinstance(candidates[0].get("content"), dict):
+        model_content = candidates[0]["content"]
+    new_history = request_body["contents"] + ([model_content] if model_content else [])
+    interaction = {
+        "name": interaction_name,
+        "id": interaction_name.rsplit("/", 1)[-1],
+        "model": _gemini_model_name(model),
+        "status": "completed",
+        "createTime": now,
+        "updateTime": now,
+        "previousInteractionId": previous_id or None,
+        "input": body.get("input", body.get("messages", body.get("contents"))),
+        "output": response,
+        "outputText": text,
+        "history": new_history,
+        "steps": [
+            {
+                "type": "model_response",
+                "status": "completed",
+                "outputText": text,
+            }
+        ],
+        "usageMetadata": response.get("usageMetadata") or response.get("usage_metadata") or {},
+    }
+    if body.get("store", True) is not False:
+        _gemini_store_interaction(interaction)
+    return interaction
+
+
+@app.post("/v1beta/interactions")
+async def gemini_create_interaction(request: Request):
+    try:
+        body = _gemini_normalize_request(await request.json())
+        interaction = await _gemini_create_interaction(body)
+        if isinstance(body, dict) and body.get("stream"):
+            async def _gen():
+                created = dict(interaction)
+                created.pop("outputText", None)
+                yield f"data: {json.dumps({'type': 'interaction.created', 'interaction': created}, ensure_ascii=False)}\n\n"
+                if interaction.get("outputText"):
+                    yield f"data: {json.dumps({'type': 'interaction.output_text.delta', 'delta': interaction['outputText']}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'interaction.completed', 'interaction': interaction}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+
+            return StreamingResponse(_gen(), media_type="text/event-stream")
+        return interaction
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini interactions create failed")
+        return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
+
+
+@app.get("/v1beta/interactions/{interaction_id:path}")
+async def gemini_get_interaction(interaction_id: str):
+    interaction = _gemini_get_interaction(interaction_id)
+    if not interaction:
+        return _gemini_error_response(f"Interaction '{interaction_id}' not found.", status_code=404, status="NOT_FOUND")
+    return interaction
+
+
+@app.post("/v1beta/interactions/{interaction_id:path}:cancel")
+async def gemini_cancel_interaction(interaction_id: str):
+    interaction = _gemini_get_interaction(interaction_id)
+    if not interaction:
+        return _gemini_error_response(f"Interaction '{interaction_id}' not found.", status_code=404, status="NOT_FOUND")
+    if interaction.get("status") not in {"completed", "failed", "cancelled"}:
+        interaction["status"] = "cancelled"
+        interaction["updateTime"] = _gemini_now_iso()
+        _gemini_store_interaction(interaction)
+    return JSONResponse({})
+
+
+@app.delete("/v1beta/interactions/{interaction_id:path}")
+async def gemini_delete_interaction(interaction_id: str):
+    name = _gemini_interaction_name(interaction_id)
+    index = _gemini_load_interactions_index()
+    if name not in index:
+        return _gemini_error_response(f"Interaction '{interaction_id}' not found.", status_code=404, status="NOT_FOUND")
+    index.pop(name, None)
+    _gemini_save_interactions_index(index)
     return JSONResponse({})
 
 

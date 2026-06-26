@@ -340,6 +340,10 @@ Implemented Gemini-compatible routes:
 - `POST /v1beta/models/{model}:embedContent`
 - `POST /v1beta/models/{model}:batchEmbedContents`
 - `POST /v1beta/models/{model}:batchGenerateContent`
+- `POST /v1beta/interactions`
+- `GET /v1beta/interactions/{interaction}`
+- `POST /v1beta/interactions/{interaction}:cancel`
+- `DELETE /v1beta/interactions/{interaction}`
 - `POST /v1beta/batches`
 - `GET /v1beta/batches`
 - `GET /v1beta/batches/{batch}`
@@ -499,13 +503,15 @@ Notes:
   override with `ANTIGRAVITY_GEMINI_OPERATIONS_DIR`.
 - Batch resources are stored locally under `data/gemini_batches` by default;
   override with `ANTIGRAVITY_GEMINI_BATCHES_DIR`.
+- Interactions are stored locally under `data/gemini_interactions` by default;
+  override with `ANTIGRAVITY_GEMINI_INTERACTIONS_DIR`.
 - File search stores are stored locally under `data/gemini_file_search_stores`;
   override with `ANTIGRAVITY_GEMINI_FILE_SEARCH_STORES_DIR`.
 - Tuned model metadata and permissions are stored locally under
   `data/gemini_tuned_models`; override with `ANTIGRAVITY_GEMINI_TUNED_MODELS_DIR`.
-- Live API, interactions, real model tuning/training, true async long-running
-  jobs, semantic Google embeddings, and semantic/vector `tools.file_search`
-  retrieval are not fully implemented yet.
+- Live API, real model tuning/training, true async long-running jobs, semantic
+  Google embeddings, and semantic/vector `tools.file_search` retrieval are not
+  fully implemented yet.
 
 ## Responses API Compatibility
 

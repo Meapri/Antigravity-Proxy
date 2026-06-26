@@ -335,6 +335,58 @@ def test_gemini_batches_create_get_cancel_delete(tmp_path, monkeypatch):
     assert missing.status_code == 404
 
 
+def test_gemini_interactions_create_previous_store_and_stream(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", str(tmp_path / "interactions"))
+    seen = []
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen.append(request)
+            text = request["contents"][-1]["parts"][0]["text"]
+            return {"response": {"candidates": [{"content": {"role": "model", "parts": [{"text": f"echo:{text}"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    first = client.post("/v1beta/interactions", json={
+        "model": "models/gemini-3-flash-agent",
+        "input": "first",
+    })
+    assert first.status_code == 200
+    first_body = first.json()
+    assert first_body["name"].startswith("interactions/")
+    assert first_body["outputText"] == "echo:first"
+
+    second = client.post("/v1beta/interactions", json={
+        "model": "models/gemini-3-flash-agent",
+        "previous_interaction_id": first_body["name"],
+        "input": "second",
+    })
+    assert second.status_code == 200
+    assert len(seen[-1]["contents"]) == 3
+    assert seen[-1]["contents"][0]["parts"][0]["text"] == "first"
+    assert seen[-1]["contents"][1]["parts"][0]["text"] == "echo:first"
+
+    fetched = client.get(f"/v1beta/{first_body['name']}")
+    no_store = client.post("/v1beta/interactions", json={"input": "transient", "store": False})
+    missing = client.get(f"/v1beta/{no_store.json()['name']}")
+    cancelled = client.post(f"/v1beta/{first_body['name']}:cancel")
+    deleted = client.delete(f"/v1beta/{first_body['name']}")
+
+    assert fetched.status_code == 200
+    assert missing.status_code == 404
+    assert cancelled.status_code == 200
+    assert deleted.status_code == 200
+
+    with client.stream("POST", "/v1beta/interactions", json={"input": "stream", "stream": True}) as streamed:
+        body = streamed.read().decode()
+
+    assert streamed.status_code == 200
+    assert "interaction.created" in body
+    assert "interaction.output_text.delta" in body
+    assert "data: [DONE]" in body
+
+
 def test_gemini_files_upload_and_file_data_inline_conversion(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "gemini_files"))
     seen = {}
