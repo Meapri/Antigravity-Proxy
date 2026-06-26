@@ -1656,8 +1656,19 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
     assert webhook["newSigningSecret"]["secret"]
     assert "secret" not in webhook["signingSecrets"][0]
 
+    no_secret = client.post("/v1/webhooks", json={
+        "config": {
+            "target_uri": "https://example.test/no-secret",
+            "new_signing_secret": False,
+        },
+        "webhook": {"event_types": ["webhooks.ping"]},
+    })
+    assert no_secret.status_code == 200
+    assert "newSigningSecret" not in no_secret.json()
+    assert "signingSecrets" not in no_secret.json()
+
     fetched = client.get(f"/v1/{webhook['name']}")
-    listed = client.get("/v1/webhooks?page_size=1&page_token=0")
+    listed = client.get("/v1/webhooks?page_size=2&page_token=0")
     patched = client.patch(f"/v1/{webhook['name']}?update_mask=displayName", json={
         "display_name": "Renamed",
         "target_uri": "https://example.test/ignored",
@@ -1675,7 +1686,7 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
     assert fetched.status_code == 200
     assert fetched.json()["name"] == webhook["name"]
     assert listed.status_code == 200
-    assert listed.json()["webhooks"][0]["name"] == webhook["name"]
+    assert webhook["name"] in {item["name"] for item in listed.json()["webhooks"]}
     assert "newSigningSecret" not in fetched.json()
     assert patched.status_code == 200
     assert patched.json()["displayName"] == "Renamed"
@@ -1708,8 +1719,10 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
     assert "secret" not in rotated.json()["signingSecrets"][0]
 
     deleted = client.delete(f"/v1/{webhook['name']}")
+    deleted_no_secret = client.delete(f"/v1/{no_secret.json()['name']}")
     missing = client.get(f"/v1/{webhook['name']}")
     assert deleted.status_code == 200
+    assert deleted_no_secret.status_code == 200
     assert missing.status_code == 404
 
 

@@ -2127,7 +2127,7 @@ def _gemini_webhook_public_resource(webhook: dict[str, Any], *, include_new_secr
             for item in resource["signingSecrets"]
             if isinstance(item, dict)
         ]
-    if not include_new_secret:
+    if not include_new_secret or not isinstance(resource.get("newSigningSecret"), dict):
         resource.pop("newSigningSecret", None)
     return resource
 
@@ -7487,6 +7487,7 @@ async def gemini_create_webhook(request: Request):
             resource_name = "webhooks/webhook_" + uuid.uuid4().hex
         now = _gemini_now_iso()
         resource = dict(webhook)
+        create_secret = resource.pop("newSigningSecret", True)
         resource["name"] = resource_name
         resource.setdefault("displayName", resource_name.rsplit("/", 1)[-1])
         resource.setdefault("createTime", now)
@@ -7498,7 +7499,7 @@ async def gemini_create_webhook(request: Request):
         resource["subscribedEvents"] = _gemini_webhook_events(resource)
         resource["eventTypes"] = list(resource["subscribedEvents"])
         resource.setdefault("state", "enabled")
-        if webhook.get("newSigningSecret", True) is not False:
+        if create_secret is not False:
             secret = _gemini_new_signing_secret()
             resource["newSigningSecret"] = secret
             resource["signingSecrets"] = [secret]
