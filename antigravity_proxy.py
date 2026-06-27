@@ -1640,7 +1640,23 @@ def _gemini_content_part(value: Any) -> dict[str, Any]:
     return {"text": "" if value is None else str(value)}
 
 
-def _gemini_content_from_value(value: Any, *, default_role: str = "user") -> dict[str, Any]:
+def _gemini_normalize_content_role(role: Any, *, default_role: str = "user", allow_omitted: bool = False) -> str | None:
+    if role is None or str(role).strip() == "":
+        return None if allow_omitted else default_role
+    key = str(role).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "assistant": "model",
+        "model": "model",
+        "tool": "user",
+        "function": "user",
+        "system": "user",
+        "developer": "user",
+        "user": "user",
+    }
+    return aliases.get(key, str(role))
+
+
+def _gemini_content_from_value(value: Any, *, default_role: str = "user", allow_omitted_role: bool = False) -> dict[str, Any]:
     if isinstance(value, dict):
         if "parts" in value:
             out = dict(value)
@@ -1653,11 +1669,20 @@ def _gemini_content_from_value(value: Any, *, default_role: str = "user") -> dic
                 out["parts"] = []
             else:
                 out["parts"] = [_gemini_content_part(parts)]
-            out["role"] = str(out.get("role") or default_role)
+            role = _gemini_normalize_content_role(
+                out.get("role"),
+                default_role=default_role,
+                allow_omitted=allow_omitted_role,
+            )
+            if role is None:
+                out.pop("role", None)
+            else:
+                out["role"] = role
             return out
         if "role" in value and "content" in value:
-            content = _gemini_content_from_value(value.get("content"), default_role=str(value.get("role") or default_role))
-            content["role"] = str(value.get("role") or content.get("role") or default_role)
+            role = _gemini_normalize_content_role(value.get("role"), default_role=default_role)
+            content = _gemini_content_from_value(value.get("content"), default_role=role or default_role)
+            content["role"] = role or content.get("role") or default_role
             return content
         if any(key in value for key in (
             "text",
@@ -1670,10 +1695,22 @@ def _gemini_content_from_value(value: Any, *, default_role: str = "user") -> dic
             "executableCode",
             "codeExecutionResult",
         )):
-            return {"role": default_role, "parts": [_gemini_content_part(value)]}
+            role = _gemini_normalize_content_role(default_role, default_role=default_role, allow_omitted=allow_omitted_role)
+            content = {"parts": [_gemini_content_part(value)]}
+            if role is not None:
+                content["role"] = role
+            return content
     if isinstance(value, list):
-        return {"role": default_role, "parts": [_gemini_content_part(part) for part in value]}
-    return {"role": default_role, "parts": [{"text": "" if value is None else str(value)}]}
+        role = _gemini_normalize_content_role(default_role, default_role=default_role, allow_omitted=allow_omitted_role)
+        content = {"parts": [_gemini_content_part(part) for part in value]}
+        if role is not None:
+            content["role"] = role
+        return content
+    role = _gemini_normalize_content_role(default_role, default_role=default_role, allow_omitted=allow_omitted_role)
+    content = {"parts": [{"text": "" if value is None else str(value)}]}
+    if role is not None:
+        content["role"] = role
+    return content
 
 
 def _gemini_normalize_contents(value: Any) -> list[dict[str, Any]]:
@@ -1687,7 +1724,7 @@ def _gemini_normalize_contents(value: Any) -> list[dict[str, Any]]:
 def _gemini_normalize_system_instruction(value: Any) -> Any:
     if value is None:
         return None
-    return _gemini_content_from_value(value, default_role="system")
+    return _gemini_content_from_value(value, default_role="user", allow_omitted_role=True)
 
 
 _GEMINI_HARM_CATEGORY_ALIASES = {
@@ -2429,7 +2466,13 @@ def _gemini_normalize_response_object(value: Any) -> Any:
     return out
 
 
-def _gemini_finalize_generate_response(response: dict[str, Any], *, model_name: str, request_body: dict[str, Any] | None = None) -> dict[str, Any]:
+def _gemini_finalize_generate_response(
+    response: dict[str, Any],
+    *,
+    model_name: str,
+    request_body: dict[str, Any] | None = None,
+    response_id: str | None = None,
+) -> dict[str, Any]:
     if not isinstance(response, dict):
         return response
     out = dict(response)
@@ -2444,7 +2487,7 @@ def _gemini_finalize_generate_response(response: dict[str, Any], *, model_name: 
             out[new] = out[old]
         out.pop(old, None)
     out.setdefault("modelVersion", _gemini_resource_model_id(model_name))
-    out.setdefault("responseId", "resp_" + uuid.uuid4().hex)
+    out.setdefault("responseId", response_id or "resp_" + uuid.uuid4().hex)
     if isinstance(out.get("promptFeedback"), dict):
         out["promptFeedback"] = _gemini_normalize_response_object(out["promptFeedback"])
         if "blockReason" in out["promptFeedback"]:
@@ -3155,7 +3198,7 @@ def _gemini_operations_for_scope(scope_key: str, scope_name: str | None = None) 
 
 def _gemini_operation_list_response(operations: list[dict[str, Any]], page_size: int, page_token: str | None) -> dict[str, Any]:
     operations.sort(key=lambda item: item.get("name") or "")
-    start = int(page_token or 0) if page_token and page_token.isdigit() else 0
+    start = int(page_token or 0)
     end = start + page_size
     return {"operations": operations[start:end], "nextPageToken": str(end) if end < len(operations) else ""}
 
@@ -3170,7 +3213,7 @@ def _gemini_permission_list_response(permissions: Any, request: Request) -> dict
     source = permissions.values() if isinstance(permissions, dict) else (permissions or [])
     items = [item for item in source if isinstance(item, dict)]
     items.sort(key=lambda item: item.get("name") or "")
-    start = int(page_token or 0) if page_token and page_token.isdigit() else 0
+    start = int(page_token or 0)
     end = start + page_size
     return {"permissions": items[start:end], "nextPageToken": str(end) if end < len(items) else ""}
 
@@ -3210,7 +3253,15 @@ def _gemini_list_query_params(
                 detail=f"pageSize must be between 1 and {max_page_size}.",
                 headers={"x-gemini-error-field": "pageSize"},
             )
-    return page_size, query.get("pageToken") or query.get("page_token")
+    page_token = query.get("pageToken") or query.get("page_token")
+    if page_token is not None:
+        if not str(page_token).isdigit():
+            raise HTTPException(
+                status_code=400,
+                detail="pageToken must be a token returned by a previous list response.",
+                headers={"x-gemini-error-field": "pageToken"},
+            )
+    return page_size, page_token
 
 
 def _gemini_query_bool(request: Request, camel_name: str, snake_name: str, default: bool = False) -> bool:
@@ -5116,6 +5167,8 @@ def _gemini_cached_update_mask(update_mask: str | None) -> set[str] | None:
 
 def _gemini_create_cached_content(body: dict[str, Any]) -> dict[str, Any]:
     body = _gemini_cached_body(body)
+    if not body.get("model"):
+        raise HTTPException(status_code=400, detail="cachedContents.create requires model.")
     usage = _gemini_count_tokens_response(_gemini_count_tokens_request(body))
     now = int(time.time())
     iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
@@ -5980,7 +6033,7 @@ def _gemini_apply_file_search(body: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
-def _gemini_reject_unsupported_builtin_tools(body: dict[str, Any]) -> None:
+def _gemini_reject_unsupported_builtin_tools(body: dict[str, Any], *, allow_computer_use: bool = False) -> None:
     tools = body.get("tools") if isinstance(body.get("tools"), list) else []
     unsupported = {
         "codeExecution": "code_execution",
@@ -5988,6 +6041,8 @@ def _gemini_reject_unsupported_builtin_tools(body: dict[str, Any]) -> None:
         "googleMaps": "google_maps",
         "mcpServers": "mcp_servers",
     }
+    if allow_computer_use:
+        unsupported.pop("computerUse", None)
     for tool in tools:
         if not isinstance(tool, dict):
             continue
@@ -6172,8 +6227,15 @@ def _gemini_create_tuned_model(body: dict[str, Any]) -> dict[str, Any]:
     tuned_model = body.get("tunedModel") if isinstance(body.get("tunedModel"), dict) else body
     config = body.get("config") if isinstance(body.get("config"), dict) else {}
     source_id = str(body.get("tunedModelId") or "").strip()
+    if source_id and not re.fullmatch(r"[a-z]([a-z0-9-]{0,38}[a-z0-9])?", source_id):
+        raise HTTPException(
+            status_code=400,
+            detail="tunedModelId must match [a-z]([a-z0-9-]{0,38}[a-z0-9])?.",
+        )
     model_id = source_id or ("tuned_" + uuid.uuid4().hex)
     name = _gemini_tuned_name(model_id)
+    if name in _gemini_load_tuned_index():
+        raise HTTPException(status_code=409, detail=f"Tuned model '{model_id}' already exists.")
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     meta = {
         "name": name,
@@ -8310,7 +8372,7 @@ async def gemini_get_model(model_name: str, project: str | None = None, location
 @app.get("/v1beta/files")
 async def gemini_list_files(request: Request):
     """Gemini-compatible local Files API listing."""
-    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=10, max_page_size=100)
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=10, max_page_size=100, clamp_page_size=True)
     index = _gemini_load_files_index()
     files = [_gemini_file_resource(meta) for meta in index.values()]
     files.sort(key=lambda item: item.get("createTime") or "")
@@ -8581,7 +8643,7 @@ async def gemini_create_cached_content(request: Request, project: str | None = N
 @app.get("/v1/projects/{project}/locations/{location}/cachedContents")
 @app.get("/v1beta/projects/{project}/locations/{location}/cachedContents")
 async def gemini_list_cached_contents(request: Request, project: str | None = None, location: str | None = None):
-    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000, clamp_page_size=True)
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=10, max_page_size=1000, clamp_page_size=True)
     index = _gemini_load_cached_index()
     items = [_gemini_cached_resource(meta) for meta in index.values()]
     items.sort(key=lambda item: item.get("createTime") or "")
@@ -9596,7 +9658,8 @@ async def gemini_create_tuned_model(request: Request):
         }
         return _gemini_store_operation(operation)
     except HTTPException as exc:
-        return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT")
+        status = "ALREADY_EXISTS" if exc.status_code == 409 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
     except Exception as exc:
         log.exception("Gemini tunedModels create failed")
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
@@ -9607,7 +9670,7 @@ async def gemini_create_tuned_model(request: Request):
 async def gemini_list_tuned_models(request: Request):
     pageSize, pageToken = _gemini_list_query_params(
         request,
-        default_page_size=100,
+        default_page_size=10,
         max_page_size=1000,
         clamp_page_size=True,
     )
@@ -10695,7 +10758,19 @@ async def gemini_generate_content(model_name: str, request: Request, project: st
             }, model_name=model_name, request_body=body))
         body = _gemini_apply_cached_content(body)
         body = _gemini_apply_url_context(_gemini_apply_file_search(body))
-        _gemini_reject_unsupported_builtin_tools(body)
+        _gemini_reject_unsupported_builtin_tools(body, allow_computer_use=True)
+        computer_use_response = _gemini_generate_computer_use_response_if_needed(
+            model_name=model_name,
+            model=model,
+            body=body,
+        )
+        if computer_use_response is not None:
+            if request.query_params.get("alt") == "sse" or request.query_params.get("stream", "").lower() == "true":
+                async def _computer_use_gen():
+                    yield f"data: {json.dumps(computer_use_response, ensure_ascii=False)}\n\n"
+
+                return StreamingResponse(_computer_use_gen(), media_type="text/event-stream")
+            return JSONResponse(computer_use_response)
         body = _gemini_inline_local_files(body)
         body.pop("model", None)
         if request.query_params.get("alt") == "sse" or request.query_params.get("stream", "").lower() == "true":
@@ -10733,13 +10808,19 @@ async def gemini_generate_content(model_name: str, request: Request, project: st
 def _gemini_streaming_response(*, body: dict[str, Any], model_name: str, antigravity_model: str) -> StreamingResponse:
     async def _gen():
         got_any = False
+        stream_response_id = "resp_" + uuid.uuid4().hex
         try:
             async for chunk in _get_client().generate_raw_stream_async(
                 request=_gemini_strip_internal_request_metadata(body),
                 model=antigravity_model,
             ):
                 payload = _gemini_unwrap_response(chunk)
-                payload = _gemini_finalize_generate_response(payload, model_name=model_name, request_body=body)
+                payload = _gemini_finalize_generate_response(
+                    payload,
+                    model_name=model_name,
+                    request_body=body,
+                    response_id=stream_response_id,
+                )
                 got_any = True
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
         except Exception as exc:
@@ -10755,6 +10836,7 @@ def _gemini_streaming_response(*, body: dict[str, Any], model_name: str, antigra
                     _gemini_unwrap_response(data),
                     model_name=model_name,
                     request_body=body,
+                    response_id=stream_response_id,
                 )
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
             except Exception as inner:
@@ -11905,6 +11987,26 @@ def _gemini_create_computer_use_response(
     return response, text, [step], usage
 
 
+def _gemini_generate_computer_use_response_if_needed(
+    *,
+    model_name: str,
+    model: dict[str, Any],
+    body: dict[str, Any],
+) -> dict[str, Any] | None:
+    tools = _gemini_computer_use_tools(body.get("tools"))
+    if not tools:
+        return None
+    contents = body.get("contents") if isinstance(body.get("contents"), list) else []
+    response, _text, _steps, _usage = _gemini_create_computer_use_response(
+        model_name=model_name,
+        model=model,
+        request_body=body,
+        contents=contents,
+        tools=tools,
+    )
+    return response
+
+
 async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
@@ -12348,7 +12450,17 @@ async def gemini_stream_generate_content(model_name: str, request: Request, proj
         body = _gemini_normalize_generate_body(body)
         body = _gemini_apply_cached_content(body)
         body = _gemini_apply_url_context(_gemini_apply_file_search(body))
-        _gemini_reject_unsupported_builtin_tools(body)
+        _gemini_reject_unsupported_builtin_tools(body, allow_computer_use=True)
+        computer_use_response = _gemini_generate_computer_use_response_if_needed(
+            model_name=model_name,
+            model=model,
+            body=body,
+        )
+        if computer_use_response is not None:
+            async def _computer_use_gen():
+                yield f"data: {json.dumps(computer_use_response, ensure_ascii=False)}\n\n"
+
+            return StreamingResponse(_computer_use_gen(), media_type="text/event-stream")
         body = _gemini_inline_local_files(body)
         body.pop("model", None)
     except HTTPException as exc:

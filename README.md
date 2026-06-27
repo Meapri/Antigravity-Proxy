@@ -1207,7 +1207,8 @@ Notes:
   `returnPartialSuccess`.
 - List routes clamp oversized `pageSize` values where the Gemini schema defines
   a hard maximum, including `models` at 1000, `generatedFiles` at 50, and
-  `corpora` at 20.
+  `corpora` at 20. Invalid `pageToken` values return Gemini-style
+  `INVALID_ARGUMENT` instead of silently replaying the first page.
 - Agents preserve caller-supplied `id` values, return `object: "agent"`, and
   expose list results with the SDK-style `object/data/next_page_token` shape
   while keeping `agents/nextPageToken` aliases for older clients.
@@ -1243,6 +1244,14 @@ Notes:
   SDK/AIP wrappers such as `generateContentRequest` and `request`, then unwrap
   them before applying normal content, config, tool, cache, URL, and file-search
   normalization.
+- Generate request `Content.role` values are normalized to Gemini-compatible
+  roles: `assistant` becomes `model`, and OpenAI-style `system` / `developer`
+  inputs are folded into `user`. `systemInstruction` is emitted with a
+  Gemini-valid role instead of the OpenAI-only `system` role.
+- Gemini native `computer_use` tools on `generateContent` and
+  `streamGenerateContent` return a local Gemini `functionCall` action instead
+  of `UNIMPLEMENTED`; other hosted-only built-ins such as `code_execution`,
+  `google_maps`, and MCP servers remain explicit `UNIMPLEMENTED` responses.
 - Upstream Gemini usage metadata aliases such as `prompt_token_count`,
   `candidates_token_count`, `total_token_count`, and `service_tier` are
   normalized to `promptTokenCount`, `candidatesTokenCount`,
@@ -1264,7 +1273,8 @@ Notes:
   coerces page sizes above 1000 down to 1000. Vertex-style project-scoped cache
   paths such as
   `/v1beta/projects/{project}/locations/{location}/cachedContents/{cache}` are
-  accepted for `google-genai` Vertex cache lifecycle compatibility.
+  accepted for `google-genai` Vertex cache lifecycle compatibility. Create
+  requests require `model`, matching the Gemini `CachedContent` schema.
 - Corpora are stored locally under `data/gemini_corpora` by default; override
   with `ANTIGRAVITY_GEMINI_CORPORA_DIR`.
 - Batch operations are stored locally under `data/gemini_operations` by default;
@@ -1320,6 +1330,8 @@ Notes:
   override with `ANTIGRAVITY_GEMINI_FILE_SEARCH_STORES_DIR`.
 - Tuned model metadata and permissions are stored locally under
   `data/gemini_tuned_models`; override with `ANTIGRAVITY_GEMINI_TUNED_MODELS_DIR`.
+  Caller-supplied `tunedModelId` values are validated against Gemini's ID
+  pattern, and duplicate IDs return `ALREADY_EXISTS`.
 - Webhook configurations are stored locally under `data/gemini_webhooks`;
   override with `ANTIGRAVITY_GEMINI_WEBHOOKS_DIR`. The proxy delivers
   `webhooks.ping`, `batch.succeeded`, and `interaction.completed` callback

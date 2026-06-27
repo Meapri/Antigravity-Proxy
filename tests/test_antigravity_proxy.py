@@ -550,6 +550,59 @@ def test_gemini_model_aliases_resolve_for_public_style_names(monkeypatch):
     assert lite_latest.json()["name"] == "models/gemini-3.1-flash-lite"
 
 
+def test_gemini_generate_content_normalizes_content_roles(monkeypatch):
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "roles ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "systemInstruction": {"role": "system", "parts": [{"text": "be helpful"}]},
+        "contents": [
+            {"role": "assistant", "parts": [{"text": "previous answer"}]},
+            {"role": "developer", "content": "developer note"},
+        ],
+    })
+
+    assert response.status_code == 200
+    assert seen["request"]["systemInstruction"]["role"] == "user"
+    assert seen["request"]["contents"][0]["role"] == "model"
+    assert seen["request"]["contents"][1]["role"] == "user"
+
+
+def test_gemini_list_rejects_invalid_page_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "files"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR", str(tmp_path / "cached"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_CORPORA_DIR", str(tmp_path / "corpora"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILE_SEARCH_STORES_DIR", str(tmp_path / "fss"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_TUNED_MODELS_DIR", str(tmp_path / "tuned"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    client = TestClient(proxy.app)
+
+    store = client.post("/v1beta/fileSearchStores", json={"displayName": "tokens"}).json()
+    store_id = store["name"].split("/", 1)[1]
+    paths = [
+        "/v1beta/files?pageToken=bogus",
+        "/v1beta/cachedContents?pageToken=bogus",
+        "/v1beta/corpora?pageToken=bogus",
+        "/v1beta/fileSearchStores?pageToken=bogus",
+        f"/v1beta/fileSearchStores/{store_id}/documents?pageToken=bogus",
+        "/v1beta/tunedModels?pageToken=bogus",
+        "/v1beta/operations?pageToken=bogus",
+    ]
+
+    for path in paths:
+        response = client.get(path)
+        assert response.status_code == 400, path
+        assert response.json()["error"]["status"] == "INVALID_ARGUMENT"
+        assert response.json()["error"]["details"][0]["fieldViolations"][0]["field"] == "pageToken"
+
+
 def test_gemini_auth_accepts_google_api_key_styles(monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_PROXY_API_KEY", "secret")
     client = TestClient(proxy.app)
@@ -1178,7 +1231,7 @@ def test_gemini_generate_content_accepts_sdk_content_unions(monkeypatch):
         {"role": "user", "parts": [{"text": "world"}]},
         {"role": "user", "parts": [{"text": "part one"}, {"text": "part two"}]},
     ]
-    assert seen["request"]["systemInstruction"] == {"role": "system", "parts": [{"text": "be brief"}]}
+    assert seen["request"]["systemInstruction"] == {"role": "user", "parts": [{"text": "be brief"}]}
     assert counted.status_code == 200
     assert counted.json()["totalTokens"] > 0
 
@@ -1382,7 +1435,7 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
     assert "requestOptions" not in seen["request"]
     assert "httpOptions" not in seen["request"]
     assert "apiVersion" not in seen["request"]
-    assert seen["request"]["systemInstruction"] == {"role": "system", "parts": [{"text": "answer tersely"}]}
+    assert seen["request"]["systemInstruction"] == {"role": "user", "parts": [{"text": "answer tersely"}]}
     assert seen["request"]["labels"] == {"source": "sdk"}
     assert seen["request"]["serviceTier"] == "priority"
     assert seen["request"]["store"] is False
@@ -1698,7 +1751,7 @@ def test_gemini_generate_content_accepts_provider_google_options(monkeypatch):
     assert response.status_code == 200
     assert "providerOptions" not in seen["request"]
     assert "google" not in seen["request"]
-    assert seen["request"]["systemInstruction"] == {"role": "system", "parts": [{"text": "from provider"}]}
+    assert seen["request"]["systemInstruction"] == {"role": "user", "parts": [{"text": "from provider"}]}
     assert seen["request"]["serviceTier"] == "flex"
     assert seen["request"]["toolConfig"]["functionCallingConfig"] == {"mode": "VALIDATED"}
     assert seen["request"]["generationConfig"]["maxOutputTokens"] == 18
@@ -2046,10 +2099,31 @@ def test_gemini_generate_content_rejects_unsupported_builtin_tools():
     assert "code_execution" in code_execution.json()["error"]["message"]
     assert google_maps.status_code == 501
     assert "google_maps" in google_maps.json()["error"]["message"]
-    assert computer_use.status_code == 501
-    assert "computer_use" in computer_use.json()["error"]["message"]
+    assert computer_use.status_code == 200
+    assert computer_use.json()["candidates"][0]["content"]["parts"][0]["functionCall"]["name"] == "open_web_browser"
+    assert computer_use.json()["computerUse"]["environment"] == "ENVIRONMENT_BROWSER"
     assert mcp_servers.status_code == 501
     assert "mcp_servers" in mcp_servers.json()["error"]["message"]
+
+
+def test_gemini_stream_generate_content_computer_use_sse():
+    client = TestClient(proxy.app)
+
+    with client.stream("POST", "/v1beta/models/gemini-3-flash-agent:streamGenerateContent", json={
+        "contents": "use browser",
+        "tools": [{"computer_use": {"environment": "browser"}}],
+    }) as response:
+        body = response.read().decode()
+
+    payloads = [
+        json.loads(line.removeprefix("data: "))
+        for line in body.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert response.status_code == 200
+    assert len(payloads) == 1
+    assert payloads[0]["candidates"][0]["content"]["parts"][0]["functionCall"]["name"] == "open_web_browser"
+    assert payloads[0]["computerUse"]["environment"] == "ENVIRONMENT_BROWSER"
 
 
 def test_gemini_url_context_fetches_and_injects_local_context(monkeypatch):
@@ -2108,6 +2182,30 @@ def test_gemini_generate_content_alt_sse(monkeypatch):
     assert '"modelVersion": "gemini-3-flash-agent"' in body
     assert seen["model"] == "gemini-3-flash-agent"
     assert "data: [DONE]" not in body
+
+
+def test_gemini_stream_generate_content_uses_stable_response_id(monkeypatch):
+    class FakeClient:
+        async def generate_raw_stream_async(self, *, request, model=""):
+            yield {"response": {"candidates": [{"content": {"parts": [{"text": "one"}]}}]}}
+            yield {"response": {"candidates": [{"content": {"parts": [{"text": "two"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    with client.stream("POST", "/v1beta/models/gemini-3-flash-agent:streamGenerateContent", json={
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+    }) as response:
+        body = response.read().decode()
+
+    payloads = [
+        json.loads(line.removeprefix("data: "))
+        for line in body.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert response.status_code == 200
+    assert len(payloads) == 2
+    assert payloads[0]["responseId"] == payloads[1]["responseId"]
 
 
 def test_gemini_generate_content_alt_sse_falls_back_on_empty_stream(monkeypatch):
@@ -2699,7 +2797,7 @@ def test_google_genai_sdk_models_update_delete_tuned_model(tmp_path, monkeypatch
         ),
     )
     created = app_client.post("/v1beta/tunedModels", json={
-        "tunedModelId": "sdk_model_update",
+        "tunedModelId": "sdk-model-update",
         "tunedModel": {
             "displayName": "SDK model update",
             "baseModel": "models/gemini-3-flash-agent",
@@ -2707,16 +2805,16 @@ def test_google_genai_sdk_models_update_delete_tuned_model(tmp_path, monkeypatch
     })
 
     updated = sdk.models.update(
-        model="tunedModels/sdk_model_update",
+        model="tunedModels/sdk-model-update",
         config={"display_name": "Updated by SDK"},
     )
-    deleted = sdk.models.delete(model="tunedModels/sdk_model_update")
+    deleted = sdk.models.delete(model="tunedModels/sdk-model-update")
 
     assert created.status_code == 200
-    assert updated.name == "tunedModels/sdk_model_update"
+    assert updated.name == "tunedModels/sdk-model-update"
     assert updated.display_name == "Updated by SDK"
     assert deleted.sdk_http_response.headers["content-type"].startswith("application/json")
-    assert app_client.get("/v1beta/tunedModels/sdk_model_update").status_code == 404
+    assert app_client.get("/v1beta/tunedModels/sdk-model-update").status_code == 404
 
 
 def test_google_genai_sdk_developer_tuning_cancel_tuned_model_name(tmp_path, monkeypatch):
@@ -4345,9 +4443,8 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     assert default_page.json()["nextPageToken"]
     assert second_page.status_code == 200
     assert second_page.json()["files"]
-    assert too_large_page.status_code == 400
-    assert too_large_page.json()["error"]["status"] == "INVALID_ARGUMENT"
-    assert too_large_page.json()["error"]["details"][0]["fieldViolations"][0]["field"] == "pageSize"
+    assert too_large_page.status_code == 200
+    assert len(too_large_page.json()["files"]) <= 100
 
     fetched = client.get(f"/v1beta/{file_resource['name']}")
     downloaded = client.get(f"/v1beta/{file_resource['name']}:download")
@@ -4587,7 +4684,7 @@ def test_gemini_cached_contents_merge_into_generate_request(tmp_path, monkeypatc
     assert wrapped_created.json()["ttl"] == "60s"
     assert wrapped_created.json()["contents"] == [{"role": "user", "parts": [{"text": "wrapped cached context"}]}]
     assert wrapped_created.json()["systemInstruction"] == {
-        "role": "system",
+        "role": "user",
         "parts": [{"text": "wrapped cached system"}],
     }
     assert wrapped_created.json()["toolConfig"] == {"functionCallingConfig": {"mode": "NONE"}}
@@ -4611,6 +4708,13 @@ def test_gemini_cached_contents_merge_into_generate_request(tmp_path, monkeypatc
     paged = client.get("/v1beta/cachedContents?pageSize=1")
     next_page = client.get(f"/v1beta/cachedContents?pageSize=1&pageToken={paged.json()['nextPageToken']}")
     coerced = client.get("/v1beta/cachedContents?pageSize=1001")
+    for index in range(10):
+        created_extra = client.post("/v1beta/cachedContents", json={
+            "model": "models/gemini-3-flash-agent",
+            "contents": f"extra cache {index}",
+        })
+        assert created_extra.status_code == 200
+    default_page = client.get("/v1beta/cachedContents")
 
     assert paged.status_code == 200
     assert len(paged.json()["cachedContents"]) == 1
@@ -4618,6 +4722,12 @@ def test_gemini_cached_contents_merge_into_generate_request(tmp_path, monkeypatc
     assert next_page.status_code == 200
     assert next_page.json()["cachedContents"]
     assert coerced.status_code == 200
+    assert default_page.status_code == 200
+    assert len(default_page.json()["cachedContents"]) == 10
+    assert default_page.json()["nextPageToken"] == "10"
+    missing_model = client.post("/v1beta/cachedContents", json={"contents": "missing model"})
+    assert missing_model.status_code == 400
+    assert missing_model.json()["error"]["status"] == "INVALID_ARGUMENT"
 
     patched = client.patch(f"/v1beta/{cache_name}?update_mask=ttl", json={
         "cachedContent": {"ttl": "120s"}
@@ -5298,7 +5408,7 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     client = TestClient(proxy.app)
 
     created = client.post("/v1/tunedModels", json={
-        "tuned_model_id": "my_tuned",
+        "tuned_model_id": "my-tuned",
         "config": {
             "temperature": "0.4",
             "top_k": "32",
@@ -5320,7 +5430,7 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     })
     assert created.status_code == 200
     tuned = created.json()["response"]
-    assert tuned["name"] == "tunedModels/my_tuned"
+    assert tuned["name"] == "tunedModels/my-tuned"
     assert tuned["baseModel"] == "models/gemini-3-flash-agent"
     assert tuned["temperature"] == 0.4
     assert tuned["topK"] == 32
@@ -5331,47 +5441,79 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert tuned["tuningTask"]["trainingData"]["examples"]["examples"][0]["textInput"] == "hi"
     assert tuned["tuningTask"]["trainingData"]["examples"]["examples"][0]["output"] == "hello"
     created_op_id = created.json()["name"].split("/", 1)[1]
-    query_created = client.post("/v1beta/tunedModels?tunedModelId=query_tuned", json={
+    query_created = client.post("/v1beta/tunedModels?tunedModelId=query-tuned", json={
         "tunedModel": {
             "displayName": "Query tuned",
             "baseModel": "models/gemini-3-flash-agent",
         },
     })
+    invalid_tuned_ids = [
+        "1bad",
+        "Bad",
+        "bad_id",
+        "bad-",
+        "a" * 41,
+    ]
+    invalid_tuned_id_responses = [
+        client.post(f"/v1beta/tunedModels?tunedModelId={model_id}", json={
+            "tunedModel": {"baseModel": "models/gemini-3-flash-agent"}
+        })
+        for model_id in invalid_tuned_ids
+    ]
+    duplicate_query_created = client.post("/v1beta/tunedModels?tunedModelId=query-tuned", json={
+        "tunedModel": {
+            "displayName": "Duplicate query tuned",
+            "baseModel": "models/gemini-3-flash-agent",
+        },
+    })
+    for index in range(10):
+        created_extra = client.post(f"/v1beta/tunedModels?tunedModelId=extra-tuned-{index}", json={
+            "tunedModel": {
+                "displayName": f"Extra tuned {index}",
+                "baseModel": "models/gemini-3-flash-agent",
+            },
+        })
+        assert created_extra.status_code == 200
 
     listed = client.get("/v1/tunedModels")
     oversized_page = client.get("/v1beta/tunedModels?pageSize=1001")
     filtered = client.get('/v1beta/tunedModels?filter=displayName:"Query"')
     filtered_description = client.get('/v1beta/tunedModels?filter=description:"updated"')
-    fetched = client.get("/v1/tunedModels/my_tuned")
-    fetched_full_name = client.get("/v1beta/tunedModels/tunedModels/my_tuned")
-    listed_operations = client.get("/v1/tunedModels/my_tuned/operations")
+    fetched = client.get("/v1/tunedModels/my-tuned")
+    fetched_full_name = client.get("/v1beta/tunedModels/tunedModels/my-tuned")
+    listed_operations = client.get("/v1/tunedModels/my-tuned/operations")
     filtered_operations = client.get(
-        f"/v1beta/tunedModels/my_tuned/operations?filter=operation.name:{created_op_id}&return_partial_success=true"
+        f"/v1beta/tunedModels/my-tuned/operations?filter=operation.name:{created_op_id}&return_partial_success=true"
     )
-    fetched_operation = client.get(f"/v1/tunedModels/my_tuned/operations/{created_op_id}")
-    waited_operation = client.post(f"/v1/tunedModels/my_tuned/operations/{created_op_id}:wait")
-    cancelled_operation = client.post(f"/v1/tunedModels/my_tuned/operations/{created_op_id}:cancel")
-    patched = client.patch("/v1/tunedModels/my_tuned", json={
+    fetched_operation = client.get(f"/v1/tunedModels/my-tuned/operations/{created_op_id}")
+    waited_operation = client.post(f"/v1/tunedModels/my-tuned/operations/{created_op_id}:wait")
+    cancelled_operation = client.post(f"/v1/tunedModels/my-tuned/operations/{created_op_id}:cancel")
+    patched = client.patch("/v1/tunedModels/my-tuned", json={
         "tuned_model": {
             "description": "updated",
             "tuning_task": {"hyperparameters": {"epoch_count": 3}},
         }
     })
     assert listed.status_code == 200
+    assert len(listed.json()["tunedModels"]) == 10
+    assert listed.json()["nextPageToken"] == "10"
     assert oversized_page.status_code == 200
-    assert {item["name"] for item in oversized_page.json()["tunedModels"]} == {
-        "tunedModels/my_tuned",
-        "tunedModels/query_tuned",
+    assert len(oversized_page.json()["tunedModels"]) == 12
+    assert {"tunedModels/my-tuned", "tunedModels/query-tuned"} <= {
+        item["name"] for item in oversized_page.json()["tunedModels"]
     }
+    assert all(response.status_code == 400 for response in invalid_tuned_id_responses)
+    assert duplicate_query_created.status_code == 409
+    assert duplicate_query_created.json()["error"]["status"] == "ALREADY_EXISTS"
     assert query_created.status_code == 200
-    assert query_created.json()["response"]["name"] == "tunedModels/query_tuned"
+    assert query_created.json()["response"]["name"] == "tunedModels/query-tuned"
     assert filtered.status_code == 200
-    assert [item["name"] for item in filtered.json()["tunedModels"]] == ["tunedModels/query_tuned"]
+    assert [item["name"] for item in filtered.json()["tunedModels"]] == ["tunedModels/query-tuned"]
     assert filtered_description.status_code == 200
     assert filtered_description.json()["tunedModels"] == []
     assert fetched.json()["displayName"] == "My tuned"
     assert fetched_full_name.status_code == 200
-    assert fetched_full_name.json()["name"] == "tunedModels/my_tuned"
+    assert fetched_full_name.json()["name"] == "tunedModels/my-tuned"
     assert fetched.json()["supportedGenerationMethods"] == [
         "generateContent",
         "streamGenerateContent",
@@ -5397,7 +5539,7 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert patched.json()["description"] == "updated"
     assert patched.json()["tuningTask"]["hyperparameters"]["epochCount"] == 3
     masked_description = client.patch(
-        "/v1/tunedModels/my_tuned?updateMask=tunedModel.description",
+        "/v1/tunedModels/my-tuned?updateMask=tunedModel.description",
         json={
             "tuned_model": {
                 "description": "masked update",
@@ -5406,14 +5548,14 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
             }
         },
     )
-    masked_reader_projects = client.patch("/v1/tunedModels/my_tuned", json={
+    masked_reader_projects = client.patch("/v1/tunedModels/my-tuned", json={
         "tuned_model": {
             "reader_project_numbers": ["456", "789"],
             "description": "ignored by body mask",
         },
         "update_mask": "reader_project_numbers",
     })
-    unsupported_mask = client.patch("/v1/tunedModels/my_tuned?updateMask=unsupportedField", json={
+    unsupported_mask = client.patch("/v1/tunedModels/my-tuned?updateMask=unsupportedField", json={
         "unsupportedField": "value",
     })
     assert masked_description.status_code == 200
@@ -5425,7 +5567,7 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert masked_reader_projects.json()["description"] == "masked update"
     assert unsupported_mask.status_code == 400
 
-    perm = client.post("/v1/tunedModels/my_tuned/permissions", json={
+    perm = client.post("/v1/tunedModels/my-tuned/permissions", json={
         "permission": {
             "email_address": "user@example.com",
             "role": "reader",
@@ -5434,27 +5576,27 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     })
     assert perm.status_code == 200
     perm_id = perm.json()["name"].rsplit("/", 1)[-1]
-    listed_perms = client.get("/v1/tunedModels/my_tuned/permissions")
-    listed_perms_full_name = client.get("/v1beta/tunedModels/tunedModels/my_tuned/permissions")
-    patched_perm = client.patch(f"/v1/tunedModels/my_tuned/permissions/{perm_id}", json={
+    listed_perms = client.get("/v1/tunedModels/my-tuned/permissions")
+    listed_perms_full_name = client.get("/v1beta/tunedModels/tunedModels/my-tuned/permissions")
+    patched_perm = client.patch(f"/v1/tunedModels/my-tuned/permissions/{perm_id}", json={
         "permission": {
             "role": "writer",
             "email_address": "ignored@example.com",
         },
         "update_mask": "permission.role",
     })
-    snake_query_perm = client.patch(f"/v1/tunedModels/my_tuned/permissions/{perm_id}?update_mask=permission.role", json={
+    snake_query_perm = client.patch(f"/v1/tunedModels/my-tuned/permissions/{perm_id}?update_mask=permission.role", json={
         "permission": {
             "role": "writer",
             "email_address": "still-ignored@example.com",
         }
     })
     full_name_perm_patch = client.patch(
-        f"/v1beta/tunedModels/tunedModels/my_tuned/permissions/{perm_id}?updateMask=permission.role",
+        f"/v1beta/tunedModels/tunedModels/my-tuned/permissions/{perm_id}?updateMask=permission.role",
         json={"permission": {"role": "reader", "email_address": "full-ignored@example.com"}},
     )
-    promoted = client.post(f"/v1/tunedModels/my_tuned/permissions/{perm_id}:transferOwnership")
-    fetched_perm = client.get(f"/v1/tunedModels/my_tuned/permissions/{perm.json()['name']}")
+    promoted = client.post(f"/v1/tunedModels/my-tuned/permissions/{perm_id}:transferOwnership")
+    fetched_perm = client.get(f"/v1/tunedModels/my-tuned/permissions/{perm.json()['name']}")
     assert listed_perms.status_code == 200
     assert listed_perms.json()["permissions"][0]["emailAddress"] == "user@example.com"
     assert listed_perms.json()["permissions"][0]["granteeType"] == "USER"
@@ -5472,13 +5614,13 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert promoted.status_code == 200
     assert fetched_perm.json()["role"] == "OWNER"
 
-    model_owner_transfer = client.post("/v1beta/tunedModels/my_tuned:transferOwnership", json={
+    model_owner_transfer = client.post("/v1beta/tunedModels/my-tuned:transferOwnership", json={
         "email_address": "new-owner@example.com",
     })
-    owner_perms = client.get("/v1/tunedModels/my_tuned/permissions")
-    paged_owner_perms = client.get("/v1beta/tunedModels/my_tuned/permissions?pageSize=1")
+    owner_perms = client.get("/v1/tunedModels/my-tuned/permissions")
+    paged_owner_perms = client.get("/v1beta/tunedModels/my-tuned/permissions?pageSize=1")
     paged_owner_perms_next = client.get(
-        f"/v1beta/tunedModels/my_tuned/permissions?page_size=1&page_token={paged_owner_perms.json()['nextPageToken']}"
+        f"/v1beta/tunedModels/my-tuned/permissions?page_size=1&page_token={paged_owner_perms.json()['nextPageToken']}"
     )
     assert model_owner_transfer.status_code == 200
     assert model_owner_transfer.json()["owner"] == "new-owner@example.com"
@@ -5495,7 +5637,7 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert len(paged_owner_perms_next.json()["permissions"]) == 1
     assert paged_owner_perms_next.json()["nextPageToken"] == ""
 
-    generated = client.post("/v1/tunedModels/my_tuned:generateContent", json={
+    generated = client.post("/v1/tunedModels/my-tuned:generateContent", json={
         "contents": [{"role": "user", "parts": [{"text": "hello tuned"}]}],
         "provider_options": {
             "google": {
@@ -5517,22 +5659,22 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert seen["request"]["generationConfig"]["responseMimeType"] == "text/plain"
     assert seen["request"]["toolConfig"]["functionCallingConfig"] == {"mode": "NONE"}
     assert "processingOptions" not in seen["request"]
-    generated_full_name = client.post("/v1beta/tunedModels/tunedModels/my_tuned:generateContent", json={
+    generated_full_name = client.post("/v1beta/tunedModels/tunedModels/my-tuned:generateContent", json={
         "contents": [{"role": "user", "parts": [{"text": "hello tuned full"}]}],
     })
     assert generated_full_name.status_code == 200
     assert generated_full_name.json()["candidates"][0]["content"]["parts"][0]["text"] == "tuned ok"
 
-    text_generated = client.post("/v1beta/tunedModels/my_tuned:generateText", json={
+    text_generated = client.post("/v1beta/tunedModels/my-tuned:generateText", json={
         "prompt": {"text": "legacy tuned text"},
         "temperature": "0.1",
     })
     assert text_generated.status_code == 200
-    assert text_generated.json()["modelVersion"] == "tunedModels/my_tuned"
+    assert text_generated.json()["modelVersion"] == "tunedModels/my-tuned"
     assert seen["request"]["contents"][0]["parts"][0]["text"] == "legacy tuned text"
     assert seen["request"]["generationConfig"]["temperature"] == 0.1
 
-    with client.stream("POST", "/v1beta/tunedModels/my_tuned:streamGenerateContent", json={
+    with client.stream("POST", "/v1beta/tunedModels/my-tuned:streamGenerateContent", json={
         "contents": "hello tuned stream",
     }) as streamed:
         stream_body = streamed.read().decode()
@@ -5540,13 +5682,13 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert "data:" in stream_body
     assert "tuned ok" in stream_body
 
-    tuned_batch = client.post("/v1beta/tunedModels/my_tuned:batchGenerateContent", json={
+    tuned_batch = client.post("/v1beta/tunedModels/my-tuned:batchGenerateContent", json={
         "display_name": "tuned batch",
         "requests": [
             {"contents": [{"role": "user", "parts": [{"text": "batch tuned"}]}]},
         ],
     })
-    tuned_async_embed = client.post("/v1/tunedModels/my_tuned:asyncBatchEmbedContent", json={
+    tuned_async_embed = client.post("/v1/tunedModels/my-tuned:asyncBatchEmbedContent", json={
         "embed_content_batch": {
             "display_name": "tuned async embed",
             "requests": [
@@ -5561,10 +5703,10 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert tuned_async_embed.json()["metadata"]["batchResource"]["displayName"] == "tuned async embed"
     assert tuned_async_embed.json()["response"]["embeddings"][0]["values"]
 
-    counted = client.post("/v1/tunedModels/my_tuned:countTokens", json={
+    counted = client.post("/v1/tunedModels/my-tuned:countTokens", json={
         "contents": [{"role": "user", "parts": [{"text": "hello tuned"}]}]
     })
-    counted_full_name = client.post("/v1beta/tunedModels/tunedModels/my_tuned:countTokens", json={
+    counted_full_name = client.post("/v1beta/tunedModels/tunedModels/my-tuned:countTokens", json={
         "contents": [{"role": "user", "parts": [{"text": "hello tuned full"}]}]
     })
     assert counted.status_code == 200
@@ -5574,18 +5716,18 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert counted_full_name.status_code == 200
     assert counted_full_name.json()["totalTokens"] > 0
 
-    computed = client.post("/v1beta/tunedModels/my_tuned:computeTokens", json={
+    computed = client.post("/v1beta/tunedModels/my-tuned:computeTokens", json={
         "contents": "hello tuned compute",
     })
     assert computed.status_code == 200
     assert computed.json()["tokensInfo"][0]["role"] == "user"
     assert computed.json()["tokensInfo"][0]["tokenIds"]
 
-    embedded = client.post("/v1/tunedModels/my_tuned:embedContent", json={
+    embedded = client.post("/v1/tunedModels/my-tuned:embedContent", json={
         "content": {"parts": [{"text": "embed tuned"}]},
         "config": {"output_dimensionality": 8},
     })
-    batch_embedded = client.post("/v1beta/tunedModels/my_tuned:batchEmbedContents", json={
+    batch_embedded = client.post("/v1beta/tunedModels/my-tuned:batchEmbedContents", json={
         "requests": [
             {"content": {"parts": [{"text": "first tuned"}]}},
             {"content": {"parts": [{"text": "second tuned"}]}},
@@ -5598,9 +5740,9 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert len(batch_embedded.json()["embeddings"]) == 2
     assert len(batch_embedded.json()["embeddings"][0]["values"]) == 6
 
-    deleted_perm = client.delete(f"/v1/tunedModels/my_tuned/permissions/{perm_id}")
-    deleted_operation = client.delete(f"/v1/tunedModels/my_tuned/operations/{created_op_id}")
-    deleted_model = client.delete("/v1/tunedModels/my_tuned")
+    deleted_perm = client.delete(f"/v1/tunedModels/my-tuned/permissions/{perm_id}")
+    deleted_operation = client.delete(f"/v1/tunedModels/my-tuned/operations/{created_op_id}")
+    deleted_model = client.delete("/v1/tunedModels/my-tuned")
     assert deleted_perm.status_code == 200
     assert deleted_operation.status_code == 200
     assert deleted_model.status_code == 200
