@@ -831,7 +831,9 @@ Embeddings and batch operations:
   `{"embedContentRequest": {...}}`, and `providerOptions.google` /
   `provider_options.google` embedding config.
 - `asyncBatchEmbedContent` stores the deterministic batch embedding result as
-  an immediately completed local operation and batch resource.
+  an immediately completed local operation and batch resource. It accepts raw
+  `requests` plus SDK wrappers such as `embedContentBatch` /
+  `embed_content_batch`, including shared `config` embedding options.
 - `batchGenerateContent` runs requests synchronously through Antigravity and
   stores immediately completed `operations/*` and `batches/*` results with
   Gemini `BATCH_STATE_*` status values and `stats` counters. Inline batch

@@ -618,11 +618,28 @@ def test_gemini_async_batch_embed_and_batch_update(tmp_path, monkeypatch):
             {"content": {"parts": [{"text": "beta"}]}, "outputDimensionality": 8},
         ],
     })
+    wrapped_created = client.post("/v1/models/gemini-3-flash-agent:asyncBatchEmbedContent", json={
+        "embed_content_batch": {
+            "display_name": "wrapped embed job",
+            "requests": [
+                {"embed_content_request": {"content": {"parts": [{"text": "wrapped alpha"}]}}},
+                {"embed_content_request": {"content": {"parts": [{"text": "wrapped beta"}]}}},
+            ],
+        },
+        "config": {"output_dimensionality": "6"},
+        "priority": "HIGH",
+    })
 
     assert created.status_code == 200
     operation = created.json()
     assert operation["done"] is True
     assert operation["response"]["embeddings"][0]["values"]
+    assert wrapped_created.status_code == 200
+    wrapped_operation = wrapped_created.json()
+    assert wrapped_operation["metadata"]["batchResource"]["displayName"] == "wrapped embed job"
+    assert wrapped_operation["metadata"]["batchResource"]["priority"] == "HIGH"
+    assert len(wrapped_operation["response"]["embeddings"]) == 2
+    assert len(wrapped_operation["response"]["embeddings"][0]["values"]) == 6
 
     batch_name = operation["metadata"]["batch"]
     updated = client.patch(f"/v1beta/{batch_name}:updateEmbedContentBatch", json={"displayName": "renamed"})

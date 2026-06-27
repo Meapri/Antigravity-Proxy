@@ -2278,7 +2278,7 @@ def _gemini_batch_body(body: Any) -> Any:
     for key in ("batch", "generateContentBatch", "embedContentBatch"):
         if isinstance(body.get(key), dict):
             merged = dict(body[key])
-            for outer_key in ("model", "displayName", "inputConfig", "outputConfig", "requests", "priority", "updateMask"):
+            for outer_key in ("model", "displayName", "inputConfig", "outputConfig", "requests", "config", "priority", "updateMask"):
                 if outer_key in body and outer_key not in merged:
                     merged[outer_key] = body[outer_key]
             merged["_batchKind"] = "embed" if key == "embedContentBatch" else "generate"
@@ -8002,6 +8002,7 @@ async def gemini_async_batch_embed_content(model_name: str, request: Request):
 
 
 def _gemini_create_completed_embed_batch(model: dict[str, Any], body: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    body = _gemini_batch_body(_gemini_normalize_request(body))
     embedding_response = _gemini_batch_embedding_from_request(body)
     now = _gemini_now_iso()
     batch_name = "batches/batch_" + uuid.uuid4().hex
@@ -8044,6 +8045,7 @@ def _gemini_create_completed_embed_batch(model: dict[str, Any], body: dict[str, 
             "stats": stats,
             "batchStats": stats,
             "batch": batch_name,
+            "batchResource": batch,
         },
         "done": True,
         "response": response_payload,
@@ -8504,6 +8506,7 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
             "stats": stats,
             "batchStats": stats,
             "batch": batch_name,
+            "batchResource": batch,
         },
         "done": True,
         "response": response_payload,
