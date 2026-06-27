@@ -942,6 +942,10 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
             "response_modalities": "text",
             "media_resolution": "low",
             "audio_timestamp": "true",
+            "translation_config": {
+                "target_language_code": "ko",
+                "echo_target_language": "false",
+            },
             "response_mime_type": "application/json",
             "response_schema": {
                 "type": "object",
@@ -986,6 +990,10 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
     assert seen["request"]["generationConfig"]["responseModalities"] == ["TEXT"]
     assert seen["request"]["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_LOW"
     assert seen["request"]["generationConfig"]["audioTimestamp"] is True
+    assert seen["request"]["generationConfig"]["translationConfig"] == {
+        "targetLanguageCode": "ko",
+        "echoTargetLanguage": False,
+    }
     assert seen["request"]["generationConfig"]["responseMimeType"] == "application/json"
     schema = seen["request"]["generationConfig"]["responseSchema"]
     assert schema["type"] == "object"

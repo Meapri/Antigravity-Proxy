@@ -423,6 +423,9 @@ _GEMINI_KEY_ALIASES = {
     "media_resolution": "mediaResolution",
     "audio_timestamp": "audioTimestamp",
     "audioTimestamp": "audioTimestamp",
+    "translation_config": "translationConfig",
+    "target_language_code": "targetLanguageCode",
+    "echo_target_language": "echoTargetLanguage",
     "start_offset": "startOffset",
     "startOffset": "startOffset",
     "end_offset": "endOffset",
@@ -561,6 +564,7 @@ _GEMINI_GENERATION_CONFIG_KEYS = {
     "responseModalities",
     "mediaResolution",
     "audioTimestamp",
+    "translationConfig",
     "imageConfig",
     "speechConfig",
     "routingConfig",
@@ -715,6 +719,11 @@ def _gemini_normalize_generation_config(value: Any) -> Any:
         if "includeThoughts" in thinking:
             thinking["includeThoughts"] = _gemini_bool_value(thinking["includeThoughts"])
         out["thinkingConfig"] = thinking
+    if isinstance(out.get("translationConfig"), dict):
+        translation = _gemini_normalize_request(out["translationConfig"])
+        if "echoTargetLanguage" in translation:
+            translation["echoTargetLanguage"] = _gemini_bool_value(translation["echoTargetLanguage"])
+        out["translationConfig"] = translation
     return out
 
 

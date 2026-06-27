@@ -713,7 +713,8 @@ Generation config aliases include `responseSchema` / `response_schema`,
 `responseJsonSchema` / `response_json_schema`, `thinkingConfig` /
 `thinking_config`, `responseModalities` / `response_modalities`, and
 `enableEnhancedCivicAnswers` / `enable_enhanced_civic_answers`, plus
-`audioTimestamp` / `audio_timestamp`.
+`audioTimestamp` / `audio_timestamp` and `translationConfig` /
+`translation_config`.
 Response modality aliases such as `text`, `image`, and `audio` are normalized
 to Gemini REST enum values, and media resolution aliases such as `low`,
 `medium`, and `high` are normalized to `MEDIA_RESOLUTION_*` values.
