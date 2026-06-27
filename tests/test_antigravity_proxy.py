@@ -3800,6 +3800,20 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     assert config_created.json()["file"]["sizeBytes"] == "9"
     assert config_created.json()["file"]["state"] == "PROCESSING"
 
+    config_file_created = client.post("/v1beta/files", json={
+        "config": {
+            "mime_type": "text/plain",
+            "file": {
+                "display_name": "config-wrapper.txt",
+                "uri": "gs://bucket/config-wrapper.txt",
+            },
+        },
+    })
+    assert config_file_created.status_code == 200
+    assert config_file_created.json()["file"]["displayName"] == "config-wrapper.txt"
+    assert config_file_created.json()["file"]["mimeType"] == "text/plain"
+    assert config_file_created.json()["file"]["uri"] == "gs://bucket/config-wrapper.txt"
+
     hex_hash_created = client.post("/v1beta/files", json={
         "file": {
             "displayName": "hex-hash.txt",
@@ -3863,6 +3877,21 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     })
     assert video.status_code == 200
     assert video.json()["file"]["videoMetadata"]["videoDuration"] == "3s"
+
+    config_file_registered = client.post("/v1beta/files:register", json={
+        "config": {
+            "mime_type": "text/plain",
+            "state": "file_state_processing",
+            "file": {
+                "display_name": "registered-config-wrapper.txt",
+                "uri": "gs://bucket/registered-config-wrapper.txt",
+            },
+        },
+    })
+    assert config_file_registered.status_code == 200
+    assert config_file_registered.json()["file"]["displayName"] == "registered-config-wrapper.txt"
+    assert config_file_registered.json()["file"]["mimeType"] == "text/plain"
+    assert config_file_registered.json()["file"]["state"] == "PROCESSING"
 
     for idx in range(12):
         created = client.post("/v1beta/files:register", json={

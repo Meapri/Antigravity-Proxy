@@ -4302,11 +4302,17 @@ def _gemini_store_file(data: bytes, *, mime_type: str | None = None, display_nam
 
 def _gemini_file_metadata(body: dict[str, Any]) -> dict[str, Any]:
     normalized = _gemini_normalize_request(body)
-    file_meta = normalized.get("file") if isinstance(normalized.get("file"), dict) else normalized
+    config = normalized.get("config") if isinstance(normalized.get("config"), dict) else {}
+    if isinstance(normalized.get("file"), dict):
+        file_meta = normalized["file"]
+    elif isinstance(config.get("file"), dict):
+        file_meta = config["file"]
+    else:
+        file_meta = normalized
     if not isinstance(file_meta, dict):
         return {}
     merged = dict(file_meta)
-    config = normalized.get("config") if isinstance(normalized.get("config"), dict) else file_meta.get("config")
+    config = config if config else file_meta.get("config")
     if isinstance(config, dict):
         for key in ("displayName", "mimeType", "name", "uri", "downloadUri", "sizeBytes", "videoMetadata", "customMetadata", "state", "source", "expirationTime", "sha256Hash"):
             if key in config and key not in merged:

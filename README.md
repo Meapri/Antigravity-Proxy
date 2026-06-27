@@ -860,7 +860,9 @@ curl http://127.0.0.1:8765/v1beta/files \
 `files`; common `config` fields such as `mimeType`, `source`, and
 `customMetadata` are applied to each URI, while an optional `files` array can
 provide per-URI metadata such as `displayName` or `customMetadata`. The older
-proxy `{"file": ...}` form remains available as a compatibility alias. File
+proxy `{"file": ...}` form remains available as a compatibility alias, and
+SDK-style `{"config":{"file": ...}}` metadata is accepted for single-file
+registration and metadata-only creation. File
 `state` and `source` values are normalized to Gemini-style enum names such as
 `ACTIVE`, `FAILED`, `UPLOADED`, and `REGISTERED` across create, list, and get
 responses. Metadata-only registered files receive a deterministic base64
@@ -1153,8 +1155,8 @@ Notes:
   available. `POST /v1beta/files` supports official metadata-only File
   creation, the same Files API surface is also available under `/v1`, and
   `files:register` supports Gemini's `uris` array shape both top-level and
-  under `config`. `files.list` uses Gemini's default page size of 10 and
-  maximum page size of 100.
+  under `config`, plus single-file metadata under `config.file`. `files.list`
+  uses Gemini's default page size of 10 and maximum page size of 100.
 - Cached contents are stored locally under `data/gemini_cached_contents` by
   default; override with `ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR`.
   `cachedContents` is available under both `/v1` and `/v1beta`;
