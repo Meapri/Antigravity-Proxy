@@ -463,7 +463,10 @@ _GEMINI_KEY_ALIASES = {
     "event_types": "eventTypes",
     "subscribed_events": "subscribedEvents",
     "chunking_config": "chunkingConfig",
+    "embedding_model": "embeddingModel",
     "white_space_config": "whiteSpaceConfig",
+    "max_tokens_per_chunk": "maxTokensPerChunk",
+    "max_overlap_tokens": "maxOverlapTokens",
     "custom_metadata": "customMetadata",
     "permission": "permission",
     "grantee_type": "granteeType",
@@ -3835,6 +3838,35 @@ def _gemini_config_body(body: dict[str, Any]) -> dict[str, Any]:
     return _gemini_normalize_request(merged)
 
 
+def _gemini_fss_body(body: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(body, dict):
+        return body
+    for key in ("fileSearchStore", "file_search_store"):
+        wrapped = body.get(key)
+        if isinstance(wrapped, dict):
+            merged = _gemini_config_body(wrapped)
+            outer = _gemini_config_body({k: v for k, v in body.items() if k != key})
+            for outer_key in ("displayName", "embeddingModel", "chunkingConfig", "customMetadata"):
+                if outer_key in outer and outer_key not in merged:
+                    merged[outer_key] = outer[outer_key]
+            return _gemini_normalize_fss_body(merged)
+    return _gemini_normalize_fss_body(_gemini_config_body(body))
+
+
+def _gemini_normalize_fss_body(body: dict[str, Any]) -> dict[str, Any]:
+    body = _gemini_normalize_request(body)
+    chunking = body.get("chunkingConfig")
+    if isinstance(chunking, dict):
+        for config_key in ("whiteSpaceConfig", "sentenceConfig"):
+            config = chunking.get(config_key)
+            if isinstance(config, dict):
+                for key in ("maxTokensPerChunk", "maxOverlapTokens"):
+                    if key in config:
+                        config[key] = _gemini_int_value(config[key])
+        body["chunkingConfig"] = chunking
+    return body
+
+
 def _gemini_fss_resource(meta: dict[str, Any]) -> dict[str, Any]:
     documents = list((meta.get("documents") or {}).values())
     active_count = sum(1 for doc in documents if str(doc.get("state") or "ACTIVE").upper() == "ACTIVE")
@@ -3868,7 +3900,7 @@ def _gemini_document_resource(doc: dict[str, Any]) -> dict[str, Any]:
 
 
 def _gemini_create_fss(body: dict[str, Any]) -> dict[str, Any]:
-    body = _gemini_config_body(body)
+    body = _gemini_fss_body(body)
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     store_id = "fs_" + uuid.uuid4().hex
     meta = {

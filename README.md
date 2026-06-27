@@ -878,6 +878,10 @@ File search stores:
   compatibility layer under `data/gemini_file_search_stores`.
 - `fileSearchStores.create`, `importFile`, and `uploadToFileSearchStore` accept
   current SDK-style `config` wrappers as well as direct REST fields.
+- `fileSearchStores.create` also accepts `fileSearchStore` /
+  `file_search_store` resource wrappers and normalizes aliases such as
+  `embedding_model`, `chunking_config`, `white_space_config`,
+  `max_tokens_per_chunk`, and `max_overlap_tokens`.
 - File search store resources include Gemini-style document counters and
   `sizeBytes`; deleting a non-empty store requires `force=true`.
 - `importFile` imports files previously uploaded through the local Files API and

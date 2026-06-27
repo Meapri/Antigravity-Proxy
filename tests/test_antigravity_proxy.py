@@ -3048,6 +3048,26 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     assert created.json()["chunkingConfig"] == {"whiteSpaceConfig": {}}
     assert created.json()["customMetadata"][0]["key"] == "team"
 
+    wrapped_created = client.post("/v1beta/fileSearchStores", json={
+        "file_search_store": {
+            "display_name": "wrapped notes",
+            "embedding_model": "models/text-embedding-004",
+            "chunking_config": {
+                "white_space_config": {
+                    "max_tokens_per_chunk": "128",
+                    "max_overlap_tokens": "16",
+                }
+            },
+        },
+        "custom_metadata": [{"key": "wrapped", "string_value": "yes"}],
+    })
+    assert wrapped_created.status_code == 200
+    assert wrapped_created.json()["displayName"] == "wrapped notes"
+    assert wrapped_created.json()["embeddingModel"] == "models/text-embedding-004"
+    assert wrapped_created.json()["customMetadata"][0]["stringValue"] == "yes"
+    assert wrapped_created.json()["chunkingConfig"]["whiteSpaceConfig"]["maxTokensPerChunk"] == 128
+    assert wrapped_created.json()["chunkingConfig"]["whiteSpaceConfig"]["maxOverlapTokens"] == 16
+
     uploaded_file = client.post(
         "/upload/v1beta/files?uploadType=media&displayName=source.txt",
         content=b"source document",
