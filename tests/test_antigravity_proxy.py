@@ -2455,6 +2455,44 @@ def test_google_genai_sdk_vertex_batch_prediction_jobs(tmp_path, monkeypatch):
     assert app_client.get(f"/v1beta/batchPredictionJobs/{job.name.rsplit('/', 1)[-1]}").status_code == 404
 
 
+def test_google_genai_sdk_vertex_tuning_jobs(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_TUNING_JOBS_DIR", str(tmp_path / "tuning_jobs"))
+    app_client = TestClient(proxy.app)
+    sdk_http = httpx.Client(transport=_FastApiTransport(app_client))
+    sdk = genai.Client(
+        vertexai=True,
+        http_options=types.HttpOptions(
+            base_url="http://testserver/v1beta",
+            api_version=None,
+            base_url_resource_scope=types.ResourceScope.COLLECTION,
+            httpx_client=sdk_http,
+        ),
+    )
+
+    job = sdk.tunings.tune(
+        base_model="gemini-3-flash-agent",
+        training_dataset=types.TuningDataset(gcs_uri="gs://bucket/train.jsonl"),
+        config=types.CreateTuningJobConfig(
+            tuned_model_display_name="sdk tuning job",
+            description="local tuning compatibility",
+        ),
+    )
+    fetched = sdk.tunings.get(name=job.name)
+    listed = list(sdk.tunings.list(config={"page_size": 10}))
+    cancelled = sdk.tunings.cancel(name=job.name)
+
+    assert job.name.startswith("projects/local-project/locations/global/tuningJobs/")
+    assert job.state == types.JobState.JOB_STATE_SUCCEEDED
+    assert job.base_model == "models/gemini-3-flash-agent"
+    assert job.tuned_model.model.startswith("projects/local-project/locations/global/models/")
+    assert job.tuned_model_display_name == "sdk tuning job"
+    assert job.description == "local tuning compatibility"
+    assert job.supervised_tuning_spec.training_dataset_uri == "gs://bucket/train.jsonl"
+    assert fetched.name == job.name
+    assert {item.name for item in listed} == {job.name}
+    assert cancelled.sdk_http_response.headers["content-type"].startswith("application/json")
+
+
 def test_vertex_batch_prediction_jobs_project_scoped_rest(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
     client = TestClient(proxy.app)
@@ -2503,6 +2541,55 @@ def test_vertex_batch_prediction_jobs_project_scoped_rest(tmp_path, monkeypatch)
     assert [item["name"] for item in listed.json()["batchPredictionJobs"]] == [job["name"]]
     assert developer_batches.status_code == 200
     assert developer_batches.json()["batches"] == []
+    assert cancelled.status_code == 200
+    assert cancelled.json() == {}
+    assert deleted.status_code == 200
+    assert deleted.json()["done"] is True
+    assert missing.status_code == 404
+
+
+def test_vertex_tuning_jobs_project_scoped_rest(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_TUNING_JOBS_DIR", str(tmp_path / "tuning_jobs"))
+    client = TestClient(proxy.app)
+
+    created = client.post(
+        "/v1beta/projects/demo/locations/us-central1/tuningJobs",
+        json={
+            "baseModel": "publishers/google/models/gemini-3-flash-agent",
+            "description": "rest vertex tuning",
+            "tunedModelDisplayName": "rest tuned model",
+            "supervisedTuningSpec": {
+                "trainingDatasetUri": "gs://bucket/train.jsonl",
+            },
+            "labels": {"client": "test"},
+        },
+    )
+
+    assert created.status_code == 200
+    job = created.json()
+    assert job["name"].startswith("projects/demo/locations/us-central1/tuningJobs/")
+    assert job["state"] == "JOB_STATE_SUCCEEDED"
+    assert job["baseModel"] == "models/gemini-3-flash-agent"
+    assert job["tunedModel"]["model"].startswith("projects/demo/locations/us-central1/models/")
+    assert job["description"] == "rest vertex tuning"
+    assert job["tunedModelDisplayName"] == "rest tuned model"
+    assert job["supervisedTuningSpec"]["trainingDatasetUri"] == "gs://bucket/train.jsonl"
+    assert job["labels"] == {"client": "test"}
+
+    job_id = job["name"].rsplit("/", 1)[-1]
+    scoped_get = client.get(f"/v1beta/projects/demo/locations/us-central1/tuningJobs/{job_id}")
+    full_name_get = client.get(f"/v1beta/tuningJobs/{job['name']}")
+    listed = client.get("/v1beta/projects/demo/locations/us-central1/tuningJobs", params={"filter": 'displayName="rest tuned model"'})
+    cancelled = client.post(f"/v1beta/projects/demo/locations/us-central1/tuningJobs/{job_id}:cancel")
+    deleted = client.delete(f"/v1beta/projects/demo/locations/us-central1/tuningJobs/{job_id}")
+    missing = client.get(f"/v1beta/projects/demo/locations/us-central1/tuningJobs/{job_id}")
+
+    assert scoped_get.status_code == 200
+    assert scoped_get.json()["name"] == job["name"]
+    assert full_name_get.status_code == 200
+    assert full_name_get.json()["name"] == job["name"]
+    assert listed.status_code == 200
+    assert [item["name"] for item in listed.json()["tuningJobs"]] == [job["name"]]
     assert cancelled.status_code == 200
     assert cancelled.json() == {}
     assert deleted.status_code == 200

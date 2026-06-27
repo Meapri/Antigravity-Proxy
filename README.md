@@ -656,6 +656,26 @@ Implemented Gemini-compatible routes:
 - `PATCH /v1beta/tunedModels/{tuned_model}/permissions/{permission}`
 - `POST /v1beta/tunedModels/{tuned_model}/permissions/{permission}:transferOwnership`
 - `DELETE /v1beta/tunedModels/{tuned_model}/permissions/{permission}`
+- `POST /v1/tuningJobs`
+- `GET /v1/tuningJobs`
+- `GET /v1/tuningJobs/{tuning_job}`
+- `POST /v1/tuningJobs/{tuning_job}:cancel`
+- `DELETE /v1/tuningJobs/{tuning_job}`
+- `POST /v1/projects/{project}/locations/{location}/tuningJobs`
+- `GET /v1/projects/{project}/locations/{location}/tuningJobs`
+- `GET /v1/projects/{project}/locations/{location}/tuningJobs/{tuning_job}`
+- `POST /v1/projects/{project}/locations/{location}/tuningJobs/{tuning_job}:cancel`
+- `DELETE /v1/projects/{project}/locations/{location}/tuningJobs/{tuning_job}`
+- `POST /v1beta/tuningJobs`
+- `GET /v1beta/tuningJobs`
+- `GET /v1beta/tuningJobs/{tuning_job}`
+- `POST /v1beta/tuningJobs/{tuning_job}:cancel`
+- `DELETE /v1beta/tuningJobs/{tuning_job}`
+- `POST /v1beta/projects/{project}/locations/{location}/tuningJobs`
+- `GET /v1beta/projects/{project}/locations/{location}/tuningJobs`
+- `GET /v1beta/projects/{project}/locations/{location}/tuningJobs/{tuning_job}`
+- `POST /v1beta/projects/{project}/locations/{location}/tuningJobs/{tuning_job}:cancel`
+- `DELETE /v1beta/projects/{project}/locations/{location}/tuningJobs/{tuning_job}`
 
 Example:
 
@@ -1081,6 +1101,24 @@ Tuned models and permissions:
   in the `{permission}` path segment. Permission list routes support
   `pageSize` / `pageToken` and SDK `page_size` / `page_token`, default to 10
   items, and clamp oversized pages to 1000.
+
+Vertex tuning jobs:
+
+- Vertex-style `tuningJobs` are stored locally under
+  `data/gemini_tuning_jobs` by default; override with
+  `ANTIGRAVITY_GEMINI_TUNING_JOBS_DIR`.
+- The proxy supports collection and project-scoped paths such as
+  `POST /v1beta/tuningJobs` and
+  `POST /v1beta/projects/{project}/locations/{location}/tuningJobs`.
+- `google-genai` Vertex/Enterprise `client.tunings.tune`, `get`, `list`,
+  `cancel`, and direct REST delete are accepted. Create requests preserve
+  `baseModel`, `preTunedModel`, tuning specs, labels, description,
+  `tunedModelDisplayName`, output URI, encryption, evaluation, and service
+  account metadata, then return an immediately completed local `TuningJob`.
+- This is a compatibility shim, not a managed training service: it does not run
+  real Gemini/Vertex tuning or produce a newly trained upstream model. Use
+  `tunedModels` aliases when you need a locally named model that forwards to an
+  existing Antigravity base model.
 
 Generated files:
 

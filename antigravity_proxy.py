@@ -3264,6 +3264,79 @@ def _gemini_vertex_batch_job_id(name: str) -> str:
     return name.strip().strip("/").rsplit("/", 1)[-1]
 
 
+def _gemini_tuning_jobs_root() -> Path:
+    return Path(os.getenv("ANTIGRAVITY_GEMINI_TUNING_JOBS_DIR", "data/gemini_tuning_jobs")).expanduser()
+
+
+def _gemini_tuning_jobs_index_path() -> Path:
+    return _gemini_tuning_jobs_root() / "index.json"
+
+
+def _gemini_load_tuning_jobs_index() -> dict[str, dict[str, Any]]:
+    path = _gemini_tuning_jobs_index_path()
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        log.warning("Failed to read Gemini tuningJobs index; starting empty.")
+        return {}
+
+
+def _gemini_save_tuning_jobs_index(index: dict[str, dict[str, Any]]) -> None:
+    root = _gemini_tuning_jobs_root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = _gemini_tuning_jobs_index_path()
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _gemini_vertex_tuning_job_name(name: str, project: str | None = None, location: str | None = None) -> str:
+    key = name.strip().strip("/")
+    for prefix in ("v1beta/", "v1/"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+            break
+    if key.startswith("projects/") and "/tuningJobs/" in key:
+        return key
+    if key.startswith("tuningJobs/"):
+        job_id = key.rsplit("/", 1)[-1]
+    else:
+        job_id = key
+    project = project or "local-project"
+    location = location or "global"
+    return f"projects/{project}/locations/{location}/tuningJobs/{job_id}"
+
+
+def _gemini_vertex_tuning_job_id(name: str) -> str:
+    return name.strip().strip("/").rsplit("/", 1)[-1]
+
+
+def _gemini_store_tuning_job(job: dict[str, Any]) -> dict[str, Any]:
+    index = _gemini_load_tuning_jobs_index()
+    index[job["name"]] = job
+    _gemini_save_tuning_jobs_index(index)
+    return job
+
+
+def _gemini_get_vertex_tuning_job(name: str, project: str | None = None, location: str | None = None) -> dict[str, Any] | None:
+    full_name = _gemini_vertex_tuning_job_name(name, project, location)
+    index = _gemini_load_tuning_jobs_index()
+    job = index.get(full_name)
+    if job:
+        return job
+    requested_id = _gemini_vertex_tuning_job_id(full_name)
+    for candidate in index.values():
+        candidate_name = str(candidate.get("name") or "")
+        if "/tuningJobs/" in candidate_name and _gemini_vertex_tuning_job_id(candidate_name) == requested_id:
+            return candidate
+    return None
+
+
 def _gemini_batch_body(body: Any) -> Any:
     if not isinstance(body, dict):
         return body
@@ -6272,6 +6345,7 @@ def _is_gemini_http_path(path: str) -> bool:
         "generatedFiles",
         "interactions",
         "operations",
+        "tuningJobs",
         "tunedModels",
         "webhooks",
     )
@@ -10522,6 +10596,241 @@ def _gemini_create_vertex_batch_job_resource(
         if key in body and body[key] is not None:
             batch[key] = body[key]
     return _gemini_store_batch(batch)
+
+
+def _gemini_vertex_tuning_response(job: dict[str, Any]) -> dict[str, Any]:
+    keys = {
+        "name",
+        "state",
+        "error",
+        "createTime",
+        "startTime",
+        "endTime",
+        "updateTime",
+        "description",
+        "baseModel",
+        "tunedModel",
+        "preTunedModel",
+        "supervisedTuningSpec",
+        "preferenceOptimizationSpec",
+        "distillationSpec",
+        "reinforcementTuningSpec",
+        "tuningDataStats",
+        "encryptionSpec",
+        "evaluationConfig",
+        "customBaseModel",
+        "labels",
+        "outputUri",
+        "serviceAccount",
+        "tunedModelDisplayName",
+    }
+    return {key: job[key] for key in keys if key in job and job[key] is not None}
+
+
+def _gemini_vertex_tuning_matches_scope(job: dict[str, Any], project: str | None, location: str | None) -> bool:
+    name = str(job.get("name") or "")
+    if "/tuningJobs/" not in name:
+        return False
+    if project and not name.startswith(f"projects/{project}/"):
+        return False
+    if location and f"/locations/{location}/" not in name:
+        return False
+    return True
+
+
+def _gemini_tuning_filter_matches(job: dict[str, Any], filter_expr: str | None) -> bool:
+    if not filter_expr:
+        return True
+    expr = filter_expr.strip()
+    if not expr:
+        return True
+    match = re.fullmatch(r'(displayName|display_name|tunedModelDisplayName|description|state|baseModel|name)\s*=\s*"([^"]*)"', expr)
+    if not match:
+        return True
+    field, expected = match.groups()
+    aliases = {
+        "displayName": "tunedModelDisplayName",
+        "display_name": "tunedModelDisplayName",
+    }
+    value = job.get(aliases.get(field, field))
+    return str(value or "") == expected
+
+
+def _gemini_create_vertex_tuning_job_resource(
+    body: dict[str, Any],
+    *,
+    project: str | None = None,
+    location: str | None = None,
+) -> dict[str, Any]:
+    base_model_name = body.get("baseModel") or body.get("base_model")
+    pre_tuned_model = body.get("preTunedModel") or body.get("pre_tuned_model")
+    if not isinstance(base_model_name, str) or not base_model_name.strip():
+        if isinstance(pre_tuned_model, dict):
+            base_model_name = pre_tuned_model.get("baseModel") or pre_tuned_model.get("base_model")
+    if not isinstance(base_model_name, str) or not base_model_name.strip():
+        raise HTTPException(status_code=400, detail="tuningJobs.create requires baseModel.")
+    model = _resolve_gemini_model(base_model_name)
+    has_training_spec = any(
+        isinstance(body.get(key), dict)
+        for key in (
+            "supervisedTuningSpec",
+            "preferenceOptimizationSpec",
+            "distillationSpec",
+            "reinforcementTuningSpec",
+        )
+    )
+    if not has_training_spec:
+        raise HTTPException(status_code=400, detail="tuningJobs.create requires a tuning spec with a training dataset URI.")
+    now = _gemini_now_iso()
+    job_name = _gemini_vertex_tuning_job_name("tuning_" + uuid.uuid4().hex, project, location)
+    tuned_model_name = body.get("tunedModel")
+    if not isinstance(tuned_model_name, str) or not tuned_model_name.strip():
+        tuned_model_name = job_name.replace("/tuningJobs/", "/models/")
+    job = {
+        "name": job_name,
+        "state": "JOB_STATE_SUCCEEDED",
+        "createTime": now,
+        "startTime": now,
+        "updateTime": now,
+        "endTime": now,
+        "baseModel": _gemini_model_name(model),
+        "tunedModel": {
+            "model": tuned_model_name,
+            "endpoint": tuned_model_name,
+            "checkpoints": [],
+        },
+        "tunedModelDisplayName": body.get("tunedModelDisplayName") or body.get("displayName") or _gemini_vertex_tuning_job_id(job_name),
+        "description": body.get("description"),
+        "tuningDataStats": {
+            "supervisedTuningDataStats": {
+                "tuningDatasetExampleCount": "0",
+                "totalTuningCharacterCount": "0",
+            }
+        },
+        "metadata": {"api": "vertex", "resource": "tuningJobs", "localOnly": True},
+    }
+    for key in (
+        "preTunedModel",
+        "supervisedTuningSpec",
+        "preferenceOptimizationSpec",
+        "distillationSpec",
+        "reinforcementTuningSpec",
+        "encryptionSpec",
+        "evaluationConfig",
+        "customBaseModel",
+        "labels",
+        "outputUri",
+        "serviceAccount",
+    ):
+        if key in body and body[key] is not None:
+            job[key] = body[key]
+    return _gemini_store_tuning_job(job)
+
+
+@app.post("/v1/tuningJobs")
+@app.post("/v1beta/tuningJobs")
+@app.post("/v1/projects/{project}/locations/{location}/tuningJobs")
+@app.post("/v1beta/projects/{project}/locations/{location}/tuningJobs")
+async def gemini_vertex_create_tuning_job(
+    request: Request,
+    project: str | None = None,
+    location: str | None = None,
+):
+    """Vertex-compatible tuningJobs.create stored as local completed metadata."""
+    try:
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        job = _gemini_create_vertex_tuning_job_resource(body, project=project, location=location)
+        return _gemini_vertex_tuning_response(job)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Vertex tuningJobs create failed")
+        return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
+
+
+@app.get("/v1/tuningJobs")
+@app.get("/v1beta/tuningJobs")
+@app.get("/v1/projects/{project}/locations/{location}/tuningJobs")
+@app.get("/v1beta/projects/{project}/locations/{location}/tuningJobs")
+async def gemini_vertex_list_tuning_jobs(
+    request: Request,
+    project: str | None = None,
+    location: str | None = None,
+    filter: str | None = None,
+):
+    try:
+        pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
+    except HTTPException as exc:
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT")
+    jobs = [
+        job for job in _gemini_load_tuning_jobs_index().values()
+        if _gemini_vertex_tuning_matches_scope(job, project, location)
+        and _gemini_tuning_filter_matches(job, filter)
+    ]
+    jobs.sort(key=lambda item: item.get("name") or "")
+    start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
+    end = start + pageSize
+    return {
+        "tuningJobs": [_gemini_vertex_tuning_response(job) for job in jobs[start:end]],
+        "nextPageToken": str(end) if end < len(jobs) else "",
+    }
+
+
+@app.get("/v1/tuningJobs/{job_name:path}")
+@app.get("/v1beta/tuningJobs/{job_name:path}")
+@app.get("/v1/projects/{project}/locations/{location}/tuningJobs/{job_name:path}")
+@app.get("/v1beta/projects/{project}/locations/{location}/tuningJobs/{job_name:path}")
+async def gemini_vertex_get_tuning_job(
+    job_name: str,
+    project: str | None = None,
+    location: str | None = None,
+):
+    job = _gemini_get_vertex_tuning_job(job_name, project, location)
+    if not job:
+        return _gemini_error_response(f"TuningJob '{job_name}' not found.", status_code=404, status="NOT_FOUND")
+    return _gemini_vertex_tuning_response(job)
+
+
+@app.post("/v1/tuningJobs/{job_name:path}:cancel")
+@app.post("/v1beta/tuningJobs/{job_name:path}:cancel")
+@app.post("/v1/projects/{project}/locations/{location}/tuningJobs/{job_name:path}:cancel")
+@app.post("/v1beta/projects/{project}/locations/{location}/tuningJobs/{job_name:path}:cancel")
+async def gemini_vertex_cancel_tuning_job(
+    job_name: str,
+    project: str | None = None,
+    location: str | None = None,
+):
+    job = _gemini_get_vertex_tuning_job(job_name, project, location)
+    if not job:
+        return _gemini_error_response(f"TuningJob '{job_name}' not found.", status_code=404, status="NOT_FOUND")
+    if job.get("state") not in {"JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED", "JOB_STATE_CANCELLED"}:
+        job["state"] = "JOB_STATE_CANCELLED"
+        now = _gemini_now_iso()
+        job["updateTime"] = now
+        job["endTime"] = now
+        _gemini_store_tuning_job(job)
+    return JSONResponse({})
+
+
+@app.delete("/v1/tuningJobs/{job_name:path}")
+@app.delete("/v1beta/tuningJobs/{job_name:path}")
+@app.delete("/v1/projects/{project}/locations/{location}/tuningJobs/{job_name:path}")
+@app.delete("/v1beta/projects/{project}/locations/{location}/tuningJobs/{job_name:path}")
+async def gemini_vertex_delete_tuning_job(
+    job_name: str,
+    project: str | None = None,
+    location: str | None = None,
+):
+    job = _gemini_get_vertex_tuning_job(job_name, project, location)
+    if not job:
+        return _gemini_error_response(f"TuningJob '{job_name}' not found.", status_code=404, status="NOT_FOUND")
+    index = _gemini_load_tuning_jobs_index()
+    index.pop(str(job["name"]), None)
+    _gemini_save_tuning_jobs_index(index)
+    return JSONResponse({"name": job["name"], "done": True})
 
 
 @app.post("/v1/batchPredictionJobs")
