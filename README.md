@@ -750,7 +750,8 @@ provide per-URI metadata such as `displayName` or `customMetadata`. The older
 proxy `{"file": ...}` form remains available as a compatibility alias. File
 `state` and `source` values are normalized to Gemini-style enum names such as
 `ACTIVE`, `FAILED`, `UPLOADED`, and `REGISTERED` across create, list, and get
-responses.
+responses. Metadata-only registered files receive a deterministic base64
+`sha256Hash` when one is not supplied.
 
 Then pass the returned `file.uri` in `fileData.fileUri`:
 

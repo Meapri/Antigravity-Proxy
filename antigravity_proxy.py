@@ -2941,6 +2941,28 @@ def _gemini_file_expiration_iso(now: int) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + 48 * 60 * 60))
 
 
+def _gemini_registered_file_hash(file_meta: dict[str, Any], uri: str) -> str:
+    explicit = file_meta.get("sha256Hash") or file_meta.get("sha256_hash")
+    if explicit:
+        value = str(explicit)
+        if len(value) == 64 and all(ch in "0123456789abcdefABCDEF" for ch in value):
+            try:
+                return base64.b64encode(bytes.fromhex(value)).decode("ascii")
+            except ValueError:
+                pass
+        return value
+    seed = json.dumps(
+        {
+            "uri": uri,
+            "mimeType": file_meta.get("mimeType") or file_meta.get("mime_type") or "application/octet-stream",
+            "sizeBytes": file_meta.get("sizeBytes") or file_meta.get("size_bytes") or 0,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    ).encode("utf-8")
+    return base64.b64encode(hashlib.sha256(seed).digest()).decode("ascii")
+
+
 def _gemini_store_file(data: bytes, *, mime_type: str | None = None, display_name: str | None = None) -> dict[str, Any]:
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
@@ -3015,7 +3037,7 @@ def _gemini_register_file(body: dict[str, Any]) -> dict[str, Any]:
         "createTimeIso": iso,
         "updateTimeIso": iso,
         "expirationTimeIso": file_meta.get("expirationTime") or file_meta.get("expiration_time"),
-        "sha256Hash": file_meta.get("sha256Hash") or file_meta.get("sha256_hash") or "",
+        "sha256Hash": _gemini_registered_file_hash(file_meta, uri),
         "uri": uri,
         "downloadUri": file_meta.get("downloadUri") or file_meta.get("download_uri") or uri,
         "state": _gemini_file_state(file_meta.get("state")),

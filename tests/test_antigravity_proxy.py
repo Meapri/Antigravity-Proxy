@@ -2426,6 +2426,7 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     assert file_resource["source"] == "REGISTERED"
     assert file_resource["state"] == "ACTIVE"
     assert file_resource["updateTime"]
+    assert base64.b64decode(file_resource["sha256Hash"])
 
     official_created = client.post("/v1beta/files", json={
         "file": {
@@ -2456,6 +2457,16 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     assert config_created.json()["file"]["mimeType"] == "text/markdown"
     assert config_created.json()["file"]["sizeBytes"] == "9"
     assert config_created.json()["file"]["state"] == "PROCESSING"
+
+    hex_hash_created = client.post("/v1beta/files", json={
+        "file": {
+            "displayName": "hex-hash.txt",
+            "uri": "gs://bucket/hex-hash.txt",
+            "sha256_hash": "00" * 32,
+        },
+    })
+    assert hex_hash_created.status_code == 200
+    assert hex_hash_created.json()["file"]["sha256Hash"] == "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
     official_registered = client.post("/v1beta/files:register", json={
         "uris": ["gs://bucket/one.txt", "gs://bucket/two.txt"],
