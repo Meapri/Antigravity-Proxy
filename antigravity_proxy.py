@@ -793,13 +793,19 @@ def _gemini_normalize_function_calling_config(value: Any) -> Any:
         normalized = mode.strip().upper().replace("-", "_")
         if normalized.startswith("MODE_"):
             normalized = normalized[len("MODE_"):]
+        if normalized in {"REQUIRED", "FORCED", "FORCE"}:
+            normalized = "ANY"
         if normalized in {"AUTO", "ANY", "NONE", "VALIDATED", "UNSPECIFIED"}:
             out["mode"] = "MODE_UNSPECIFIED" if normalized == "UNSPECIFIED" else normalized
     names = out.get("allowedFunctionNames")
+    if names is None and "allowed_function_names" in out:
+        names = out.pop("allowed_function_names")
     if isinstance(names, str):
         out["allowedFunctionNames"] = [names]
     elif isinstance(names, tuple):
         out["allowedFunctionNames"] = list(names)
+    elif isinstance(names, list):
+        out["allowedFunctionNames"] = names
     return out
 
 
@@ -1200,6 +1206,9 @@ def _gemini_normalize_tools_value(value: Any) -> list[dict[str, Any]]:
 
 def _gemini_normalize_generate_body(body: dict[str, Any]) -> dict[str, Any]:
     out = dict(body)
+    tool_choice = out.pop("toolChoice", None)
+    if tool_choice is None:
+        tool_choice = out.pop("tool_choice", None)
     function_declarations = out.pop("functionDeclarations", None)
     if function_declarations is None:
         function_declarations = out.pop("functionDeclaration", None)
@@ -1232,6 +1241,12 @@ def _gemini_normalize_generate_body(body: dict[str, Any]) -> dict[str, Any]:
             out.pop("safetySettings", None)
     if "toolConfig" in out:
         out["toolConfig"] = _gemini_normalize_tool_config(out.get("toolConfig"))
+    if tool_choice is not None:
+        choice_config = _tool_choice_to_gemini(tool_choice, out.get("tools") if isinstance(out.get("tools"), list) else None)
+        if choice_config:
+            existing_tool_config = out.get("toolConfig") if isinstance(out.get("toolConfig"), dict) else {}
+            merged_tool_config = {**existing_tool_config, **choice_config}
+            out["toolConfig"] = _gemini_normalize_tool_config(merged_tool_config)
     if "store" in out:
         out["store"] = _gemini_bool_value(out.get("store"))
     if "serviceTier" in out:
@@ -6181,6 +6196,15 @@ def _tool_names(tools: list[dict[str, Any]] | None) -> set[str]:
     for tool in tools or []:
         if not isinstance(tool, dict):
             continue
+        declarations = tool.get("functionDeclarations")
+        if declarations is None:
+            declarations = tool.get("functionDeclaration")
+        if isinstance(declarations, dict):
+            declarations = [declarations]
+        if isinstance(declarations, list):
+            for declaration in declarations:
+                if isinstance(declaration, dict) and declaration.get("name"):
+                    names.add(str(declaration["name"]))
         fn = tool.get("function") if tool.get("type") == "function" else tool
         if isinstance(fn, dict) and fn.get("name"):
             names.add(str(fn["name"]))

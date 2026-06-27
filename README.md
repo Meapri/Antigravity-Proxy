@@ -661,7 +661,10 @@ legacy `googleSearchRetrieval` are forwarded as `google_search`, and local
 `codeExecution` are recognized but return
 `UNIMPLEMENTED` because the current Antigravity backend does not expose those
 hosted tools. `toolConfig.functionCallingConfig.mode` and
-`allowedFunctionNames` are normalized from common SDK spellings.
+`allowedFunctionNames` are normalized from common SDK spellings. Function
+calling mode aliases such as `required`, `forced`, and `force` are treated as
+Gemini `ANY`, and OpenAI-style `tool_choice` / `toolChoice` on Gemini requests
+is folded into `toolConfig.functionCallingConfig` for custom function tools.
 `tools` may be a single object or a list, and top-level
 `functionDeclarations` / `function_declarations` and singular
 `functionDeclaration` / `function_declaration` are wrapped into Gemini tool

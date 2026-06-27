@@ -997,6 +997,67 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
     assert json_schema["propertyOrdering"] == ["score"]
 
 
+def test_gemini_generate_content_maps_tool_choice_to_tool_config(monkeypatch):
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "weather?",
+        "tools": [{
+            "function_declaration": {
+                "name": "get_weather",
+                "parameters_json_schema": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                },
+            },
+        }],
+        "tool_choice": {"type": "function", "function": {"name": "get_weather"}},
+    })
+
+    assert response.status_code == 200
+    assert seen["request"]["tools"][0]["functionDeclarations"][0]["name"] == "get_weather"
+    assert seen["request"]["toolConfig"]["functionCallingConfig"] == {
+        "mode": "ANY",
+        "allowedFunctionNames": ["get_weather"],
+    }
+
+
+def test_gemini_function_calling_config_accepts_required_alias(monkeypatch):
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "weather?",
+        "tool_config": {
+            "function_calling_config": {
+                "mode": "required",
+                "allowed_function_names": "get_weather",
+            },
+        },
+    })
+
+    assert response.status_code == 200
+    assert seen["request"]["toolConfig"]["functionCallingConfig"] == {
+        "mode": "ANY",
+        "allowedFunctionNames": ["get_weather"],
+    }
+
+
 def test_gemini_generation_config_accepts_nested_response_format(monkeypatch):
     seen = {}
 
