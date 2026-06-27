@@ -836,9 +836,12 @@ Embeddings and batch operations:
 - `batches.create` accepts inline `requests` plus `model` and returns a
   completed Gemini operation named `batches/*`; the local batch resource is
   preserved under `metadata.batchResource`. It also accepts common SDK wrapper bodies
-  such as `{"batch": {...}}`, `{"generateContentBatch": {...}}`, and
-  `{"embedContentBatch": {...}}`; embed wrappers are completed with local
-  deterministic embeddings, and embed request items may use
+  such as `{"batch": {...}}`, `{"generateContentBatch": {...}}`,
+  `{"generate_content_batch": {...}}`, `{"embedContentBatch": {...}}`, and
+  `{"embed_content_batch": {...}}`. Top-level `inputConfig` / `input_config`,
+  `outputConfig` / `output_config`, and `priority` fields are preserved on the
+  stored batch resource. Embed wrappers are completed with local deterministic
+  embeddings, and embed request items may use
   `{"request": {...}}` / `{"embedContentRequest": {...}}`. It is intended for
   Gemini SDK/REST management compatibility; it does not run true asynchronous
   Batch Mode jobs.

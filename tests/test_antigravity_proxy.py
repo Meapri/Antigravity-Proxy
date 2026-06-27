@@ -1537,6 +1537,28 @@ def test_gemini_batch_wrapped_request_bodies(tmp_path, monkeypatch):
             }],
         }
     })
+    snake_wrapped = client.post("/v1beta/batches", json={
+        "generate_content_batch": {
+            "model": "models/gemini-3-flash-agent",
+            "display_name": "snake wrapped batch",
+            "requests": [{"contents": [{"role": "user", "parts": [{"text": "snake"}]}]}],
+        },
+        "input_config": {"instances_format": "jsonl"},
+        "output_config": {"predictions_format": "jsonl"},
+        "priority": "HIGH",
+    })
+    snake_embedded = client.post("/v1beta/batches", json={
+        "embed_content_batch": {
+            "model": "models/gemini-3-flash-agent",
+            "display_name": "snake wrapped embed",
+            "requests": [{
+                "embed_content_request": {
+                    "content": {"parts": [{"text": "snake embed"}]},
+                },
+            }],
+            "config": {"output_dimensionality": 5},
+        },
+    })
     wrong_method = client.post("/v1beta/models/gemini-3-flash-agent:batchGenerateContent", json={
         "embedContentBatch": {
             "requests": [{"content": {"parts": [{"text": "wrong"}]}}],
@@ -1561,6 +1583,15 @@ def test_gemini_batch_wrapped_request_bodies(tmp_path, monkeypatch):
     assert len(embedded.json()["response"]["embeddings"][0]["values"]) == 8
     assert embedded_request_wrapped.status_code == 200
     assert len(embedded_request_wrapped.json()["response"]["embeddings"][0]["values"]) == 6
+    assert snake_wrapped.status_code == 200
+    assert snake_wrapped.json()["metadata"]["batchResource"]["displayName"] == "snake wrapped batch"
+    assert snake_wrapped.json()["metadata"]["batchResource"]["priority"] == "HIGH"
+    assert snake_wrapped.json()["metadata"]["batchResource"]["inputConfig"]["instancesFormat"] == "jsonl"
+    assert snake_wrapped.json()["metadata"]["batchResource"]["outputConfig"]["predictionsFormat"] == "jsonl"
+    assert snake_wrapped.json()["response"]["responses"][0]["candidates"][0]["content"]["parts"][0]["text"] == "snake"
+    assert snake_embedded.status_code == 200
+    assert snake_embedded.json()["metadata"]["batchResource"]["displayName"] == "snake wrapped embed"
+    assert len(snake_embedded.json()["response"]["embeddings"][0]["values"]) == 5
     assert wrong_method.status_code == 400
 
 

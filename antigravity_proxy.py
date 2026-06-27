@@ -448,6 +448,12 @@ _GEMINI_KEY_ALIASES = {
     "chunkId": "chunkId",
     "service_tier": "serviceTier",
     "serviceTier": "serviceTier",
+    "generate_content_batch": "generateContentBatch",
+    "embed_content_batch": "embedContentBatch",
+    "input_config": "inputConfig",
+    "output_config": "outputConfig",
+    "instances_format": "instancesFormat",
+    "predictions_format": "predictionsFormat",
     "epoch_count": "epochCount",
     "batch_size": "batchSize",
     "target_uri": "targetUri",
@@ -2234,7 +2240,7 @@ def _gemini_batch_body(body: Any) -> Any:
     for key in ("batch", "generateContentBatch", "embedContentBatch"):
         if isinstance(body.get(key), dict):
             merged = dict(body[key])
-            for outer_key in ("model", "displayName", "inputConfig", "outputConfig", "requests", "updateMask"):
+            for outer_key in ("model", "displayName", "inputConfig", "outputConfig", "requests", "priority", "updateMask"):
                 if outer_key in body and outer_key not in merged:
                     merged[outer_key] = body[outer_key]
             merged["_batchKind"] = "embed" if key == "embedContentBatch" else "generate"
@@ -2281,6 +2287,14 @@ def _gemini_batch_update_fields(update_mask: str | None, body: dict[str, Any]) -
             detail="batch update supports updateMask fields: displayName, priority.",
         )
     return fields
+
+
+def _gemini_batch_optional_fields(body: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: body[key]
+        for key in ("inputConfig", "outputConfig", "priority")
+        if key in body and body[key] is not None
+    }
 
 
 def _gemini_store_batch(batch: dict[str, Any]) -> dict[str, Any]:
@@ -7929,6 +7943,7 @@ def _gemini_create_completed_embed_batch(model: dict[str, Any], body: dict[str, 
         "batchStats": stats,
         "operation": operation_name,
         "response": response_payload,
+        **_gemini_batch_optional_fields(body),
         "metadata": {
             "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.AsyncBatchEmbedContentMetadata",
             "model": model_resource,
@@ -8374,6 +8389,7 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
         "batchStats": stats,
         "operation": operation_name,
         "response": response_payload,
+        **_gemini_batch_optional_fields(body),
         "metadata": {
             "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.BatchGenerateContentMetadata",
             "model": model_resource,
