@@ -1609,4 +1609,6 @@ python scripts/update_gemini_discovery_fixture.py --check
 The test suite avoids real upstream calls for proxy behavior. The discovery
 check fetches Google's Gemini v1beta discovery document and fails when the
 committed route fixture is stale, so compatibility drift is visible before a
-release.
+release. The unit suite also pins the installed `google-genai` SDK surface and
+maps each public helper to an explicit smoke test, making SDK drift visible
+when upgrading the dependency.

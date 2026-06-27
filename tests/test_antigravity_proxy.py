@@ -1,5 +1,7 @@
 import asyncio
 import base64
+import importlib.metadata
+import inspect
 import json
 import io
 import warnings
@@ -24,6 +26,88 @@ class StaticCredentials(credentials.Credentials):
 
 
 GEMINI_V1BETA_DISCOVERY_REVISION = "20260626"
+
+GOOGLE_GENAI_SDK_VERSION = "2.10.0"
+
+GOOGLE_GENAI_SDK_METHODS_2_10_0 = {
+    "agents": ("create", "delete", "do_request", "get", "list"),
+    "auth_tokens": ("create",),
+    "batches": ("cancel", "create", "create_embeddings", "delete", "get", "list"),
+    "file_search_stores": ("create", "delete", "download_media", "get", "import_file", "list", "upload_to_file_search_store"),
+    "files": ("delete", "download", "get", "list", "register_files", "upload"),
+    "interactions": ("cancel", "create", "delete", "do_request", "get"),
+    "models": (
+        "compute_tokens",
+        "count_tokens",
+        "delete",
+        "edit_image",
+        "embed_content",
+        "generate_content",
+        "generate_content_stream",
+        "generate_images",
+        "generate_videos",
+        "get",
+        "list",
+        "recontext_image",
+        "segment_image",
+        "update",
+        "upscale_image",
+    ),
+    "tunings": ("cancel", "get", "list", "tune", "validate_reward"),
+}
+
+GOOGLE_GENAI_SDK_SMOKE_COVERAGE = {
+    "agents.create": "test_gemini_agents_crud_and_interaction_binding",
+    "agents.delete": "test_gemini_agents_crud_and_interaction_binding",
+    "agents.do_request": "test_gemini_agents_crud_and_interaction_binding",
+    "agents.get": "test_gemini_agents_crud_and_interaction_binding",
+    "agents.list": "test_gemini_agents_crud_and_interaction_binding",
+    "auth_tokens.create": "test_google_genai_sdk_auth_tokens_create_and_live_access",
+    "batches.cancel": "test_google_genai_sdk_developer_batch_create_from_uploaded_file",
+    "batches.create": "test_google_genai_sdk_vertex_batch_prediction_jobs",
+    "batches.create_embeddings": "test_google_genai_sdk_developer_embeddings_batch_with_standard_model",
+    "batches.delete": "test_google_genai_sdk_vertex_batch_prediction_jobs",
+    "batches.get": "test_google_genai_sdk_vertex_batch_prediction_jobs",
+    "batches.list": "test_google_genai_sdk_vertex_batch_prediction_jobs",
+    "file_search_stores.create": "test_google_genai_sdk_file_search_store_resumable_upload",
+    "file_search_stores.delete": "test_google_genai_sdk_file_search_store_import_file_response",
+    "file_search_stores.download_media": "test_google_genai_sdk_file_search_store_import_file_response",
+    "file_search_stores.get": "test_google_genai_sdk_file_search_store_resumable_upload",
+    "file_search_stores.import_file": "test_google_genai_sdk_file_search_store_import_file_response",
+    "file_search_stores.list": "test_google_genai_sdk_file_search_store_resumable_upload",
+    "file_search_stores.upload_to_file_search_store": "test_google_genai_sdk_file_search_store_resumable_upload",
+    "files.delete": "test_google_genai_sdk_developer_files_upload_register_delete_and_models_filter",
+    "files.download": "test_google_genai_sdk_developer_files_upload_register_delete_and_models_filter",
+    "files.get": "test_google_genai_sdk_developer_files_upload_register_delete_and_models_filter",
+    "files.list": "test_google_genai_sdk_developer_files_upload_register_delete_and_models_filter",
+    "files.register_files": "test_google_genai_sdk_developer_files_upload_register_delete_and_models_filter",
+    "files.upload": "test_google_genai_sdk_developer_files_upload_register_delete_and_models_filter",
+    "interactions.cancel": "test_gemini_interactions_cancel_accepts_rest_and_colon_paths",
+    "interactions.create": "test_google_genai_sdk_interactions_create_get_delete_with_double_slash_path",
+    "interactions.delete": "test_google_genai_sdk_interactions_create_get_delete_with_double_slash_path",
+    "interactions.do_request": "test_gemini_interactions_v1_aliases",
+    "interactions.get": "test_google_genai_sdk_interactions_create_get_delete_with_double_slash_path",
+    "models.compute_tokens": "test_gemini_compute_tokens_accepts_wrappers_and_media",
+    "models.count_tokens": "test_gemini_models_and_count_tokens",
+    "models.delete": "test_google_genai_sdk_models_update_delete_tuned_model",
+    "models.edit_image": "test_google_genai_sdk_vertex_image_helper_methods",
+    "models.embed_content": "test_google_genai_sdk_vertex_embed_content_standard_models_via_predict",
+    "models.generate_content": "test_google_genai_sdk_vertex_collection_base_url",
+    "models.generate_content_stream": "test_google_genai_sdk_vertex_collection_base_url",
+    "models.generate_images": "test_google_genai_sdk_vertex_image_helper_methods",
+    "models.generate_videos": "test_google_genai_sdk_generate_videos_custom_base_url_paths",
+    "models.get": "test_google_genai_sdk_vertex_tuning_jobs",
+    "models.list": "test_google_genai_sdk_developer_files_upload_register_delete_and_models_filter",
+    "models.recontext_image": "test_google_genai_sdk_vertex_image_helper_methods",
+    "models.segment_image": "test_google_genai_sdk_vertex_image_helper_methods",
+    "models.update": "test_google_genai_sdk_models_update_delete_tuned_model",
+    "models.upscale_image": "test_google_genai_sdk_vertex_image_helper_methods",
+    "tunings.cancel": "test_google_genai_sdk_developer_tuning_cancel_tuned_model_name",
+    "tunings.get": "test_google_genai_sdk_vertex_tuning_jobs",
+    "tunings.list": "test_google_genai_sdk_vertex_tuning_jobs",
+    "tunings.tune": "test_google_genai_sdk_vertex_tuning_jobs",
+    "tunings.validate_reward": "test_google_genai_sdk_vertex_validate_reward",
+}
 
 GEMINI_V1BETA_DISCOVERY_ROUTES_20260626 = (
     ("DELETE", "v1beta/batches/{batchesId}"),
@@ -136,6 +220,46 @@ def _matched_route_paths(method, path):
         for route in proxy.app.routes
         if hasattr(route, "matches") and route.matches(scope)[0] is Match.FULL
     ]
+
+
+def _google_genai_sdk_methods():
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        client = genai.Client(api_key="test-key", http_options={"base_url": "http://testserver/v1beta"})
+        methods = {}
+        for group in GOOGLE_GENAI_SDK_METHODS_2_10_0:
+            resource = getattr(client, group)
+            methods[group] = tuple(
+                sorted(
+                    name
+                    for name in dir(resource)
+                    if not name.startswith("_") and callable(getattr(resource, name))
+                )
+            )
+        return methods
+
+
+def test_google_genai_sdk_2_10_0_surface_has_explicit_smoke_coverage():
+    assert importlib.metadata.version("google-genai") == GOOGLE_GENAI_SDK_VERSION
+    assert _google_genai_sdk_methods() == GOOGLE_GENAI_SDK_METHODS_2_10_0
+    test_names = {
+        name
+        for name, obj in globals().items()
+        if name.startswith("test_") and inspect.isfunction(obj)
+    }
+    expected = {
+        f"{group}.{method}"
+        for group, methods in GOOGLE_GENAI_SDK_METHODS_2_10_0.items()
+        for method in methods
+    }
+
+    assert set(GOOGLE_GENAI_SDK_SMOKE_COVERAGE) == expected
+    missing_tests = {
+        sdk_method: test_name
+        for sdk_method, test_name in GOOGLE_GENAI_SDK_SMOKE_COVERAGE.items()
+        if test_name not in test_names
+    }
+    assert missing_tests == {}
 
 
 def test_gemini_v1beta_discovery_20260626_flatpaths_match_fastapi_routes():
