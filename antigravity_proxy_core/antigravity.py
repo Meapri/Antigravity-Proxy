@@ -27,9 +27,9 @@ ANTIGRAVITY_VERSION = "2.0.1"
 GEMINI_CLI_USER_AGENT = "google-api-nodejs-client/9.15.1 (gzip)"
 GEMINI_X_GOOG_API_CLIENT = "gl-node/24.0.0"
 GROUNDING_HINT = (
-    "Google Search grounding is enabled for every Rizi Kakao reply. "
+    "Google Search grounding is enabled for every Antigravity Proxy reply. "
     "Use grounded search results for current facts, verify claims when evidence is available, "
-    "separate confirmed facts from inference, and include short source URLs only when they help the Kakao reply."
+    "separate confirmed facts from inference, and include short source URLs only when they help the reply."
 )
 GROUNDING_RETRY_HINT = (
     "\n\n[Google Search grounding 재확인]\n"
@@ -443,10 +443,10 @@ class AntigravityClient:
             mime_type=mimetypes.guess_type(str(image_path))[0] or "image/jpeg",
             prompt=prompt
             or (
-                "이 카카오톡 첨부 이미지를 한국어로 자세히 분석해. "
-                "보이는 UI/로고/사람/사물/장소/상황과 읽을 수 있는 텍스트를 OCR처럼 최대한 옮기고, "
-                "화면 구조와 핵심 내용을 4~8문장으로 설명해. "
-                "추측하지 말고 보이는 내용과 불확실한 부분을 구분해."
+                "Analyze this shared image in Korean. "
+                "Describe visible UI, logos, people, objects, places, situations, and readable text as accurately as possible. "
+                "Summarize the screen structure and key contents in 4 to 8 sentences. "
+                "Do not guess; clearly separate visible facts from uncertain parts."
             ),
             max_bytes=8 * 1024 * 1024,
             model="gemini-3.5-flash-high",
@@ -562,9 +562,9 @@ class AntigravityClient:
         if not project_id:
             raise RuntimeError("Could not resolve Antigravity project id.")
         system = (
-            "너는 카카오톡에서 공유된 웹 링크를 분석하는 리지의 내부 분석기야. "
-            "직접 확인한 페이지 텍스트와 Google Search grounding을 함께 사용하고, "
-            "확인한 사실과 추정을 구분해서 한국어로 간결하게 정리해."
+            "You are Antigravity Proxy's internal web link analyzer. "
+            "Use the directly fetched page text together with Google Search grounding, "
+            "then answer concisely in Korean while separating confirmed facts from inference."
         )
         inner = self._build_gemini_request(system=system, prompt=prompt, memories=[])
         inner["generationConfig"]["temperature"] = 0.25
