@@ -811,7 +811,9 @@ curl http://127.0.0.1:8765/v1beta/cachedContents \
   }'
 ```
 
-Then pass the returned `name` as `cachedContent` in `generateContent`. The proxy
+Then pass the returned `name` as `cachedContent` in `generateContent`. SDK-style
+resource objects such as `{"cachedContent": {"name": "cachedContents/..."}}`
+are also accepted by `generateContent` and `countTokens`. The proxy
 merges local cached content into the outgoing Antigravity request because the
 upstream internal endpoint does not expose public Gemini cache objects.
 Create and patch calls also accept SDK wrapper bodies like

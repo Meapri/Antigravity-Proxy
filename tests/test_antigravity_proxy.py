@@ -319,15 +319,23 @@ def test_gemini_count_tokens_applies_generate_content_request_cache(tmp_path, mo
             "processing_options": {"media_resolution": "MEDIA_RESOLUTION_LOW"},
         }
     })
+    counted_resource_object = client.post("/v1beta/models/gemini-3-flash-agent:countTokens", json={
+        "generateContentRequest": {
+            "cachedContent": {"name": cache_name},
+            "contents": "new prompt",
+        }
+    })
 
     assert uncached.status_code == 200
     assert counted.status_code == 200
     assert counted_request_wrapper.status_code == 200
+    assert counted_resource_object.status_code == 200
     assert counted.json()["totalTokens"] > uncached.json()["totalTokens"]
     assert counted.json()["cachedContentTokenCount"] > 0
     assert counted.json()["cacheTokensDetails"][0]["tokenCount"] == counted.json()["cachedContentTokenCount"]
     assert counted_request_wrapper.json()["cachedContentTokenCount"] == counted.json()["cachedContentTokenCount"]
     assert counted_request_wrapper.json()["totalTokens"] > uncached.json()["totalTokens"]
+    assert counted_resource_object.json()["cachedContentTokenCount"] == counted.json()["cachedContentTokenCount"]
 
 
 def test_gemini_video_model_and_generate_videos_operation(tmp_path, monkeypatch):
@@ -2975,6 +2983,17 @@ def test_gemini_cached_contents_merge_into_generate_request(tmp_path, monkeypatc
     assert seen["request"]["systemInstruction"]["parts"][0]["text"] == "cached system"
     assert seen["request"]["contents"][0]["parts"][0]["text"] == "cached context"
     assert seen["request"]["contents"][1]["parts"][0]["text"] == "new prompt"
+    assert "cachedContent" not in seen["request"]
+
+    resource_response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "cachedContent": {"name": cache_name},
+        "contents": [{"role": "user", "parts": [{"text": "resource prompt"}]}],
+    })
+
+    assert resource_response.status_code == 200
+    assert seen["request"]["systemInstruction"]["parts"][0]["text"] == "cached system"
+    assert seen["request"]["contents"][0]["parts"][0]["text"] == "cached context"
+    assert seen["request"]["contents"][1]["parts"][0]["text"] == "resource prompt"
     assert "cachedContent" not in seen["request"]
 
     wrapped_response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={

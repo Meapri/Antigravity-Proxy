@@ -1292,10 +1292,10 @@ def _gemini_cached_content_tokens(body: dict[str, Any]) -> int:
     payload = _gemini_generate_request_payload(body)
     if not isinstance(payload, dict):
         return 0
-    cached_name = payload.get("cachedContent")
+    cached_name = _gemini_cached_content_reference(payload.get("cachedContent"))
     if not cached_name:
         return 0
-    meta = _gemini_load_cached_index().get(_gemini_cached_name(str(cached_name)))
+    meta = _gemini_load_cached_index().get(_gemini_cached_name(cached_name))
     if not meta:
         return 0
     usage = meta.get("usageMetadata") if isinstance(meta.get("usageMetadata"), dict) else {}
@@ -3645,11 +3645,18 @@ def _gemini_get_cached_meta(name: str) -> dict[str, Any] | None:
     return _gemini_load_cached_index().get(_gemini_cached_name(name))
 
 
+def _gemini_cached_content_reference(value: Any) -> str:
+    if isinstance(value, dict):
+        candidate = value.get("name") or value.get("cachedContent") or value.get("cached_content")
+        return str(candidate or "").strip()
+    return str(value or "").strip()
+
+
 def _gemini_apply_cached_content(body: dict[str, Any]) -> dict[str, Any]:
-    cached_name = body.get("cachedContent")
+    cached_name = _gemini_cached_content_reference(body.get("cachedContent"))
     if not cached_name:
         return body
-    meta = _gemini_get_cached_meta(str(cached_name))
+    meta = _gemini_get_cached_meta(cached_name)
     if not meta:
         raise HTTPException(status_code=404, detail=f"Cached content '{cached_name}' not found.")
     payload = meta.get("payload") if isinstance(meta.get("payload"), dict) else {}
