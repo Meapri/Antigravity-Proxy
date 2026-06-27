@@ -2412,6 +2412,98 @@ def test_google_genai_sdk_developer_files_upload_and_models_filter(tmp_path, mon
     assert uploaded.mime_type == "text/plain"
 
 
+def test_google_genai_sdk_vertex_batch_prediction_jobs(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
+    app_client = TestClient(proxy.app)
+    sdk_http = httpx.Client(transport=_FastApiTransport(app_client))
+    sdk = genai.Client(
+        vertexai=True,
+        http_options=types.HttpOptions(
+            base_url="http://testserver/v1beta",
+            api_version=None,
+            base_url_resource_scope=types.ResourceScope.COLLECTION,
+            httpx_client=sdk_http,
+        ),
+    )
+
+    job = sdk.batches.create(
+        model="gemini-3-flash-agent",
+        src="gs://bucket/input.jsonl",
+        config={"display_name": "sdk vertex batch"},
+    )
+    fetched = sdk.batches.get(name=job.name)
+    listed = list(sdk.batches.list(config={"page_size": 10}))
+    sdk.batches.cancel(name=job.name)
+    deleted = sdk.batches.delete(name=job.name)
+
+    assert job.name.startswith("projects/local-project/locations/global/batchPredictionJobs/")
+    assert job.display_name == "sdk vertex batch"
+    assert job.state == types.JobState.JOB_STATE_SUCCEEDED
+    assert job.src.gcs_uri == ["gs://bucket/input.jsonl"]
+    assert job.dest.gcs_uri == "gs://bucket/input/dest"
+    assert job.output_info.gcs_output_directory == "gs://bucket/input/dest/prediction-results"
+    assert fetched.name == job.name
+    assert {item.name for item in listed} == {job.name}
+    assert deleted.name == job.name
+    assert deleted.done is True
+    assert app_client.get(f"/v1beta/batchPredictionJobs/{job.name.rsplit('/', 1)[-1]}").status_code == 404
+
+
+def test_vertex_batch_prediction_jobs_project_scoped_rest(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
+    client = TestClient(proxy.app)
+
+    created = client.post(
+        "/v1beta/projects/demo/locations/us-central1/batchPredictionJobs",
+        json={
+            "displayName": "rest vertex batch",
+            "model": "publishers/google/models/gemini-3-flash-agent",
+            "inputConfig": {
+                "instancesFormat": "jsonl",
+                "gcsSource": {"uris": ["gs://bucket/input.jsonl"]},
+            },
+            "outputConfig": {
+                "predictionsFormat": "jsonl",
+                "gcsDestination": {"outputUriPrefix": "gs://bucket/out"},
+            },
+            "labels": {"client": "test"},
+        },
+    )
+
+    assert created.status_code == 200
+    job = created.json()
+    assert job["name"].startswith("projects/demo/locations/us-central1/batchPredictionJobs/")
+    assert job["displayName"] == "rest vertex batch"
+    assert job["state"] == "JOB_STATE_SUCCEEDED"
+    assert job["inputConfig"]["gcsSource"]["uris"] == ["gs://bucket/input.jsonl"]
+    assert job["outputInfo"]["gcsOutputDirectory"] == "gs://bucket/out/prediction-results"
+    assert job["completionStats"]["successfulCount"] == "0"
+    assert job["labels"] == {"client": "test"}
+
+    job_id = job["name"].rsplit("/", 1)[-1]
+    scoped_get = client.get(f"/v1beta/projects/demo/locations/us-central1/batchPredictionJobs/{job_id}")
+    full_name_get = client.get(f"/v1beta/batchPredictionJobs/{job['name']}")
+    listed = client.get("/v1beta/projects/demo/locations/us-central1/batchPredictionJobs", params={"filter": 'displayName="rest vertex batch"'})
+    developer_batches = client.get("/v1beta/batches")
+    cancelled = client.post(f"/v1beta/projects/demo/locations/us-central1/batchPredictionJobs/{job_id}:cancel")
+    deleted = client.delete(f"/v1beta/projects/demo/locations/us-central1/batchPredictionJobs/{job_id}")
+    missing = client.get(f"/v1beta/projects/demo/locations/us-central1/batchPredictionJobs/{job_id}")
+
+    assert scoped_get.status_code == 200
+    assert scoped_get.json()["name"] == job["name"]
+    assert full_name_get.status_code == 200
+    assert full_name_get.json()["name"] == job["name"]
+    assert listed.status_code == 200
+    assert [item["name"] for item in listed.json()["batchPredictionJobs"]] == [job["name"]]
+    assert developer_batches.status_code == 200
+    assert developer_batches.json()["batches"] == []
+    assert cancelled.status_code == 200
+    assert cancelled.json() == {}
+    assert deleted.status_code == 200
+    assert deleted.json()["done"] is True
+    assert missing.status_code == 404
+
+
 def test_gemini_batch_generate_content_operation(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))

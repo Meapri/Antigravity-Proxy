@@ -3236,9 +3236,32 @@ def _gemini_batch_name(name: str) -> str:
         if key.startswith(prefix):
             key = key[len(prefix):]
             break
+    if "batchPredictionJobs/" in key:
+        return key
     if key.startswith("batches/"):
         return key
     return "batches/" + key
+
+
+def _gemini_vertex_batch_job_name(name: str, project: str | None = None, location: str | None = None) -> str:
+    key = name.strip().strip("/")
+    for prefix in ("v1beta/", "v1/"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+            break
+    if key.startswith("projects/") and "/batchPredictionJobs/" in key:
+        return key
+    if key.startswith("batchPredictionJobs/"):
+        job_id = key.rsplit("/", 1)[-1]
+    else:
+        job_id = key
+    project = project or "local-project"
+    location = location or "global"
+    return f"projects/{project}/locations/{location}/batchPredictionJobs/{job_id}"
+
+
+def _gemini_vertex_batch_job_id(name: str) -> str:
+    return name.strip().strip("/").rsplit("/", 1)[-1]
 
 
 def _gemini_batch_body(body: Any) -> Any:
@@ -3334,6 +3357,20 @@ def _gemini_store_batch(batch: dict[str, Any]) -> dict[str, Any]:
 
 def _gemini_get_batch(name: str) -> dict[str, Any] | None:
     return _gemini_load_batches_index().get(_gemini_batch_name(name))
+
+
+def _gemini_get_vertex_batch_job(name: str, project: str | None = None, location: str | None = None) -> dict[str, Any] | None:
+    full_name = _gemini_vertex_batch_job_name(name, project, location)
+    index = _gemini_load_batches_index()
+    batch = index.get(full_name)
+    if batch:
+        return batch
+    requested_id = _gemini_vertex_batch_job_id(full_name)
+    for candidate in index.values():
+        candidate_name = str(candidate.get("name") or "")
+        if "/batchPredictionJobs/" in candidate_name and _gemini_vertex_batch_job_id(candidate_name) == requested_id:
+            return candidate
+    return None
 
 
 def _gemini_batch_operation(batch: dict[str, Any]) -> dict[str, Any]:
@@ -10346,6 +10383,199 @@ async def gemini_create_batch(request: Request):
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
+def _gemini_vertex_output_info(output_config: dict[str, Any]) -> dict[str, Any] | None:
+    gcs_dest = output_config.get("gcsDestination") if isinstance(output_config.get("gcsDestination"), dict) else {}
+    gcs_prefix = gcs_dest.get("outputUriPrefix")
+    if isinstance(gcs_prefix, str) and gcs_prefix:
+        return {"gcsOutputDirectory": gcs_prefix.rstrip("/") + "/prediction-results"}
+    bq_dest = output_config.get("bigqueryDestination") if isinstance(output_config.get("bigqueryDestination"), dict) else {}
+    bq_uri = bq_dest.get("outputUri")
+    if isinstance(bq_uri, str) and bq_uri:
+        return {"bigqueryOutputDataset": bq_uri}
+    return None
+
+
+def _gemini_vertex_batch_response(batch: dict[str, Any]) -> dict[str, Any]:
+    keys = {
+        "name",
+        "displayName",
+        "state",
+        "error",
+        "createTime",
+        "startTime",
+        "endTime",
+        "updateTime",
+        "model",
+        "inputConfig",
+        "outputConfig",
+        "completionStats",
+        "outputInfo",
+        "labels",
+        "encryptionSpec",
+    }
+    return {key: batch[key] for key in keys if key in batch and batch[key] is not None}
+
+
+def _gemini_vertex_batch_matches_scope(batch: dict[str, Any], project: str | None, location: str | None) -> bool:
+    name = str(batch.get("name") or "")
+    if "/batchPredictionJobs/" not in name:
+        return False
+    if project and not name.startswith(f"projects/{project}/"):
+        return False
+    if location and f"/locations/{location}/" not in name:
+        return False
+    return True
+
+
+def _gemini_create_vertex_batch_job_resource(
+    body: dict[str, Any],
+    *,
+    project: str | None = None,
+    location: str | None = None,
+) -> dict[str, Any]:
+    model_name = body.get("model")
+    if not isinstance(model_name, str) or not model_name.strip():
+        raise HTTPException(status_code=400, detail="batchPredictionJobs.create requires a model.")
+    input_config = body.get("inputConfig")
+    if not isinstance(input_config, dict):
+        raise HTTPException(status_code=400, detail="batchPredictionJobs.create requires inputConfig.")
+    model = _resolve_gemini_model(model_name)
+    now = _gemini_now_iso()
+    job_name = _gemini_vertex_batch_job_name("batch_" + uuid.uuid4().hex, project, location)
+    output_config = body.get("outputConfig") if isinstance(body.get("outputConfig"), dict) else {}
+    completion_stats = {
+        "successfulCount": "0",
+        "failedCount": "0",
+        "incompleteCount": "0",
+        "successfulForecastPointCount": "0",
+    }
+    batch = {
+        "name": job_name,
+        "displayName": body.get("displayName") or body.get("display_name") or _gemini_vertex_batch_job_id(job_name),
+        "model": _gemini_model_name(model),
+        "state": "JOB_STATE_SUCCEEDED",
+        "createTime": now,
+        "startTime": now,
+        "updateTime": now,
+        "endTime": now,
+        "inputConfig": input_config,
+        "outputConfig": output_config,
+        "completionStats": completion_stats,
+        "metadata": {"api": "vertex", "resource": "batchPredictionJobs"},
+    }
+    output_info = _gemini_vertex_output_info(output_config)
+    if output_info:
+        batch["outputInfo"] = output_info
+    for key in ("labels", "encryptionSpec"):
+        if key in body and body[key] is not None:
+            batch[key] = body[key]
+    return _gemini_store_batch(batch)
+
+
+@app.post("/v1/batchPredictionJobs")
+@app.post("/v1beta/batchPredictionJobs")
+@app.post("/v1/projects/{project}/locations/{location}/batchPredictionJobs")
+@app.post("/v1beta/projects/{project}/locations/{location}/batchPredictionJobs")
+async def gemini_vertex_create_batch_prediction_job(
+    request: Request,
+    project: str | None = None,
+    location: str | None = None,
+):
+    """Vertex-compatible batchPredictionJobs.create stored as local metadata."""
+    try:
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        batch = _gemini_create_vertex_batch_job_resource(body, project=project, location=location)
+        return _gemini_vertex_batch_response(batch)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Vertex batchPredictionJobs create failed")
+        return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
+
+
+@app.get("/v1/batchPredictionJobs")
+@app.get("/v1beta/batchPredictionJobs")
+@app.get("/v1/projects/{project}/locations/{location}/batchPredictionJobs")
+@app.get("/v1beta/projects/{project}/locations/{location}/batchPredictionJobs")
+async def gemini_vertex_list_batch_prediction_jobs(
+    request: Request,
+    project: str | None = None,
+    location: str | None = None,
+    filter: str | None = None,
+):
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
+    index = _gemini_load_batches_index()
+    jobs = [
+        batch for batch in index.values()
+        if _gemini_vertex_batch_matches_scope(batch, project, location)
+        and _gemini_batch_filter_matches(batch, {"name": batch.get("name"), "done": True}, filter)
+    ]
+    jobs.sort(key=lambda item: item.get("name") or "")
+    start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
+    end = start + pageSize
+    return {
+        "batchPredictionJobs": [_gemini_vertex_batch_response(batch) for batch in jobs[start:end]],
+        "nextPageToken": str(end) if end < len(jobs) else "",
+    }
+
+
+@app.get("/v1/batchPredictionJobs/{job_name:path}")
+@app.get("/v1beta/batchPredictionJobs/{job_name:path}")
+@app.get("/v1/projects/{project}/locations/{location}/batchPredictionJobs/{job_name:path}")
+@app.get("/v1beta/projects/{project}/locations/{location}/batchPredictionJobs/{job_name:path}")
+async def gemini_vertex_get_batch_prediction_job(
+    job_name: str,
+    project: str | None = None,
+    location: str | None = None,
+):
+    batch = _gemini_get_vertex_batch_job(job_name, project, location)
+    if not batch:
+        return _gemini_error_response(f"BatchPredictionJob '{job_name}' not found.", status_code=404, status="NOT_FOUND")
+    return _gemini_vertex_batch_response(batch)
+
+
+@app.post("/v1/batchPredictionJobs/{job_name:path}:cancel")
+@app.post("/v1beta/batchPredictionJobs/{job_name:path}:cancel")
+@app.post("/v1/projects/{project}/locations/{location}/batchPredictionJobs/{job_name:path}:cancel")
+@app.post("/v1beta/projects/{project}/locations/{location}/batchPredictionJobs/{job_name:path}:cancel")
+async def gemini_vertex_cancel_batch_prediction_job(
+    job_name: str,
+    project: str | None = None,
+    location: str | None = None,
+):
+    batch = _gemini_get_vertex_batch_job(job_name, project, location)
+    if not batch:
+        return _gemini_error_response(f"BatchPredictionJob '{job_name}' not found.", status_code=404, status="NOT_FOUND")
+    if batch.get("state") not in {"JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED", "JOB_STATE_CANCELLED"}:
+        batch["state"] = "JOB_STATE_CANCELLED"
+        now = _gemini_now_iso()
+        batch["updateTime"] = now
+        batch["endTime"] = now
+        _gemini_store_batch(batch)
+    return JSONResponse({})
+
+
+@app.delete("/v1/batchPredictionJobs/{job_name:path}")
+@app.delete("/v1beta/batchPredictionJobs/{job_name:path}")
+@app.delete("/v1/projects/{project}/locations/{location}/batchPredictionJobs/{job_name:path}")
+@app.delete("/v1beta/projects/{project}/locations/{location}/batchPredictionJobs/{job_name:path}")
+async def gemini_vertex_delete_batch_prediction_job(
+    job_name: str,
+    project: str | None = None,
+    location: str | None = None,
+):
+    batch = _gemini_get_vertex_batch_job(job_name, project, location)
+    if not batch:
+        return _gemini_error_response(f"BatchPredictionJob '{job_name}' not found.", status_code=404, status="NOT_FOUND")
+    index = _gemini_load_batches_index()
+    index.pop(str(batch["name"]), None)
+    _gemini_save_batches_index(index)
+    return JSONResponse({"name": batch["name"], "done": True})
+
+
 @app.get("/v1/batches")
 @app.get("/v1beta/batches")
 async def gemini_list_batches(request: Request, filter: str | None = None):
@@ -10354,6 +10584,8 @@ async def gemini_list_batches(request: Request, filter: str | None = None):
     index = _gemini_load_batches_index()
     batch_items = []
     for batch in index.values():
+        if "/batchPredictionJobs/" in str(batch.get("name") or ""):
+            continue
         operation = _gemini_batch_operation(batch)
         if _gemini_batch_filter_matches(batch, operation, filter):
             batch_items.append((batch, operation))

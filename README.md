@@ -1168,6 +1168,14 @@ Notes:
   `returnPartialSuccess` / `return_partial_success`.
 - Batch resources are stored locally under `data/gemini_batches` by default;
   override with `ANTIGRAVITY_GEMINI_BATCHES_DIR`.
+- Vertex-style `batchPredictionJobs` are available under both collection and
+  project-scoped paths such as `POST /v1beta/batchPredictionJobs` and
+  `POST /v1beta/projects/{project}/locations/{location}/batchPredictionJobs`.
+  The proxy accepts GCS, BigQuery, and Vertex dataset `inputConfig` /
+  `outputConfig` metadata, stores a completed local job, and returns the
+  Vertex resource shape expected by `google-genai` `client.batches.create`,
+  `get`, `list`, `cancel`, and `delete`. It does not execute a real managed
+  Vertex batch job or write remote output files.
 - Agents are stored locally under `data/gemini_agents` by default; override
   with `ANTIGRAVITY_GEMINI_AGENTS_DIR`. Agents support `displayName`,
   `description`, `model`, `systemInstruction`, `tools`, `toolConfig`,
