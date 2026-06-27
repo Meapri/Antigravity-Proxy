@@ -7680,11 +7680,67 @@ def _extract_memories_v2(messages: list[ChatMessage]) -> list[str]:
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
-def _gemini_models_list_response(page_size: int, page_token: str | None) -> dict[str, Any]:
+def _gemini_model_filter_matches(model: dict[str, Any], filter_expr: str | None) -> bool:
+    if not filter_expr:
+        return True
+    resource = _gemini_model_resource(model)
+    searchable = {
+        **resource,
+        "id": model.get("id"),
+        "name": resource.get("name"),
+        "displayName": resource.get("displayName"),
+        "version": resource.get("version"),
+        "description": resource.get("description"),
+        "supportedGenerationMethods": ",".join(resource.get("supportedGenerationMethods") or []),
+        "capabilities": resource.get("capabilities") or {},
+        "metadata": resource.get("metadata") or {},
+    }
+    aliases = {
+        "display_name": "displayName",
+        "supported_generation_methods": "supportedGenerationMethods",
+        "method": "supportedGenerationMethods",
+        "capability": "capabilities",
+        "capabilities.tools": "capabilities.tools",
+        "capabilities.image_generation": "capabilities.imageGeneration",
+        "metadata.antigravity_model": "metadata.antigravity_model",
+    }
+    terms = re.split(r"\s+(?:AND|and)\s+", filter_expr.strip())
+    for term in terms:
+        term = term.strip()
+        if not term:
+            continue
+        if ":" in term:
+            field, expected = term.split(":", 1)
+            op = ":"
+        elif "=" in term:
+            field, expected = term.split("=", 1)
+            op = "="
+        else:
+            field, expected, op = "displayName", term, ":"
+        field = aliases.get(field.strip(), field.strip())
+        expected = expected.strip().strip('"')
+        actual = _gemini_get_path_value(searchable, field)
+        if actual is None and "." not in field:
+            actual = _gemini_get_path_value(searchable, aliases.get(field.rsplit(".", 1)[-1], field))
+        if isinstance(actual, list):
+            haystack = " ".join(str(item) for item in actual)
+        elif isinstance(actual, dict):
+            haystack = json.dumps(actual, ensure_ascii=False)
+        else:
+            haystack = str(actual or "")
+        if op == "=":
+            if haystack.lower() != expected.lower():
+                return False
+        elif expected.lower() not in haystack.lower():
+            return False
+    return True
+
+
+def _gemini_models_list_response(page_size: int, page_token: str | None, filter_expr: str | None = None) -> dict[str, Any]:
     models = [
         _gemini_model_resource(model)
         for model in _MODELS
-        if not _model_capabilities(model)["internal"]
+        if not _model_capabilities(model)["internal"] and _gemini_model_filter_matches(model, filter_expr)
     ]
     start = int(page_token or 0) if page_token and page_token.isdigit() else 0
     end = start + page_size
@@ -7703,7 +7759,7 @@ async def list_models(request: Request, project: str | None = None, location: st
         page_size, page_token = _gemini_list_query_params(request, default_page_size=50, max_page_size=1000)
     except HTTPException as exc:
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT", field="pageSize")
-    return _gemini_models_list_response(page_size, page_token)
+    return _gemini_models_list_response(page_size, page_token, request.query_params.get("filter"))
 
 
 @app.get("/v1beta/models")
@@ -7712,7 +7768,7 @@ async def list_models(request: Request, project: str | None = None, location: st
 async def gemini_list_models(request: Request, project: str | None = None, location: str | None = None):
     """Gemini-compatible model listing."""
     pageSize, pageToken = _gemini_list_query_params(request, default_page_size=50, max_page_size=1000)
-    return _gemini_models_list_response(pageSize, pageToken)
+    return _gemini_models_list_response(pageSize, pageToken, request.query_params.get("filter"))
 
 
 @app.get("/v1/models/{model_name:path}/operations")

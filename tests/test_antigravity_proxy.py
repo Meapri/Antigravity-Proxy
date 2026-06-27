@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import io
 
 import httpx
 from fastapi import HTTPException
@@ -2378,6 +2379,37 @@ def test_google_genai_sdk_vertex_collection_base_url(tmp_path, monkeypatch):
     assert embedded.json()["embedding"]["values"]
     assert predicted.status_code == 200
     assert predicted.json()["predictions"][0]["bytesBase64Encoded"]
+
+
+def test_google_genai_sdk_developer_files_upload_and_models_filter(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "files"))
+    app_client = TestClient(proxy.app)
+    sdk_http = httpx.Client(transport=_FastApiTransport(app_client))
+    sdk = genai.Client(
+        api_key="test-key",
+        http_options=types.HttpOptions(
+            base_url="http://testserver/v1beta",
+            api_version="",
+            httpx_client=sdk_http,
+        ),
+    )
+    upload_source = io.BytesIO(b"sdk file upload")
+
+    filtered = app_client.get('/v1beta/models?filter=displayName:"3.5 Flash"')
+    unmatched = app_client.get('/v1beta/models?filter=name:"not-a-model"')
+    uploaded = sdk.files.upload(
+        file=upload_source,
+        config={"mime_type": "text/plain", "display_name": "sdk-upload.txt"},
+    )
+
+    assert filtered.status_code == 200
+    assert filtered.json()["models"]
+    assert all("3.5 Flash" in item["displayName"] for item in filtered.json()["models"])
+    assert unmatched.status_code == 200
+    assert unmatched.json()["models"] == []
+    assert uploaded.name.startswith("files/")
+    assert uploaded.display_name == "sdk-upload.txt"
+    assert uploaded.mime_type == "text/plain"
 
 
 def test_gemini_batch_generate_content_operation(tmp_path, monkeypatch):

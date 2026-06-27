@@ -839,8 +839,10 @@ The upload endpoint also supports Gemini resumable upload starts through
 `X-Goog-Upload-Offset`. Finalized uploads return
 `X-Goog-Upload-Status: final`, and SDK-prefixed upload paths such as
 `/v1beta/upload/v1beta/files` are accepted as aliases for
-`/upload/v1beta/files`. Upload metadata accepts both official `file` objects
-and SDK-style `config` wrappers such as `{"config": {"mimeType": "text/plain"}}`.
+`/upload/v1beta/files`; this path is covered by a real `google-genai`
+`files.upload()` compatibility test. Upload metadata accepts both official
+`file` objects and SDK-style `config` wrappers such as
+`{"config": {"mimeType": "text/plain"}}`.
 Uploaded local files include a Gemini-style `expirationTime` 48 hours after
 creation; metadata-only registered external files preserve an explicit
 `expirationTime` only when supplied.
@@ -1118,8 +1120,10 @@ Notes:
 - Model resources include `supportedGenerationMethods`, token limits, and
   capability metadata for the local Gemini compatibility surface.
 - `models.list` supports Gemini `pageSize` / `pageToken` pagination with the
-  official default page size of 50 and maximum page size of 1000. `/v1/models`
-  and `/v1beta/models` return the Gemini `{"models": ...}` shape.
+  official default page size of 50 and maximum page size of 1000, plus simple
+  `filter` terms over fields such as `name`, `displayName`,
+  `supportedGenerationMethods`, `capabilities.*`, and `metadata.*`.
+  `/v1/models` and `/v1beta/models` return the Gemini `{"models": ...}` shape.
 - Gemini list-style routes accept both REST-style `pageSize` / `pageToken` and
   SDK-style `page_size` / `page_token` query aliases. Batch and operation list
   routes also accept `filter`, `return_partial_success`, and
