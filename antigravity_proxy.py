@@ -412,6 +412,9 @@ def _resolve_gemini_embedding_model(model_name: str) -> dict[str, Any]:
 _GEMINI_KEY_ALIASES = {
     "system_instruction": "systemInstruction",
     "generation_config": "generationConfig",
+    "bidi_generate_content_setup": "bidiGenerateContentSetup",
+    "field_mask": "fieldMask",
+    "field_paths": "fieldPaths",
     "safety_settings": "safetySettings",
     "tool_config": "toolConfig",
     "include_server_side_tool_invocations": "includeServerSideToolInvocations",
@@ -2716,16 +2719,16 @@ def _gemini_message_to_content(message: Any) -> dict[str, Any] | None:
         return None
     message = _gemini_normalize_request(message)
     if isinstance(message.get("parts"), list):
-        role = str(message.get("role") or "user")
+        role = _gemini_normalize_content_role(message.get("role"), default_role="user") or "user"
         parts = [_gemini_content_item_to_part(part) for part in message["parts"]]
-        return {"role": "model" if role == "assistant" else role, "parts": [part for part in parts if part]}
+        return {"role": role, "parts": [part for part in parts if part]}
     if message.get("type") in {"text", "input_text", "output_text", "image", "input_image", "file", "input_file"}:
         part = _gemini_content_item_to_part(message)
         if part is None:
             return None
-        role = str(message.get("role") or "user")
-        return {"role": "model" if role == "assistant" else role, "parts": [part]}
-    role = str(message.get("role") or "user")
+        role = _gemini_normalize_content_role(message.get("role"), default_role="user") or "user"
+        return {"role": role, "parts": [part]}
+    role = _gemini_normalize_content_role(message.get("role"), default_role="user") or "user"
     content = message.get("content", message.get("text", message.get("input")))
     parts: list[Any]
     if isinstance(content, list):
@@ -2741,7 +2744,7 @@ def _gemini_message_to_content(message: Any) -> dict[str, Any] | None:
         parts = [part] if part is not None else []
     if not parts:
         return None
-    return {"role": "model" if role == "assistant" else role, "parts": parts}
+    return {"role": role, "parts": parts}
 
 
 def _gemini_interaction_contents(body: dict[str, Any]) -> list[dict[str, Any]]:
@@ -3339,28 +3342,108 @@ def _gemini_epoch_from_rfc3339(value: Any) -> float | None:
 
 
 def _gemini_auth_token_valid(token: str, *, consume: bool = False) -> bool:
+    return _gemini_auth_token_metadata(token, consume=consume) is not None
+
+
+def _gemini_auth_token_metadata(token: str, *, consume: bool = False) -> dict[str, Any] | None:
     name = _gemini_auth_token_name(token)
     index = _gemini_load_auth_tokens_index()
     meta = index.get(name)
     if not meta:
-        return False
+        return None
     now = time.time()
     expire_at = float(meta.get("expireAt") or 0)
     if expire_at and expire_at <= now:
         index.pop(name, None)
         _gemini_save_auth_tokens_index(index)
-        return False
+        return None
     uses_remaining = meta.get("usesRemaining")
     if isinstance(uses_remaining, int) and uses_remaining <= 0:
         index.pop(name, None)
         _gemini_save_auth_tokens_index(index)
-        return False
+        return None
     if consume and isinstance(uses_remaining, int):
         meta["usesRemaining"] = uses_remaining - 1
         meta["updateTime"] = _gemini_now_iso()
         index[name] = meta
         _gemini_save_auth_tokens_index(index)
-    return True
+    return dict(meta)
+
+
+def _gemini_field_mask_paths(value: Any) -> list[list[str]]:
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        raw_paths = value.get("paths") or value.get("path") or value.get("fieldPaths") or value.get("field_paths")
+    else:
+        raw_paths = value
+    if isinstance(raw_paths, str):
+        pieces = [part.strip() for part in raw_paths.replace(";", ",").split(",")]
+    elif isinstance(raw_paths, (list, tuple)):
+        pieces = [str(part).strip() for part in raw_paths]
+    else:
+        return []
+    paths: list[list[str]] = []
+    for piece in pieces:
+        if not piece:
+            continue
+        components = []
+        for component in piece.split("."):
+            if not component:
+                continue
+            components.append(str(_GEMINI_KEY_ALIASES.get(component, component)))
+        if components:
+            paths.append(components)
+    return paths
+
+
+def _gemini_get_path(value: dict[str, Any], path: list[str]) -> Any:
+    current: Any = value
+    for component in path:
+        if not isinstance(current, dict) or component not in current:
+            return None
+        current = current[component]
+    return current
+
+
+def _gemini_set_path(target: dict[str, Any], path: list[str], value: Any) -> None:
+    current = target
+    for component in path[:-1]:
+        child = current.get(component)
+        if not isinstance(child, dict):
+            child = {}
+            current[component] = child
+        current = child
+    if path:
+        current[path[-1]] = value
+
+
+def _gemini_deep_merge_dicts(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _gemini_deep_merge_dicts(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _gemini_apply_auth_token_setup_constraints(setup: dict[str, Any], token_meta: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(token_meta, dict):
+        return setup
+    constrained = token_meta.get("bidiGenerateContentSetup")
+    if not isinstance(constrained, dict):
+        return setup
+    constrained = _gemini_normalize_request(constrained)
+    field_paths = _gemini_field_mask_paths(token_meta.get("fieldMask"))
+    if not field_paths:
+        return _gemini_deep_merge_dicts(setup, constrained)
+    merged = dict(setup)
+    for path in field_paths:
+        value = _gemini_get_path(constrained, path)
+        if value is not None:
+            _gemini_set_path(merged, path, value)
+    return merged
 
 
 def _gemini_create_auth_token(body: dict[str, Any]) -> dict[str, Any]:
@@ -3998,18 +4081,7 @@ def _gemini_agent_body(body: Any) -> dict[str, Any]:
 def _gemini_agent_system_instruction(value: Any) -> Any:
     if value is None:
         return None
-    if isinstance(value, str):
-        return {"parts": [{"text": value}]}
-    if isinstance(value, dict):
-        normalized = _gemini_normalize_request(value)
-        if "text" in normalized and "parts" not in normalized:
-            return {"parts": [{"text": str(normalized["text"])}]}
-        if isinstance(normalized.get("parts"), list):
-            return normalized
-        return normalized
-    if isinstance(value, list):
-        return {"parts": [_gemini_part_from_any(item) for item in value]}
-    return {"parts": [{"text": str(value)}]}
+    return _gemini_normalize_system_instruction(value)
 
 
 def _gemini_agent_tool_config(value: Any) -> Any:
@@ -6727,9 +6799,13 @@ def _request_api_key_valid(request: Request) -> bool:
 
 
 def _websocket_api_key_valid(websocket: WebSocket) -> bool:
+    return _websocket_auth_token_metadata(websocket) is not False
+
+
+def _websocket_auth_token_metadata(websocket: WebSocket) -> dict[str, Any] | None | bool:
     expected = _proxy_api_key()
     if not expected:
-        return True
+        return None
     auth = websocket.headers.get("authorization", "").strip()
     candidates = [
         *_gemini_auth_token_candidates_from_auth_header(auth),
@@ -6739,8 +6815,14 @@ def _websocket_api_key_valid(websocket: WebSocket) -> bool:
         websocket.query_params.get("access_token", "").strip(),
     ]
     if any(candidate and secrets.compare_digest(candidate, expected) for candidate in candidates):
-        return True
-    return any(candidate and _gemini_auth_token_valid(candidate, consume=True) for candidate in candidates)
+        return None
+    for candidate in candidates:
+        if not candidate:
+            continue
+        meta = _gemini_auth_token_metadata(candidate, consume=True)
+        if meta is not None:
+            return meta
+    return False
 
 
 def _is_gemini_http_path(path: str) -> bool:
@@ -12315,17 +12397,13 @@ async def gemini_create_interaction(request: Request):
 @app.get("/v1/interactions")
 @app.get("/v1beta/interactions")
 async def gemini_list_interactions(request: Request):
-    query = request.query_params
-    page_size_raw = query.get("pageSize") or query.get("page_size") or "100"
-    try:
-        page_size = max(1, min(1000, int(page_size_raw)))
-    except (TypeError, ValueError):
-        page_size = 100
-    page_token = query.get("pageToken") or query.get("page_token") or "0"
-    try:
-        start = max(0, int(page_token))
-    except (TypeError, ValueError):
-        start = 0
+    page_size, page_token = _gemini_list_query_params(
+        request,
+        default_page_size=100,
+        max_page_size=1000,
+        clamp_page_size=True,
+    )
+    start = int(page_token or 0)
     interactions = [
         _gemini_interaction_resource(interaction)
         for interaction in _gemini_load_interactions_index().values()
@@ -12404,7 +12482,8 @@ async def gemini_live_websocket(websocket: WebSocket):
     the Live protocol envelope for setup and text clientContent turns. Realtime
     audio/video chunks are rejected explicitly instead of being silently ignored.
     """
-    if not _websocket_api_key_valid(websocket):
+    auth_token_meta = _websocket_auth_token_metadata(websocket)
+    if auth_token_meta is False:
         await websocket.close(code=1008, reason="Invalid API key")
         return
     await websocket.accept()
@@ -12434,6 +12513,10 @@ async def gemini_live_websocket(websocket: WebSocket):
             setup_msg = message.get("setup")
             if isinstance(setup_msg, dict):
                 setup = _gemini_normalize_request(setup_msg)
+                setup = _gemini_apply_auth_token_setup_constraints(
+                    setup,
+                    auth_token_meta if isinstance(auth_token_meta, dict) else None,
+                )
                 model_name = setup.get("model") or setup.get("modelName") or model_name
                 await websocket.send_json({"setupComplete": {}})
                 continue
@@ -12638,7 +12721,7 @@ async def chat_completions(req: ChatCompletionRequest):
             ],
         }
         if system_text:
-            request_body["systemInstruction"] = {"role": "system", "parts": [{"text": system_text}]}
+            request_body["systemInstruction"] = _gemini_normalize_system_instruction(system_text)
         if gemini_tools:
             request_body["tools"] = gemini_tools
         tool_config = None

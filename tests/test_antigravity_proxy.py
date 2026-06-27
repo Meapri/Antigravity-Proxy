@@ -592,6 +592,7 @@ def test_gemini_list_rejects_invalid_page_token(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILE_SEARCH_STORES_DIR", str(tmp_path / "fss"))
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_TUNED_MODELS_DIR", str(tmp_path / "tuned"))
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", str(tmp_path / "interactions"))
     client = TestClient(proxy.app)
 
     store = client.post("/v1beta/fileSearchStores", json={"displayName": "tokens"}).json()
@@ -604,6 +605,7 @@ def test_gemini_list_rejects_invalid_page_token(tmp_path, monkeypatch):
         f"/v1beta/fileSearchStores/{store_id}/documents?pageToken=bogus",
         "/v1beta/tunedModels?pageToken=bogus",
         "/v1beta/operations?pageToken=bogus",
+        "/v1beta/interactions?pageToken=bogus",
     ]
 
     for path in paths:
@@ -2619,6 +2621,55 @@ def test_google_genai_sdk_auth_tokens_create_and_live_access(tmp_path, monkeypat
         assert ws.receive_json() == {"setupComplete": {}}
 
 
+def test_gemini_auth_token_live_constraints_are_enforced(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_AUTH_TOKENS_DIR", str(tmp_path / "auth_tokens"))
+    monkeypatch.setenv("ANTIGRAVITY_PROXY_API_KEY", "secret")
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            seen["model"] = model
+            return {"response": {"candidates": [{"content": {"role": "model", "parts": [{"text": "constrained"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    created = client.post(
+        "/v1beta/auth_tokens",
+        headers={"x-goog-api-key": "secret"},
+        json={
+            "uses": 1,
+            "expire_time": "2099-01-01T00:00:00Z",
+            "bidi_generate_content_setup": {
+                "model": "models/gemini-3.1-flash-lite",
+                "system_instruction": {"parts": [{"text": "token system"}]},
+                "generation_config": {"max_output_tokens": 3},
+            },
+            "field_mask": {"paths": ["model", "system_instruction", "generation_config.max_output_tokens"]},
+        },
+    )
+
+    assert created.status_code == 200
+    token_name = created.json()["name"]
+    with client.websocket_connect(f"/v1beta/live?access_token={token_name}") as ws:
+        ws.send_json({
+            "setup": {
+                "model": "models/gemini-3-flash-agent",
+                "system_instruction": {"parts": [{"text": "client system"}]},
+                "generation_config": {"max_output_tokens": 99, "temperature": 0.7},
+            }
+        })
+        assert ws.receive_json() == {"setupComplete": {}}
+        ws.send_json({"client_content": {"turns": [{"role": "user", "parts": [{"text": "hello"}]}], "turn_complete": True}})
+        assert ws.receive_json()["serverContent"]["modelTurn"]["parts"][0]["text"] == "constrained"
+
+    assert seen["model"] == "gemini-3.1-flash-lite"
+    assert seen["request"]["systemInstruction"]["parts"][0]["text"] == "token system"
+    assert seen["request"]["generationConfig"]["maxOutputTokens"] == 3
+    assert seen["request"]["generationConfig"]["temperature"] == 0.7
+
+
 def test_google_genai_sdk_vertex_caches_lifecycle(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR", str(tmp_path / "cached"))
     app_client = TestClient(proxy.app)
@@ -3728,6 +3779,64 @@ def test_google_genai_sdk_interactions_create_get_delete_with_double_slash_path(
     assert fetched.id == interaction.id
     assert deleted is None
     assert app_client.get(f"/v1beta/interactions/{interaction.id}").status_code == 404
+
+
+def test_gemini_interactions_normalize_openai_style_roles(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", str(tmp_path / "interactions"))
+    seen = []
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen.append(request)
+            return {"response": {"candidates": [{"content": {"role": "model", "parts": [{"text": "roles ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    created = client.post("/v1beta/interactions", json={
+        "model": "gemini-3-flash-agent",
+        "messages": [
+            {"role": "system", "content": "system note"},
+            {"role": "developer", "content": "developer note"},
+            {"role": "assistant", "content": "previous answer"},
+            {"role": "user", "content": "now"},
+        ],
+    })
+
+    assert created.status_code == 200
+    assert [item["role"] for item in seen[-1]["contents"]] == ["user", "user", "model", "user"]
+
+
+def test_gemini_agent_system_instruction_role_is_normalized(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_AGENTS_DIR", str(tmp_path / "agents"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", str(tmp_path / "interactions"))
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            return {"response": {"candidates": [{"content": {"role": "model", "parts": [{"text": "agent ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    agent = client.post("/v1beta/agents", json={
+        "agent": {
+            "display_name": "role agent",
+            "model": "models/gemini-3-flash-agent",
+            "system_instruction": {"role": "system", "parts": [{"text": "agent system"}]},
+        }
+    })
+    assert agent.status_code == 200
+
+    interaction = client.post("/v1beta/interactions", json={
+        "agent": agent.json()["name"],
+        "input": "hello",
+    })
+
+    assert interaction.status_code == 200
+    assert seen["request"]["systemInstruction"]["role"] == "user"
+    assert seen["request"]["systemInstruction"]["parts"][0]["text"] == "agent system"
 
 
 def test_gemini_interactions_native_computer_use_requires_action(tmp_path, monkeypatch):

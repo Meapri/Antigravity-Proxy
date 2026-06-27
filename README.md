@@ -1210,6 +1210,9 @@ Live API:
   `authTokens/...` resources and can authenticate Live WebSocket sessions via
   `access_token`, `key`, `x-goog-api-key`, `x-api-key`, `Bearer`, or `Token`
   credentials until they expire or exhaust their optional `uses` count.
+  Token `bidiGenerateContentSetup` / `fieldMask` constraints are enforced on
+  Live `setup`, so constrained tokens can lock fields such as `model`,
+  `systemInstruction`, and `generationConfig.maxOutputTokens`.
 
 Notes:
 
@@ -1234,8 +1237,9 @@ Notes:
   `returnPartialSuccess`.
 - List routes clamp oversized `pageSize` values where the Gemini schema defines
   a hard maximum, including `models` at 1000, `generatedFiles` at 50, and
-  `corpora` at 20. Invalid `pageToken` values return Gemini-style
-  `INVALID_ARGUMENT` instead of silently replaying the first page.
+  `corpora` at 20. Invalid `pageToken` values, including on interactions,
+  return Gemini-style `INVALID_ARGUMENT` instead of silently replaying the
+  first page.
 - Agents preserve caller-supplied `id` values, return `object: "agent"`, and
   expose list results with the SDK-style `object/data/next_page_token` shape
   while keeping `agents/nextPageToken` aliases for older clients.
