@@ -3088,6 +3088,26 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     assert imported_doc["customMetadata"][0]["stringValue"] == "files-api"
     assert imported_doc["chunkingConfig"] == {"whiteSpaceConfig": {}}
 
+    wrapped_import = client.post(f"/v1beta/fileSearchStores/{store_id}:importFile", json={
+        "file_metadata": {
+            "file_name": uploaded_file["name"],
+            "display_name": "wrapped source import",
+            "custom_metadata": [{"key": "wrapped-import", "string_value": "yes"}],
+            "chunking_config": {
+                "white_space_config": {
+                    "max_tokens_per_chunk": "64",
+                    "max_overlap_tokens": "8",
+                }
+            },
+        }
+    })
+    assert wrapped_import.status_code == 200
+    wrapped_import_doc = wrapped_import.json()["response"]["document"]
+    assert wrapped_import_doc["displayName"] == "wrapped source import"
+    assert wrapped_import_doc["customMetadata"][0]["stringValue"] == "yes"
+    assert wrapped_import_doc["chunkingConfig"]["whiteSpaceConfig"]["maxTokensPerChunk"] == 64
+    assert wrapped_import_doc["chunkingConfig"]["whiteSpaceConfig"]["maxOverlapTokens"] == 8
+
     uploaded_doc = client.post(
         f"/upload/v1/fileSearchStores/{store_id}:uploadToFileSearchStore?displayName=direct.txt",
         json={
@@ -3105,23 +3125,46 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     assert uploaded_doc_resource["customMetadata"][0]["stringValue"] == "direct"
     assert uploaded_doc_resource["chunkingConfig"] == {"whiteSpaceConfig": {}}
 
+    wrapped_uploaded_doc = client.post(
+        f"/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore",
+        json={
+            "fileMetadata": {
+                "display_name": "wrapped direct.txt",
+                "mime_type": "text/plain",
+                "custom_metadata": [{"key": "wrapped-upload", "string_value": "yes"}],
+                "chunking_config": {"white_space_config": {"max_tokens_per_chunk": "32"}},
+            },
+            "text": "wrapped direct document",
+        },
+    )
+    assert wrapped_uploaded_doc.status_code == 200
+    wrapped_uploaded_doc_resource = wrapped_uploaded_doc.json()["response"]["document"]
+    assert wrapped_uploaded_doc_resource["displayName"] == "wrapped direct.txt"
+    assert wrapped_uploaded_doc_resource["customMetadata"][0]["stringValue"] == "yes"
+    assert wrapped_uploaded_doc_resource["chunkingConfig"]["whiteSpaceConfig"]["maxTokensPerChunk"] == 32
+
     listed_stores = client.get("/v1/fileSearchStores")
     fetched_store = client.get(f"/v1/{store_name}")
     listed = client.get(f"/v1/fileSearchStores/{store_id}/documents")
     listed_snake_page = client.get(f"/v1/fileSearchStores/{store_id}/documents?page_size=1&page_token=1")
     assert listed_stores.status_code == 200
-    assert listed_stores.json()["fileSearchStores"][0]["name"] == store_name
+    assert store_name in {item["name"] for item in listed_stores.json()["fileSearchStores"]}
     assert fetched_store.status_code == 200
     assert fetched_store.json()["name"] == store_name
-    assert fetched_store.json()["activeDocumentsCount"] == 2
+    assert fetched_store.json()["activeDocumentsCount"] == 4
     assert fetched_store.json()["pendingDocumentsCount"] == 0
     assert fetched_store.json()["failedDocumentsCount"] == 0
-    assert int(fetched_store.json()["sizeBytes"]) == len(b"source document") + len(b"direct document")
+    assert int(fetched_store.json()["sizeBytes"]) == (
+        len(b"source document")
+        + len(b"source document")
+        + len(b"direct document")
+        + len(b"wrapped direct document")
+    )
     assert listed.status_code == 200
-    assert len(listed.json()["documents"]) == 2
+    assert len(listed.json()["documents"]) == 4
     assert listed_snake_page.status_code == 200
     assert len(listed_snake_page.json()["documents"]) == 1
-    assert listed_snake_page.json()["nextPageToken"] == ""
+    assert listed_snake_page.json()["nextPageToken"] == "2"
 
     fetched = client.get(f"/v1/{imported_doc['name']}")
     assert fetched.status_code == 200
@@ -3145,7 +3188,7 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     assert nested_operation.status_code == 200
     assert nested_operation.json()["name"] == imported.json()["name"]
     assert nested_operations.status_code == 200
-    assert nested_operations.json()["operations"][0]["name"] == imported.json()["name"]
+    assert imported.json()["name"] in {item["name"] for item in nested_operations.json()["operations"]}
     assert waited_operation.status_code == 200
     assert waited_operation.json()["name"] == imported.json()["name"]
     assert cancelled_operation.status_code == 200

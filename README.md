@@ -886,10 +886,12 @@ File search stores:
   `sizeBytes`; deleting a non-empty store requires `force=true`.
 - `importFile` imports files previously uploaded through the local Files API and
   preserves document display names, custom metadata, and document
-  `chunkingConfig` when supplied.
+  `chunkingConfig` when supplied. It accepts `fileMetadata` /
+  `file_metadata` wrappers in addition to direct fields.
 - `uploadToFileSearchStore` accepts raw, multipart, or JSON direct uploads and
   stores documents locally while preserving custom metadata and
-  `chunkingConfig`.
+  `chunkingConfig`. JSON uploads may provide document metadata through
+  `file`, `fileMetadata`, or `file_metadata` wrappers.
 - `fileSearchStores.documents.list` accepts `pageSize` / `pageToken` and
   snake_case `page_size` / `page_token`, with the Gemini REST page size capped
   at 20.

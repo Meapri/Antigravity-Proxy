@@ -499,6 +499,7 @@ _GEMINI_KEY_ALIASES = {
     "download_uri": "downloadUri",
     "expiration_time": "expirationTime",
     "sha256_hash": "sha256Hash",
+    "file_name": "fileName",
     "file_uri": "fileUri",
     "fileUri": "fileUri",
     "image_url": "imageUrl",
@@ -3867,6 +3868,22 @@ def _gemini_normalize_fss_body(body: dict[str, Any]) -> dict[str, Any]:
     return body
 
 
+def _gemini_fss_document_body(body: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(body, dict):
+        return body
+    body = _gemini_config_body(body)
+    for key in ("fileMetadata", "file_metadata", "file"):
+        wrapped = body.get(key)
+        if isinstance(wrapped, dict):
+            merged = _gemini_config_body(wrapped)
+            for outer_key in ("fileName", "fileUri", "displayName", "mimeType", "customMetadata", "metadata", "chunkingConfig"):
+                if outer_key in body and outer_key not in merged:
+                    merged[outer_key] = body[outer_key]
+            body = merged
+            break
+    return _gemini_normalize_fss_body(body)
+
+
 def _gemini_fss_resource(meta: dict[str, Any]) -> dict[str, Any]:
     documents = list((meta.get("documents") or {}).values())
     active_count = sum(1 for doc in documents if str(doc.get("state") or "ACTIVE").upper() == "ACTIVE")
@@ -3964,7 +3981,7 @@ def _gemini_store_document(
 
 
 def _gemini_import_file_to_fss(store_name: str, body: dict[str, Any]) -> dict[str, Any]:
-    body = _gemini_config_body(body)
+    body = _gemini_fss_document_body(body)
     file_name = str(body.get("fileName") or body.get("file") or body.get("fileUri") or "")
     meta = _gemini_get_file_meta(file_name)
     if not meta:
@@ -7246,12 +7263,12 @@ async def gemini_upload_to_file_search_store(store_id: str, request: Request):
                     or (decoded.get("file", {}) if isinstance(decoded.get("file"), dict) else {}).get("mimeType")
                     or "text/plain"
                 )
-        metadata = _gemini_config_body(metadata) if isinstance(metadata, dict) else {}
-        file_meta = metadata.get("file") if isinstance(metadata.get("file"), dict) else metadata
+        metadata = _gemini_fss_document_body(metadata) if isinstance(metadata, dict) else {}
+        file_meta = metadata
         display_name = request.query_params.get("displayName")
         if isinstance(file_meta, dict):
-            display_name = file_meta.get("displayName") or file_meta.get("display_name") or display_name
-            media_type = file_meta.get("mimeType") or file_meta.get("mime_type") or media_type
+            display_name = file_meta.get("displayName") or display_name
+            media_type = file_meta.get("mimeType") or media_type
         custom_metadata = metadata.get("customMetadata") or metadata.get("metadata")
         chunking_config = metadata.get("chunkingConfig") if isinstance(metadata.get("chunkingConfig"), dict) else None
         if isinstance(file_meta, dict):
