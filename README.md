@@ -1205,6 +1205,18 @@ Notes:
   SDK-style `page_size` / `page_token` query aliases. Batch and operation list
   routes also accept `filter`, `return_partial_success`, and
   `returnPartialSuccess`.
+- Agents preserve caller-supplied `id` values, return `object: "agent"`, and
+  expose list results with the SDK-style `object/data/next_page_token` shape
+  while keeping `agents/nextPageToken` aliases for older clients.
+- Webhooks accept snake_case SDK fields such as `subscribed_events` and
+  `new_signing_secret`. Public responses expose `subscribed_events`,
+  `signing_secrets`, `new_signing_secret`, and snake_case timestamps; ping
+  returns an empty response and `rotateSigningSecret` returns `{ "secret": ... }`.
+- Interactions streaming uses Gemini's `event_type` SSE discriminator with
+  `step.start`, `step.delta`, `step.stop`, and `interaction.completed` events.
+- File Search Store int64 counters, including `activeDocumentsCount`,
+  `pendingDocumentsCount`, `failedDocumentsCount`, and `sizeBytes`, are returned
+  as strings per the Gemini REST schema.
 - `countTokens` and `computeTokens` are approximate because Antigravity's internal endpoint does not
   expose a separate Gemini token-count RPC. Responses include `totalTokens`,
   `promptTokensDetails`, `cachedContentTokenCount`, and `cacheTokensDetails`

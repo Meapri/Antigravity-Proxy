@@ -3295,9 +3295,10 @@ def test_gemini_interactions_create_previous_store_and_stream(tmp_path, monkeypa
         body = streamed.read().decode()
 
     assert streamed.status_code == 200
-    assert "interaction.created" in body
-    assert "interaction.output_text.delta" in body
-    assert "interaction.step.completed" in body
+    assert '"event_type": "interaction.create"' in body
+    assert '"event_type": "step.start"' in body
+    assert '"event_type": "step.delta"' in body
+    assert '"event_type": "step.stop"' in body
     assert "data: [DONE]" in body
 
 
@@ -3447,9 +3448,9 @@ def test_gemini_interactions_v1_aliases(tmp_path, monkeypatch):
         stream_body = streamed.read().decode()
 
     assert streamed.status_code == 200
-    assert "interaction.created" in stream_body
-    assert "interaction.step.completed" in stream_body
-    assert "interaction.completed" in stream_body
+    assert '"event_type": "interaction.create"' in stream_body
+    assert '"event_type": "step.start"' in stream_body
+    assert '"event_type": "interaction.completed"' in stream_body
     assert "data: [DONE]" in stream_body
 
 
@@ -3601,6 +3602,7 @@ def test_gemini_agents_crud_and_interaction_binding(tmp_path, monkeypatch):
 
     created = client.post("/v1beta/agents", json={
         "agent": {
+            "id": "research-agent",
             "display_name": "Research Agent",
             "description": "Uses stored defaults.",
             "model": "models/gemini-3-flash-agent",
@@ -3622,16 +3624,20 @@ def test_gemini_agents_crud_and_interaction_binding(tmp_path, monkeypatch):
     missing = client.get(f"/v1beta/{body['name']}")
 
     assert created.status_code == 200
-    assert body["name"].startswith("agents/")
-    assert body["id"] == body["name"].split("/", 1)[1]
+    assert body["name"] == "agents/research-agent"
+    assert body["id"] == "research-agent"
     assert body["displayName"] == "Research Agent"
     assert body["display_name"] == "Research Agent"
     assert body["systemInstruction"]["parts"] == [{"text": "Answer as the saved agent."}]
+    assert body["system_instruction"] == "Answer as the saved agent."
     assert body["baseEnvironment"] == {"timezone": "Asia/Seoul"}
     assert fetched.status_code == 200
     assert fetched.json()["name"] == body["name"]
     assert listed.status_code == 200
     assert listed.json()["agents"][0]["name"] == body["name"]
+    assert listed.json()["object"] == "list"
+    assert listed.json()["data"][0]["id"] == "research-agent"
+    assert listed.json()["next_page_token"] == ""
     assert interacted.status_code == 200
     assert interacted.json()["agent"] == body["name"]
     assert seen["model"] == "gemini-3-flash-agent"
@@ -3662,13 +3668,18 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
     webhook = created.json()
     assert webhook["name"].startswith("webhooks/")
     assert webhook["displayName"] == "Batch updates"
+    assert webhook["display_name"] == "Batch updates"
     assert webhook["uri"] == "https://example.test/hook"
     assert webhook["targetUri"] == "https://example.test/hook"
+    assert webhook["target_uri"] == "https://example.test/hook"
     assert webhook["subscribedEvents"] == ["batch.succeeded"]
+    assert webhook["subscribed_events"] == ["batch.succeeded"]
     assert webhook["eventTypes"] == ["batch.succeeded"]
     assert webhook["state"] == "enabled"
-    assert webhook["newSigningSecret"]["secret"]
+    assert webhook["newSigningSecret"]
+    assert webhook["new_signing_secret"] == webhook["newSigningSecret"]
     assert "secret" not in webhook["signingSecrets"][0]
+    assert webhook["signing_secrets"][0]["truncated_secret"]
 
     no_secret = client.post("/v1/webhooks", json={
         "config": {
@@ -3679,6 +3690,7 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
     })
     assert no_secret.status_code == 200
     assert "newSigningSecret" not in no_secret.json()
+    assert "new_signing_secret" not in no_secret.json()
     assert "signingSecrets" not in no_secret.json()
 
     fetched = client.get(f"/v1/{webhook['name']}")
@@ -3724,13 +3736,15 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
 
     pinged = client.post(f"/v1/{webhook['name']}:ping")
     assert pinged.status_code == 200
-    assert pinged.json()["deliveryAttempt"]["eventType"] == "webhooks.ping"
+    assert pinged.json() == {}
 
-    rotated = client.post(f"/v1/{webhook['name']}:rotateSigningSecret")
+    rotated = client.post(
+        f"/v1/{webhook['name']}:rotateSigningSecret",
+        json={"revocation_behavior": "revoke_previous_secrets_immediately"},
+    )
     assert rotated.status_code == 200
-    assert rotated.json()["newSigningSecret"]["secret"]
-    assert rotated.json()["newSigningSecret"]["secret"] != webhook["newSigningSecret"]["secret"]
-    assert "secret" not in rotated.json()["signingSecrets"][0]
+    assert rotated.json()["secret"]
+    assert rotated.json()["secret"] != webhook["newSigningSecret"]
 
     deleted = client.delete(f"/v1/{webhook['name']}")
     deleted_no_secret = client.delete(f"/v1/{no_secret.json()['name']}")
@@ -4942,9 +4956,9 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     assert store_name in {item["name"] for item in listed_stores.json()["fileSearchStores"]}
     assert fetched_store.status_code == 200
     assert fetched_store.json()["name"] == store_name
-    assert fetched_store.json()["activeDocumentsCount"] == 4
-    assert fetched_store.json()["pendingDocumentsCount"] == 0
-    assert fetched_store.json()["failedDocumentsCount"] == 0
+    assert fetched_store.json()["activeDocumentsCount"] == "4"
+    assert fetched_store.json()["pendingDocumentsCount"] == "0"
+    assert fetched_store.json()["failedDocumentsCount"] == "0"
     assert int(fetched_store.json()["sizeBytes"]) == (
         len(b"source document")
         + len(b"source document")

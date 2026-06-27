@@ -3940,15 +3940,18 @@ def _gemini_agent_tool_config(value: Any) -> Any:
 
 def _gemini_agent_resource(agent: dict[str, Any]) -> dict[str, Any]:
     now = _gemini_now_iso()
-    name = _gemini_agent_name(str(agent.get("name") or "agent_" + uuid.uuid4().hex))
+    agent_id = str(agent.get("id") or "").strip()
+    name_source = agent.get("name") or agent_id or "agent_" + uuid.uuid4().hex
+    name = _gemini_agent_name(str(name_source))
+    agent_id = agent_id or name.rsplit("/", 1)[-1]
     display_name = (
         agent.get("displayName")
         or agent.get("display_name")
-        or agent.get("name")
-        or name.rsplit("/", 1)[-1]
+        or agent_id
     )
+    raw_system_instruction = agent.get("systemInstruction") if "systemInstruction" in agent else agent.get("system_instruction")
     system_instruction = _gemini_agent_system_instruction(
-        agent.get("systemInstruction") if "systemInstruction" in agent else agent.get("system_instruction")
+        raw_system_instruction
     )
     tools = agent.get("tools")
     if tools is not None:
@@ -3958,7 +3961,7 @@ def _gemini_agent_resource(agent: dict[str, Any]) -> dict[str, Any]:
     base_environment = agent.get("baseEnvironment") if "baseEnvironment" in agent else agent.get("base_environment")
     resource = {
         "name": name,
-        "id": name.rsplit("/", 1)[-1],
+        "id": agent_id,
         "object": "agent",
         "displayName": str(display_name),
         "display_name": str(display_name),
@@ -3972,7 +3975,7 @@ def _gemini_agent_resource(agent: dict[str, Any]) -> dict[str, Any]:
     }
     if system_instruction is not None:
         resource["systemInstruction"] = system_instruction
-        resource["system_instruction"] = system_instruction
+        resource["system_instruction"] = raw_system_instruction if isinstance(raw_system_instruction, str) else system_instruction
     if tools is not None:
         resource["tools"] = tools
     if tool_config is not None:
@@ -4101,7 +4104,7 @@ def _gemini_webhook_uri(webhook: dict[str, Any]) -> str:
 def _gemini_webhook_events(webhook: dict[str, Any]) -> list[str]:
     raw = webhook.get("subscribedEvents")
     if raw is None:
-        raw = webhook.get("eventTypes") or webhook.get("events") or []
+        raw = webhook.get("subscribed_events") or webhook.get("eventTypes") or webhook.get("event_types") or webhook.get("events") or []
     if isinstance(raw, str):
         raw = [raw]
     return [str(item).strip() for item in raw if str(item).strip()] if isinstance(raw, list) else []
@@ -4148,11 +4151,17 @@ def _gemini_webhook_matches_event(webhook: dict[str, Any], event_type: str) -> b
 
 def _gemini_new_signing_secret() -> dict[str, Any]:
     now = _gemini_now_iso()
+    secret = secrets.token_urlsafe(32)
     return {
         "id": "secret_" + uuid.uuid4().hex,
-        "secret": secrets.token_urlsafe(32),
+        "secret": secret,
+        "truncatedSecret": secret[:8] + "...",
+        "truncated_secret": secret[:8] + "...",
         "createTime": now,
-        "state": "active",
+        "create_time": now,
+        "expireTime": None,
+        "expire_time": None,
+        "state": "enabled",
     }
 
 
@@ -4160,16 +4169,38 @@ def _gemini_webhook_public_resource(webhook: dict[str, Any], *, include_new_secr
     resource = dict(webhook)
     resource["uri"] = _gemini_webhook_uri(resource)
     resource["targetUri"] = resource["uri"]
+    resource["target_uri"] = resource["uri"]
     resource["subscribedEvents"] = _gemini_webhook_events(resource)
     resource["eventTypes"] = list(resource["subscribedEvents"])
+    resource["subscribed_events"] = list(resource["subscribedEvents"])
+    resource["event_types"] = list(resource["subscribedEvents"])
+    if "displayName" in resource:
+        resource["display_name"] = resource["displayName"]
+    if "createTime" in resource:
+        resource["create_time"] = resource["createTime"]
+    if "updateTime" in resource:
+        resource["update_time"] = resource["updateTime"]
     if isinstance(resource.get("signingSecrets"), list):
         resource["signingSecrets"] = [
             {key: value for key, value in item.items() if key != "secret"}
             for item in resource["signingSecrets"]
             if isinstance(item, dict)
         ]
-    if not include_new_secret or not isinstance(resource.get("newSigningSecret"), dict):
+        resource["signing_secrets"] = [
+            {
+                "truncated_secret": item.get("truncated_secret") or item.get("truncatedSecret"),
+                "expire_time": item.get("expire_time") or item.get("expireTime"),
+                "state": item.get("state") or "enabled",
+            }
+            for item in resource["signingSecrets"]
+            if isinstance(item, dict)
+        ]
+    if include_new_secret and isinstance(resource.get("newSigningSecret"), dict):
+        resource["new_signing_secret"] = resource["newSigningSecret"].get("secret")
+        resource["newSigningSecret"] = resource["new_signing_secret"]
+    else:
         resource.pop("newSigningSecret", None)
+        resource.pop("new_signing_secret", None)
     return resource
 
 
@@ -5448,9 +5479,9 @@ def _gemini_fss_resource(meta: dict[str, Any]) -> dict[str, Any]:
         "createTime": meta.get("createTime"),
         "updateTime": meta.get("updateTime"),
         "fileCount": len(documents),
-        "activeDocumentsCount": active_count,
-        "pendingDocumentsCount": pending_count,
-        "failedDocumentsCount": failed_count,
+        "activeDocumentsCount": str(active_count),
+        "pendingDocumentsCount": str(pending_count),
+        "failedDocumentsCount": str(failed_count),
         "sizeBytes": str(total_size),
     }
     for key in ("embeddingModel", "chunkingConfig", "customMetadata"):
@@ -11521,25 +11552,31 @@ async def gemini_ping_webhook(webhook_id: str):
     webhook["updateTime"] = _gemini_now_iso()
     index[name] = webhook
     _gemini_save_webhooks_index(index)
-    return {"deliveryAttempt": attempt}
+    return JSONResponse({})
 
 
 @app.post("/v1/webhooks/{webhook_id:path}:rotateSigningSecret")
 @app.post("/v1beta/webhooks/{webhook_id:path}:rotateSigningSecret")
-async def gemini_rotate_webhook_signing_secret(webhook_id: str):
+async def gemini_rotate_webhook_signing_secret(webhook_id: str, request: Request):
     name = _gemini_webhook_name(webhook_id)
     index = _gemini_load_webhooks_index()
     webhook = index.get(name)
     if not webhook:
         return _gemini_error_response(f"Webhook '{webhook_id}' not found.", status_code=404, status="NOT_FOUND")
+    try:
+        body = _gemini_normalize_request(await request.json())
+    except Exception:
+        body = {}
+    revocation = str(body.get("revocationBehavior") or body.get("revocation_behavior") or "").strip().lower()
     secret = _gemini_new_signing_secret()
     secrets_list = webhook.get("signingSecrets") if isinstance(webhook.get("signingSecrets"), list) else []
-    webhook["signingSecrets"] = [secret] + [item for item in secrets_list if isinstance(item, dict)][:1]
+    previous = [] if "immediately" in revocation else [item for item in secrets_list if isinstance(item, dict)][:1]
+    webhook["signingSecrets"] = [secret] + previous
     webhook["newSigningSecret"] = secret
     webhook["updateTime"] = _gemini_now_iso()
     index[name] = webhook
     _gemini_save_webhooks_index(index)
-    return _gemini_webhook_public_resource(webhook, include_new_secret=True)
+    return {"secret": secret["secret"]}
 
 
 @app.post("/v1/agents")
@@ -11576,8 +11613,12 @@ async def gemini_list_agents(request: Request):
     ]
     agents.sort(key=lambda item: item.get("createTime") or item.get("name") or "")
     end = start + page_size
+    page = agents[start:end]
     return {
-        "agents": agents[start:end],
+        "object": "list",
+        "data": page,
+        "agents": page,
+        "next_page_token": str(end) if end < len(agents) else "",
         "nextPageToken": str(end) if end < len(agents) else "",
     }
 
@@ -11926,16 +11967,19 @@ async def gemini_create_interaction(request: Request):
             async def _gen():
                 created = dict(interaction)
                 created.pop("outputText", None)
-                yield f"data: {json.dumps({'type': 'interaction.created', 'interaction': created}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'event_type': 'interaction.create', 'event_id': 'event_0', 'interaction': created}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'event_type': 'step.start', 'event_id': 'event_1', 'index': 0, 'step': {'type': 'model_output'}}, ensure_ascii=False)}\n\n"
                 if interaction.get("outputText"):
-                    yield f"data: {json.dumps({'type': 'interaction.output_text.delta', 'delta': interaction['outputText']}, ensure_ascii=False)}\n\n"
+                    delta = {"type": "text", "text": interaction["outputText"]}
+                    yield f"data: {json.dumps({'event_type': 'step.delta', 'event_id': 'event_2', 'index': 0, 'delta': delta}, ensure_ascii=False)}\n\n"
                 for step in interaction.get("steps") or []:
                     if isinstance(step, dict):
-                        yield f"data: {json.dumps({'type': 'interaction.step.completed', 'step': step}, ensure_ascii=False)}\n\n"
+                        yield f"data: {json.dumps({'event_type': 'step.delta', 'event_id': 'event_3', 'index': 0, 'delta': step}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'event_type': 'step.stop', 'event_id': 'event_4', 'index': 0}, ensure_ascii=False)}\n\n"
                 generated_file = interaction.get("generatedFile")
                 if generated_file:
-                    yield f"data: {json.dumps({'type': 'interaction.output_image.done', 'generatedFile': generated_file}, ensure_ascii=False)}\n\n"
-                yield f"data: {json.dumps({'type': 'interaction.completed', 'interaction': interaction}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'event_type': 'step.delta', 'event_id': 'event_5', 'index': 1, 'delta': {'type': 'generated_file', 'generated_file': generated_file}}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'event_type': 'interaction.completed', 'event_id': 'event_6', 'interaction': interaction}, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
 
             return StreamingResponse(_gen(), media_type="text/event-stream")
