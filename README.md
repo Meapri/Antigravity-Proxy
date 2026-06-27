@@ -951,9 +951,10 @@ Generated files:
   image payloads plus local `generatedFiles/*` metadata. Image options are
   accepted from top-level fields, `config`, `generationConfig`, `parameters`,
   or nested `imageConfig`, including snake_case aliases for `aspectRatio`,
-  `imageSize`, `numberOfImages`, and `sampleCount`. `generateImages` repeats
-  the local generation call up to 8 images when `numberOfImages` or
-  `sampleCount` is provided.
+  `imageSize`, `numberOfImages`, and `sampleCount`; `prompt` / `text` may also
+  be supplied through those wrappers. `generateImages` repeats the local
+  generation call up to 8 images when `numberOfImages` or `sampleCount` is
+  provided.
 - Generated files are stored locally under `data/gemini_generated_files`;
   override with `ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR`. Generated file
   resources expose Gemini File-like metadata including `downloadUri`,

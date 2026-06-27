@@ -3625,6 +3625,12 @@ def test_gemini_image_model_generate_content_predict_and_generate_images(tmp_pat
         "prompt": "draw generated",
         "config": {"aspect_ratio": "9:16", "image_size": "2K", "number_of_images": "2"},
     })
+    config_prompt = client.post("/v1beta/models/gemini-image-latest:generateImages", json={
+        "config": {
+            "prompt": "draw config prompt",
+            "image_config": {"aspect_ratio": "4:3", "image_size": "1K"},
+        },
+    })
 
     assert content.status_code == 200
     inline = content.json()["candidates"][0]["content"]["parts"][0]["inlineData"]
@@ -3641,16 +3647,19 @@ def test_gemini_image_model_generate_content_predict_and_generate_images(tmp_pat
     generated_image = generated.json()["generatedImages"][0]
     assert generated_image["image"]["imageBytes"]
     assert generated_image["generatedFile"]["name"].startswith("generatedFiles/")
+    assert config_prompt.status_code == 200
+    assert config_prompt.json()["generatedImages"][0]["image"]["imageBytes"]
     assert image_calls == [
         {"prompt": "draw image", "aspect_ratio": "16:9", "image_size": "2K"},
         {"prompt": "draw predict", "aspect_ratio": "1:1", "image_size": "1K"},
         {"prompt": "draw generated", "aspect_ratio": "9:16", "image_size": "2K"},
         {"prompt": "draw generated", "aspect_ratio": "9:16", "image_size": "2K"},
+        {"prompt": "draw config prompt", "aspect_ratio": "4:3", "image_size": "1K"},
     ]
 
     listed = client.get("/v1beta/generatedFiles")
     assert listed.status_code == 200
-    assert len(listed.json()["generatedFiles"]) == 4
+    assert len(listed.json()["generatedFiles"]) == 5
 
 
 def test_admin_refresh_requires_configured_api_key(monkeypatch):

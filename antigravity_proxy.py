@@ -1584,6 +1584,13 @@ def _gemini_image_prompt_from_body(body: dict[str, Any]) -> str:
     for key in ("prompt", "text"):
         if body.get(key) is not None:
             return _msg_text(body[key]).strip()
+    for wrapper_key in ("config", "parameters", "generationConfig"):
+        wrapper = body.get(wrapper_key)
+        if isinstance(wrapper, dict):
+            normalized = _gemini_normalize_request(wrapper)
+            for key in ("prompt", "text"):
+                if normalized.get(key) is not None:
+                    return _msg_text(normalized[key]).strip()
     return ""
 
 
