@@ -751,6 +751,155 @@ def _gemini_response_modalities_value(value: Any) -> Any:
     return modalities
 
 
+def _gemini_response_format_delivery_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "DELIVERY_UNSPECIFIED",
+        "delivery_unspecified": "DELIVERY_UNSPECIFIED",
+        "inline": "INLINE",
+        "uri": "URI",
+        "url": "URI",
+    }
+    return aliases.get(normalized, value)
+
+
+def _gemini_text_mime_type_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "MIME_TYPE_UNSPECIFIED",
+        "mime_type_unspecified": "MIME_TYPE_UNSPECIFIED",
+        "json": "APPLICATION_JSON",
+        "application_json": "APPLICATION_JSON",
+        "application/json": "APPLICATION_JSON",
+        "text": "TEXT_PLAIN",
+        "plain": "TEXT_PLAIN",
+        "text_plain": "TEXT_PLAIN",
+        "text/plain": "TEXT_PLAIN",
+    }
+    return aliases.get(normalized, value)
+
+
+def _gemini_response_mime_type_from_text_format(value: Any) -> Any:
+    if value == "APPLICATION_JSON":
+        return "application/json"
+    if value == "TEXT_PLAIN":
+        return "text/plain"
+    if value == "MIME_TYPE_UNSPECIFIED":
+        return None
+    return value
+
+
+def _gemini_image_mime_type_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "MIME_TYPE_UNSPECIFIED",
+        "mime_type_unspecified": "MIME_TYPE_UNSPECIFIED",
+        "jpeg": "IMAGE_JPEG",
+        "jpg": "IMAGE_JPEG",
+        "image_jpeg": "IMAGE_JPEG",
+        "image/jpeg": "IMAGE_JPEG",
+    }
+    return aliases.get(normalized, value)
+
+
+def _gemini_audio_mime_type_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "MIME_TYPE_UNSPECIFIED",
+        "mime_type_unspecified": "MIME_TYPE_UNSPECIFIED",
+        "mp3": "AUDIO_MP3",
+        "audio_mp3": "AUDIO_MP3",
+        "audio/mpeg": "AUDIO_MP3",
+        "audio/mp3": "AUDIO_MP3",
+        "ogg": "AUDIO_OGG_OPUS",
+        "opus": "AUDIO_OGG_OPUS",
+        "ogg_opus": "AUDIO_OGG_OPUS",
+        "audio_ogg_opus": "AUDIO_OGG_OPUS",
+        "audio/ogg": "AUDIO_OGG_OPUS",
+        "l16": "AUDIO_L16",
+        "pcm": "AUDIO_L16",
+        "audio_l16": "AUDIO_L16",
+        "audio/l16": "AUDIO_L16",
+        "wav": "AUDIO_WAV",
+        "audio_wav": "AUDIO_WAV",
+        "audio/wav": "AUDIO_WAV",
+        "alaw": "AUDIO_ALAW",
+        "a_law": "AUDIO_ALAW",
+        "audio_alaw": "AUDIO_ALAW",
+        "mulaw": "AUDIO_MULAW",
+        "mu_law": "AUDIO_MULAW",
+        "audio_mulaw": "AUDIO_MULAW",
+    }
+    return aliases.get(normalized, value)
+
+
+def _gemini_aspect_ratio_enum_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_").replace(":", "_by_")
+    aliases = {
+        "unspecified": "ASPECT_RATIO_UNSPECIFIED",
+        "aspect_ratio_unspecified": "ASPECT_RATIO_UNSPECIFIED",
+        "1_by_1": "ASPECT_RATIO_ONE_BY_ONE",
+        "one_by_one": "ASPECT_RATIO_ONE_BY_ONE",
+        "2_by_3": "ASPECT_RATIO_TWO_BY_THREE",
+        "two_by_three": "ASPECT_RATIO_TWO_BY_THREE",
+        "3_by_2": "ASPECT_RATIO_THREE_BY_TWO",
+        "three_by_two": "ASPECT_RATIO_THREE_BY_TWO",
+        "3_by_4": "ASPECT_RATIO_THREE_BY_FOUR",
+        "three_by_four": "ASPECT_RATIO_THREE_BY_FOUR",
+        "4_by_3": "ASPECT_RATIO_FOUR_BY_THREE",
+        "four_by_three": "ASPECT_RATIO_FOUR_BY_THREE",
+        "4_by_5": "ASPECT_RATIO_FOUR_BY_FIVE",
+        "four_by_five": "ASPECT_RATIO_FOUR_BY_FIVE",
+        "5_by_4": "ASPECT_RATIO_FIVE_BY_FOUR",
+        "five_by_four": "ASPECT_RATIO_FIVE_BY_FOUR",
+        "9_by_16": "ASPECT_RATIO_NINE_BY_SIXTEEN",
+        "nine_by_sixteen": "ASPECT_RATIO_NINE_BY_SIXTEEN",
+        "16_by_9": "ASPECT_RATIO_SIXTEEN_BY_NINE",
+        "sixteen_by_nine": "ASPECT_RATIO_SIXTEEN_BY_NINE",
+        "21_by_9": "ASPECT_RATIO_TWENTY_ONE_BY_NINE",
+        "twenty_one_by_nine": "ASPECT_RATIO_TWENTY_ONE_BY_NINE",
+        "1_by_8": "ASPECT_RATIO_ONE_BY_EIGHT",
+        "one_by_eight": "ASPECT_RATIO_ONE_BY_EIGHT",
+        "8_by_1": "ASPECT_RATIO_EIGHT_BY_ONE",
+        "eight_by_one": "ASPECT_RATIO_EIGHT_BY_ONE",
+        "1_by_4": "ASPECT_RATIO_ONE_BY_FOUR",
+        "one_by_four": "ASPECT_RATIO_ONE_BY_FOUR",
+        "4_by_1": "ASPECT_RATIO_FOUR_BY_ONE",
+        "four_by_one": "ASPECT_RATIO_FOUR_BY_ONE",
+    }
+    return aliases.get(normalized, value)
+
+
+def _gemini_image_size_enum_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "IMAGE_SIZE_UNSPECIFIED",
+        "image_size_unspecified": "IMAGE_SIZE_UNSPECIFIED",
+        "512": "IMAGE_SIZE_FIVE_TWELVE",
+        "512px": "IMAGE_SIZE_FIVE_TWELVE",
+        "five_twelve": "IMAGE_SIZE_FIVE_TWELVE",
+        "1k": "IMAGE_SIZE_ONE_K",
+        "one_k": "IMAGE_SIZE_ONE_K",
+        "2k": "IMAGE_SIZE_TWO_K",
+        "two_k": "IMAGE_SIZE_TWO_K",
+        "4k": "IMAGE_SIZE_FOUR_K",
+        "four_k": "IMAGE_SIZE_FOUR_K",
+    }
+    return aliases.get(normalized, value)
+
+
 def _gemini_finish_reason_value(value: Any) -> Any:
     if not isinstance(value, str):
         return value
@@ -783,6 +932,22 @@ def _gemini_finish_reason_value(value: Any) -> Any:
     return aliases.get(normalized, value)
 
 
+def _gemini_prompt_block_reason_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "BLOCK_REASON_UNSPECIFIED",
+        "block_reason_unspecified": "BLOCK_REASON_UNSPECIFIED",
+        "safety": "SAFETY",
+        "other": "OTHER",
+        "blocklist": "BLOCKLIST",
+        "prohibited_content": "PROHIBITED_CONTENT",
+        "image_safety": "IMAGE_SAFETY",
+    }
+    return aliases.get(normalized, value)
+
+
 def _gemini_function_response_scheduling_value(value: Any) -> Any:
     if not isinstance(value, str):
         return value
@@ -794,6 +959,80 @@ def _gemini_function_response_scheduling_value(value: Any) -> Any:
         "when_idle": "WHEN_IDLE",
         "scheduling_when_idle": "WHEN_IDLE",
         "interrupt": "INTERRUPT",
+    }
+    return aliases.get(normalized, value)
+
+
+def _gemini_function_behavior_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "UNSPECIFIED",
+        "behavior_unspecified": "UNSPECIFIED",
+        "blocking": "BLOCKING",
+        "block": "BLOCKING",
+        "non_blocking": "NON_BLOCKING",
+        "nonblocking": "NON_BLOCKING",
+        "async": "NON_BLOCKING",
+        "asynchronous": "NON_BLOCKING",
+    }
+    return aliases.get(normalized, value)
+
+
+def _gemini_tool_type_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "TOOL_TYPE_UNSPECIFIED",
+        "tool_type_unspecified": "TOOL_TYPE_UNSPECIFIED",
+        "web": "GOOGLE_SEARCH_WEB",
+        "google_search": "GOOGLE_SEARCH_WEB",
+        "google_search_web": "GOOGLE_SEARCH_WEB",
+        "image": "GOOGLE_SEARCH_IMAGE",
+        "image_search": "GOOGLE_SEARCH_IMAGE",
+        "google_search_image": "GOOGLE_SEARCH_IMAGE",
+        "url": "URL_CONTEXT",
+        "url_context": "URL_CONTEXT",
+        "maps": "GOOGLE_MAPS",
+        "google_maps": "GOOGLE_MAPS",
+        "file": "FILE_SEARCH",
+        "file_search": "FILE_SEARCH",
+    }
+    return aliases.get(normalized, value)
+
+
+def _gemini_executable_language_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "LANGUAGE_UNSPECIFIED",
+        "language_unspecified": "LANGUAGE_UNSPECIFIED",
+        "python": "PYTHON",
+        "py": "PYTHON",
+    }
+    return aliases.get(normalized, value)
+
+
+def _gemini_code_execution_outcome_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "OUTCOME_UNSPECIFIED",
+        "outcome_unspecified": "OUTCOME_UNSPECIFIED",
+        "ok": "OUTCOME_OK",
+        "success": "OUTCOME_OK",
+        "outcome_ok": "OUTCOME_OK",
+        "failed": "OUTCOME_FAILED",
+        "failure": "OUTCOME_FAILED",
+        "error": "OUTCOME_FAILED",
+        "outcome_failed": "OUTCOME_FAILED",
+        "deadline_exceeded": "OUTCOME_DEADLINE_EXCEEDED",
+        "timeout": "OUTCOME_DEADLINE_EXCEEDED",
+        "outcome_deadline_exceeded": "OUTCOME_DEADLINE_EXCEEDED",
     }
     return aliases.get(normalized, value)
 
@@ -857,6 +1096,12 @@ def _gemini_normalize_generation_config(value: Any) -> Any:
         if "echoTargetLanguage" in translation:
             translation["echoTargetLanguage"] = _gemini_bool_value(translation["echoTargetLanguage"])
         out["translationConfig"] = translation
+    if isinstance(out.get("imageConfig"), dict):
+        image_config = _gemini_normalize_request(out["imageConfig"])
+        if isinstance(image_config.get("imageSize"), str):
+            size = image_config["imageSize"].strip().lower()
+            image_config["imageSize"] = {"512": "512", "512px": "512", "1k": "1K", "2k": "2K", "4k": "4K"}.get(size, image_config["imageSize"])
+        out["imageConfig"] = image_config
     if isinstance(out.get("speechConfig"), dict):
         speech = _gemini_normalize_request(out["speechConfig"])
         if speech.get("voiceConfig") is not None and speech.get("multiSpeakerVoiceConfig") is not None:
@@ -875,7 +1120,9 @@ def _gemini_apply_response_format_to_generation_config(gen: dict[str, Any], fmt:
             gen["responseFormat"] = normalized_format
             text_format = normalized_format.get("text") if isinstance(normalized_format.get("text"), dict) else {}
             if text_format.get("mimeType"):
-                gen["responseMimeType"] = text_format["mimeType"]
+                response_mime = _gemini_response_mime_type_from_text_format(text_format["mimeType"])
+                if response_mime:
+                    gen["responseMimeType"] = response_mime
             if isinstance(text_format.get("schema"), dict):
                 gen["responseSchema"] = _sanitize_schema(dict(text_format["schema"]))
         nested_json_schema = fmt.get("jsonSchema") if isinstance(fmt.get("jsonSchema"), dict) else None
@@ -921,15 +1168,30 @@ def _gemini_normalize_response_format_config(value: dict[str, Any]) -> dict[str,
     text_format = normalized.get("text")
     if isinstance(text_format, dict):
         text = dict(text_format)
+        if "mimeType" in text:
+            text["mimeType"] = _gemini_text_mime_type_value(text["mimeType"])
         if isinstance(text.get("schema"), dict):
             text["schema"] = _sanitize_schema(dict(text["schema"]))
         out["text"] = text
     image_format = normalized.get("image")
     if isinstance(image_format, dict):
-        out["image"] = dict(image_format)
+        image = dict(image_format)
+        if "mimeType" in image:
+            image["mimeType"] = _gemini_image_mime_type_value(image["mimeType"])
+        if "delivery" in image:
+            image["delivery"] = _gemini_response_format_delivery_value(image["delivery"])
+        if "aspectRatio" in image:
+            image["aspectRatio"] = _gemini_aspect_ratio_enum_value(image["aspectRatio"])
+        if "imageSize" in image:
+            image["imageSize"] = _gemini_image_size_enum_value(image["imageSize"])
+        out["image"] = image
     audio_format = normalized.get("audio")
     if isinstance(audio_format, dict):
         audio = dict(audio_format)
+        if "mimeType" in audio:
+            audio["mimeType"] = _gemini_audio_mime_type_value(audio["mimeType"])
+        if "delivery" in audio:
+            audio["delivery"] = _gemini_response_format_delivery_value(audio["delivery"])
         for key in ("sampleRate", "bitRate"):
             if key in audio:
                 audio[key] = _gemini_int_value(audio[key])
@@ -1173,6 +1435,24 @@ def _gemini_inline_data_part(value: dict[str, Any]) -> dict[str, Any] | None:
 
 def _gemini_normalize_part_options(part: dict[str, Any]) -> dict[str, Any]:
     out = dict(part)
+    if "mediaResolution" in out:
+        out["mediaResolution"] = _gemini_media_resolution_value(out["mediaResolution"])
+    for key in ("toolCall", "toolResponse"):
+        tool_value = out.get(key)
+        if isinstance(tool_value, dict) and "toolType" in tool_value:
+            normalized_tool = dict(tool_value)
+            normalized_tool["toolType"] = _gemini_tool_type_value(normalized_tool["toolType"])
+            out[key] = normalized_tool
+    executable_code = out.get("executableCode")
+    if isinstance(executable_code, dict) and "language" in executable_code:
+        normalized_code = dict(executable_code)
+        normalized_code["language"] = _gemini_executable_language_value(normalized_code["language"])
+        out["executableCode"] = normalized_code
+    code_result = out.get("codeExecutionResult")
+    if isinstance(code_result, dict) and "outcome" in code_result:
+        normalized_result = dict(code_result)
+        normalized_result["outcome"] = _gemini_code_execution_outcome_value(normalized_result["outcome"])
+        out["codeExecutionResult"] = normalized_result
     function_response = out.get("functionResponse")
     if isinstance(function_response, dict) and ("willContinue" in function_response or "scheduling" in function_response):
         normalized_response = dict(function_response)
@@ -1396,6 +1676,8 @@ def _gemini_normalize_function_declaration(decl: dict[str, Any]) -> dict[str, An
     response = out.pop("responseJsonSchema", None) or out.pop("response_json_schema", None)
     if response is not None and "response" not in out:
         out["response"] = response
+    if "behavior" in out:
+        out["behavior"] = _gemini_function_behavior_value(out["behavior"])
     for key in ("parameters", "response"):
         if isinstance(out.get(key), dict):
             out[key] = _sanitize_schema(out[key])
@@ -1475,7 +1757,7 @@ def _gemini_normalize_tools_value(value: Any) -> list[dict[str, Any]]:
                 decl: dict[str, Any] = {"name": fn["name"]}
                 if fn.get("description"):
                     decl["description"] = fn["description"]
-                for key in ("parameters", "parametersJsonSchema", "response", "responseJsonSchema"):
+                for key in ("parameters", "parametersJsonSchema", "response", "responseJsonSchema", "behavior"):
                     if key in fn:
                         decl[key] = fn[key]
                 decl = _gemini_normalize_function_declaration(decl)
@@ -1992,6 +2274,8 @@ def _gemini_finalize_generate_response(response: dict[str, Any], *, model_name: 
     out.setdefault("responseId", "resp_" + uuid.uuid4().hex)
     if isinstance(out.get("promptFeedback"), dict):
         out["promptFeedback"] = _gemini_normalize_response_object(out["promptFeedback"])
+        if "blockReason" in out["promptFeedback"]:
+            out["promptFeedback"]["blockReason"] = _gemini_prompt_block_reason_value(out["promptFeedback"]["blockReason"])
         if isinstance(out["promptFeedback"].get("safetyRatings"), list):
             out["promptFeedback"]["safetyRatings"] = [
                 _gemini_normalize_safety_rating(item)
@@ -8360,7 +8644,11 @@ async def gemini_tuned_stream_generate_content(tuned_model_id: str, request: Req
         _gemini_reject_unsupported_builtin_tools(body)
         body = _gemini_inline_local_files(body)
         body.pop("model", None)
-        return _gemini_streaming_response(body=body, antigravity_model=str(model["antigravity_model"]))
+        return _gemini_streaming_response(
+            body=body,
+            model_name=tuned_model_id,
+            antigravity_model=str(model["antigravity_model"]),
+        )
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
@@ -9130,7 +9418,11 @@ async def gemini_generate_content(model_name: str, request: Request):
         body = _gemini_inline_local_files(body)
         body.pop("model", None)
         if request.query_params.get("alt") == "sse" or request.query_params.get("stream", "").lower() == "true":
-            return _gemini_streaming_response(body=body, antigravity_model=str(model["antigravity_model"]))
+            return _gemini_streaming_response(
+                body=body,
+                model_name=model_name,
+                antigravity_model=str(model["antigravity_model"]),
+            )
         data = await asyncio.to_thread(
             _get_client().generate_raw,
             request=body,
@@ -9157,7 +9449,7 @@ async def gemini_generate_content(model_name: str, request: Request):
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
-def _gemini_streaming_response(*, body: dict[str, Any], antigravity_model: str) -> StreamingResponse:
+def _gemini_streaming_response(*, body: dict[str, Any], model_name: str, antigravity_model: str) -> StreamingResponse:
     async def _gen():
         got_any = False
         try:
@@ -9166,7 +9458,7 @@ def _gemini_streaming_response(*, body: dict[str, Any], antigravity_model: str) 
                 model=antigravity_model,
             ):
                 payload = _gemini_unwrap_response(chunk)
-                payload = _gemini_finalize_generate_response(payload, model_name=antigravity_model, request_body=body)
+                payload = _gemini_finalize_generate_response(payload, model_name=model_name, request_body=body)
                 got_any = True
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
         except Exception as exc:
@@ -9180,7 +9472,7 @@ def _gemini_streaming_response(*, body: dict[str, Any], antigravity_model: str) 
                 )
                 payload = _gemini_finalize_generate_response(
                     _gemini_unwrap_response(data),
-                    model_name=antigravity_model,
+                    model_name=model_name,
                     request_body=body,
                 )
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -10051,7 +10343,11 @@ async def gemini_stream_generate_content(model_name: str, request: Request):
     except Exception as exc:
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
-    return _gemini_streaming_response(body=body, antigravity_model=str(model["antigravity_model"]))
+    return _gemini_streaming_response(
+        body=body,
+        model_name=model_name,
+        antigravity_model=str(model["antigravity_model"]),
+    )
 
 
 @app.get("/v1/operations")

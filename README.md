@@ -1233,6 +1233,33 @@ or your remote proxy host:
 http://your-host.ts.net:8765/v1beta
 ```
 
+If Hermes shows the default Gemini Base URL
+`https://generativelanguage.googleapis.com/v1beta`, replace that value with the
+proxy URL. Do not leave the Google-hosted URL there unless you want Hermes to
+call Google's Gemini API directly.
+
+| Hermes field | Value |
+| --- | --- |
+| Provider type | Gemini |
+| Base URL | `http://127.0.0.1:8765/v1beta` |
+| Tailscale Base URL | `http://<tailscale-host>.ts.net:8765/v1beta` |
+| API key | `ANTIGRAVITY_PROXY_API_KEY`, or any placeholder if proxy auth is disabled |
+| Model | `gemini-3-flash-agent` |
+
+Hermes/Gemini clients may send the key as `x-goog-api-key`,
+`Authorization: Bearer <key>`, `X-API-Key: <key>`, or `?key=<key>`. The proxy
+accepts all of these when `ANTIGRAVITY_PROXY_API_KEY` is configured.
+
+To see Gemini-compatible model ids:
+
+```bash
+curl http://127.0.0.1:8765/v1beta/models \
+  -H "x-goog-api-key: $ANTIGRAVITY_PROXY_API_KEY"
+```
+
+Most clients want the model id without the `models/` prefix, for example
+`gemini-3-flash-agent`.
+
 For Hermes web search, point the SearXNG backend at:
 
 ```text

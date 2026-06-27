@@ -972,9 +972,10 @@ def test_gemini_generate_content_accepts_sdk_content_unions(monkeypatch):
                     }
                 },
                 {"tool_call": {"id": "tool-1", "tool_type": "web", "args": {"query": "atlas"}}},
-                {"tool_response": {"id": "tool-1", "tool_type": "web", "response": {"ok": True}}},
-                {"executable_code": {"id": "code-1", "language": "PYTHON", "code": "print(1)"}},
-                {"code_execution_result": {"id": "code-1", "outcome": "OUTCOME_OK", "output": "1"}},
+                {"tool_response": {"id": "tool-1", "tool_type": "image_search", "response": {"ok": True}}},
+                {"executable_code": {"id": "code-1", "language": "python", "code": "print(1)"}},
+                {"code_execution_result": {"id": "code-1", "outcome": "ok", "output": "1"}},
+                {"inline_data": {"mime_type": "image/png", "data": "AA=="}, "media_resolution": "high"},
             ],
         }]
     })
@@ -995,10 +996,14 @@ def test_gemini_generate_content_accepts_sdk_content_unions(monkeypatch):
             "scheduling": "WHEN_IDLE",
         }
     }
-    assert alias_parts[2] == {"toolCall": {"id": "tool-1", "toolType": "web", "args": {"query": "atlas"}}}
-    assert alias_parts[3] == {"toolResponse": {"id": "tool-1", "toolType": "web", "response": {"ok": True}}}
+    assert alias_parts[2] == {"toolCall": {"id": "tool-1", "toolType": "GOOGLE_SEARCH_WEB", "args": {"query": "atlas"}}}
+    assert alias_parts[3] == {"toolResponse": {"id": "tool-1", "toolType": "GOOGLE_SEARCH_IMAGE", "response": {"ok": True}}}
     assert alias_parts[4] == {"executableCode": {"id": "code-1", "language": "PYTHON", "code": "print(1)"}}
     assert alias_parts[5] == {"codeExecutionResult": {"id": "code-1", "outcome": "OUTCOME_OK", "output": "1"}}
+    assert alias_parts[6] == {
+        "inlineData": {"mimeType": "image/png", "data": "AA=="},
+        "mediaResolution": "MEDIA_RESOLUTION_HIGH",
+    }
 
 
 def test_gemini_candidate_part_aliases_are_canonicalized(monkeypatch):
@@ -1084,6 +1089,25 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
                 "properties": {"score": {"type": "integer", "minimum": 0}},
                 "property_ordering": ["score"],
             },
+            "response_format": {
+                "text": {"mime_type": "application/json"},
+                "image": {
+                    "mime_type": "image/jpeg",
+                    "delivery": "inline",
+                    "aspect_ratio": "16:9",
+                    "image_size": "1k",
+                },
+                "audio": {
+                    "mime_type": "audio/wav",
+                    "delivery": "uri",
+                    "sample_rate": "24000",
+                    "bit_rate": "64000",
+                },
+            },
+            "image_config": {
+                "aspect_ratio": "4:3",
+                "image_size": "1k",
+            },
             "enable_enhanced_civic_answers": "true",
             "tool_config": {"function_calling_config": {"mode": "none"}},
             "labels": {"source": "sdk"},
@@ -1115,6 +1139,25 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
     assert seen["request"]["generationConfig"]["responseModalities"] == ["TEXT"]
     assert seen["request"]["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_LOW"
     assert seen["request"]["generationConfig"]["audioTimestamp"] is True
+    assert seen["request"]["generationConfig"]["responseFormat"] == {
+        "text": {"mimeType": "APPLICATION_JSON"},
+        "image": {
+            "mimeType": "IMAGE_JPEG",
+            "delivery": "INLINE",
+            "aspectRatio": "ASPECT_RATIO_SIXTEEN_BY_NINE",
+            "imageSize": "IMAGE_SIZE_ONE_K",
+        },
+        "audio": {
+            "mimeType": "AUDIO_WAV",
+            "delivery": "URI",
+            "sampleRate": 24000,
+            "bitRate": 64000,
+        },
+    }
+    assert seen["request"]["generationConfig"]["imageConfig"] == {
+        "aspectRatio": "4:3",
+        "imageSize": "1K",
+    }
     assert seen["request"]["generationConfig"]["translationConfig"] == {
         "targetLanguageCode": "ko",
         "echoTargetLanguage": False,
@@ -1317,12 +1360,12 @@ def test_gemini_generation_config_accepts_nested_response_format(monkeypatch):
     assert official_gen["responseFormat"]["text"]["schema"]["properties"]["answer"]["minLength"] == 1
     assert official_gen["responseFormat"]["image"] == {
         "mimeType": "image/png",
-        "aspectRatio": "16:9",
-        "imageSize": "1K",
-        "delivery": "inline",
+        "aspectRatio": "ASPECT_RATIO_SIXTEEN_BY_NINE",
+        "imageSize": "IMAGE_SIZE_ONE_K",
+        "delivery": "INLINE",
     }
     assert official_gen["responseFormat"]["audio"] == {
-        "mimeType": "audio/wav",
+        "mimeType": "AUDIO_WAV",
         "sampleRate": 24000,
         "bitRate": 128000,
         "delivery": "stream",
@@ -1523,6 +1566,7 @@ def test_gemini_generate_content_normalizes_tools_unions(monkeypatch):
                     "type": "object",
                     "properties": {"answer": {"type": "string"}},
                 },
+                "behavior": "non_blocking",
             }
         },
     })
@@ -1532,12 +1576,13 @@ def test_gemini_generate_content_normalizes_tools_unions(monkeypatch):
     assert declaration["name"] == "typed_lookup"
     assert declaration["parameters"]["properties"]["query"]["type"] == "string"
     assert declaration["response"]["properties"]["answer"]["type"] == "string"
+    assert declaration["behavior"] == "NON_BLOCKING"
     assert "parametersJsonSchema" not in declaration
     assert "responseJsonSchema" not in declaration
 
     single_tool_declaration = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
         "contents": "hi",
-        "tools": {"function_declaration": {"name": "tool_lookup", "description": "Lookup"}},
+        "tools": {"function_declaration": {"name": "tool_lookup", "description": "Lookup", "behavior": "blocking"}},
     })
 
     assert single_tool_declaration.status_code == 200
@@ -1545,6 +1590,7 @@ def test_gemini_generate_content_normalizes_tools_unions(monkeypatch):
         "functionDeclarations": [{
             "name": "tool_lookup",
             "description": "Lookup",
+            "behavior": "BLOCKING",
         }]
     }]
 
@@ -1704,8 +1750,11 @@ def test_gemini_generate_content_rejects_unsupported_builtin_tools():
 
 
 def test_gemini_generate_content_alt_sse(monkeypatch):
+    seen = {}
+
     class FakeClient:
         async def generate_raw_stream_async(self, *, request, model=""):
+            seen["model"] = model
             yield {"response": {"candidates": [{"content": {"parts": [{"text": "alt stream"}]}}]}}
 
     monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
@@ -1718,6 +1767,8 @@ def test_gemini_generate_content_alt_sse(monkeypatch):
 
     assert response.status_code == 200
     assert "alt stream" in body
+    assert '"modelVersion": "gemini-3-flash-agent"' in body
+    assert seen["model"] == "gemini-3-flash-agent"
     assert "data: [DONE]" in body
 
 
