@@ -1,11 +1,13 @@
 # Antigravity Proxy
 
-OpenAI-compatible FastAPI proxy for Antigravity / Cloud Code models.
+Gemini REST-compatible FastAPI proxy for Antigravity / Cloud Code models.
 
-This project lets OpenAI-compatible clients talk to Antigravity-backed models
-through familiar endpoints such as `/v1/models`, `/v1/chat/completions`, and
-`/v1/images/generations`. It also includes a SearXNG-compatible `/search`
-endpoint backed by Google Search grounding.
+This project lets Gemini-compatible clients talk to Antigravity-backed models
+through the native Gemini REST surface, such as
+`/v1beta/models/{model}:generateContent`, `streamGenerateContent`,
+`countTokens`, files, cached contents, batches, and generated files. It also
+includes a SearXNG-compatible `/search` endpoint backed by Google Search
+grounding.
 
 > This is an unofficial compatibility proxy. Use it on localhost, a private VPN,
 > or another trusted network. If you expose it outside a trusted network, set
@@ -13,17 +15,21 @@ endpoint backed by Google Search grounding.
 
 ## What It Supports
 
-- OpenAI-compatible model listing: `GET /v1/models`
-- OpenAI-compatible chat completions: `POST /v1/chat/completions`
-- OpenAI-compatible Responses API shim: `POST /v1/responses`
-- Streaming chat responses, including tool-call deltas
-- OpenAI-style function calling / tool calls
-- Vision input through OpenAI `image_url` content parts
-- OpenAI-compatible image generation: `POST /v1/images/generations`
+- Gemini-compatible model listing: `GET /v1beta/models`
+- Gemini-compatible content generation: `POST /v1beta/models/{model}:generateContent`
+- Gemini-compatible streaming: `POST /v1beta/models/{model}:streamGenerateContent`
+- Gemini-compatible token counting, embeddings, files, cached contents, batches, and generated files
+- Gemini function calling / tools
+- Vision input through Gemini `inlineData` and `fileData` content parts
+- Gemini-compatible image generation through image models and `generateImages`
 - SearXNG-compatible grounded search: `GET /search?q=...&format=json`
 - Admin model refresh without restart: `POST /admin/models/refresh`
 - Optional API key protection
-- OpenAI-style error responses
+- Gemini-style error responses
+
+OpenAI-compatible client endpoints such as `/v1/chat/completions`,
+`/v1/responses`, and `/v1/images/generations` have been removed from the public
+compatibility surface. Use the Gemini REST API under `/v1beta` instead.
 
 ## Repository Safety
 
@@ -118,7 +124,7 @@ If this variable is set, every route except `/health` requires either
 Gemini Live WebSocket endpoints also accept `?key=<key>` and
 `X-Goog-API-Key`.
 Gemini REST routes return Gemini-style `UNAUTHENTICATED` errors on failed auth,
-while OpenAI/admin routes keep OpenAI-compatible authentication errors.
+while admin routes keep a small JSON error shape for operational commands.
 
 ```bash
 ANTIGRAVITY_PROXY_API_KEY=change-this-long-random-value
@@ -160,99 +166,46 @@ curl http://127.0.0.1:8765/health
 Models:
 
 ```bash
-curl http://127.0.0.1:8765/v1/models
+curl http://127.0.0.1:8765/v1beta/models
 ```
 
-Chat:
+Generate content:
 
 ```bash
-curl http://127.0.0.1:8765/v1/chat/completions \
+curl http://127.0.0.1:8765/v1beta/models/gemini-3-flash-agent:generateContent \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "Gemini 3.5 Flash (High)",
-    "messages": [{"role": "user", "content": "Say hello in one short sentence."}]
+    "contents": [{"role": "user", "parts": [{"text": "Say hello in one short sentence."}]}]
   }'
 ```
 
-Responses:
+Streaming:
 
 ```bash
-curl http://127.0.0.1:8765/v1/responses \
+curl http://127.0.0.1:8765/v1beta/models/gemini-3-flash-agent:streamGenerateContent \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "Gemini 3.5 Flash (High)",
-    "input": "Say hello in one short sentence."
+    "contents": [{"role": "user", "parts": [{"text": "Stream one short sentence."}]}]
   }'
 ```
 
-Responses streaming:
+Count tokens:
 
 ```bash
-curl http://127.0.0.1:8765/v1/responses \
+curl http://127.0.0.1:8765/v1beta/models/gemini-3-flash-agent:countTokens \
   -H "Content-Type: application/json" \
-  -d '{
-    "model": "Gemini 3.5 Flash (High)",
-    "input": "Stream one sentence.",
-    "stream": true
-  }'
-```
-
-Responses with Gemini-grounded web search and JSON schema output:
-
-```bash
-curl http://127.0.0.1:8765/v1/responses \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "Gemini 3.5 Flash (High)",
-    "input": "Find the latest supported Gemini API output schema controls.",
-    "tools": [{"type": "web_search_preview"}],
-    "text": {
-      "format": {
-        "type": "json_schema",
-        "schema": {
-          "type": "object",
-          "properties": {
-            "summary": {"type": "string"}
-          },
-          "required": ["summary"]
-        }
-      }
-    },
-    "reasoning": {"effort": "low"}
-  }'
-```
-
-Retrieve stored response:
-
-```bash
-curl http://127.0.0.1:8765/v1/responses/resp_your_response_id
-```
-
-List response input items:
-
-```bash
-curl http://127.0.0.1:8765/v1/responses/resp_your_response_id/input_items
-```
-
-Count response input tokens:
-
-```bash
-curl http://127.0.0.1:8765/v1/responses/input_tokens \
-  -H "Content-Type: application/json" \
-  -d '{"input": "Count these tokens approximately."}'
+  -d '{"contents": [{"role": "user", "parts": [{"text": "Count these tokens."}]}]}'
 ```
 
 Tool call:
 
 ```bash
-curl http://127.0.0.1:8765/v1/chat/completions \
+curl http://127.0.0.1:8765/v1beta/models/gemini-3-flash-agent:generateContent \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "Gemini 3.5 Flash (High)",
-    "messages": [{"role": "user", "content": "What is the weather in Seoul?"}],
+    "contents": [{"role": "user", "parts": [{"text": "What is the weather in Seoul?"}]}],
     "tools": [{
-      "type": "function",
-      "function": {
+      "functionDeclarations": [{
         "name": "get_current_weather",
         "description": "Get current weather for a location",
         "parameters": {
@@ -260,9 +213,14 @@ curl http://127.0.0.1:8765/v1/chat/completions \
           "properties": {"location": {"type": "string"}},
           "required": ["location"]
         }
-      }
+      }]
     }],
-    "tool_choice": {"type": "function", "function": {"name": "get_current_weather"}}
+    "toolConfig": {
+      "functionCallingConfig": {
+        "mode": "ANY",
+        "allowedFunctionNames": ["get_current_weather"]
+      }
+    }
   }'
 ```
 
@@ -275,49 +233,15 @@ curl "http://127.0.0.1:8765/search?q=NVIDIA%20latest%20GPU&format=json"
 Image generation:
 
 ```bash
-curl http://127.0.0.1:8765/v1/images/generations \
+curl http://127.0.0.1:8765/v1beta/models/gemini-image-latest:generateImages \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gemini-3.1-flash-image",
     "prompt": "A small robot reading a book at a wooden desk",
-    "size": "1024x1024"
+    "config": {
+      "imageSize": "1K",
+      "numberOfImages": 1
+    }
   }'
-```
-
-## OpenAI SDK Example
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://127.0.0.1:8765/v1",
-    api_key="not-used",  # Use your proxy API key here if ANTIGRAVITY_PROXY_API_KEY is set.
-)
-
-response = client.chat.completions.create(
-    model="Gemini 3.5 Flash (High)",
-    messages=[{"role": "user", "content": "Explain this proxy in one sentence."}],
-)
-
-print(response.choices[0].message.content)
-```
-
-Responses API example:
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://127.0.0.1:8765/v1",
-    api_key="not-used",
-)
-
-response = client.responses.create(
-    model="Gemini 3.5 Flash (High)",
-    input="Explain this proxy in one sentence.",
-)
-
-print(response.output_text)
 ```
 
 ## Gemini API Compatibility
@@ -354,9 +278,8 @@ http://your-host.ts.net:8765/generativelanguage.googleapis.com/v1beta
 Gemini stable-version aliases are also accepted for Gemini-specific routes,
 such as `/v1/models/{model}:generateContent`, `/v1/files:register`,
 `/v1/cachedContents`, `/v1/batches`, and `/v1/live`. OpenAI-compatible routes
-that already live under `/v1` keep their OpenAI behavior, so `/v1/models`,
-`/v1/chat/completions`, `/v1/responses`, and `/v1/images/generations` are not
-rewritten.
+under `/v1`, including `/v1/chat/completions`, `/v1/responses`, and
+`/v1/images/generations`, are intentionally removed.
 
 Common SDK spelling variants are accepted for query parameters: `page_size`,
 `page_token`, `update_mask`, `upload_type`, `display_name`, and
@@ -703,8 +626,8 @@ but return `UNIMPLEMENTED` because the current Antigravity backend does not
 expose those hosted tools. `toolConfig.functionCallingConfig.mode` and
 `allowedFunctionNames` are normalized from common SDK spellings. Function
 calling mode aliases such as `required`, `forced`, and `force` are treated as
-Gemini `ANY`, and OpenAI-style `tool_choice` / `toolChoice` on Gemini requests
-is folded into `toolConfig.functionCallingConfig` for custom function tools.
+Gemini `ANY`, and `tool_choice` / `toolChoice` aliases on Gemini requests are
+folded into `toolConfig.functionCallingConfig` for custom function tools.
 `toolConfig.includeServerSideToolInvocations` and the SDK snake_case alias are
 accepted and coerced to a boolean.
 `toolConfig.retrievalConfig` / `retrieval_config` is also normalized, including
@@ -821,7 +744,8 @@ distinguish unsupported proxy features from malformed requests.
 Gemini request validation failures, including invalid query parameters, return
 `400 INVALID_ARGUMENT` rather than OpenAI-style validation errors.
 Unmatched Gemini routes and uncaught Gemini `HTTPException`s also return this
-Gemini error shape, while OpenAI-compatible routes keep OpenAI-style errors.
+Gemini error shape. Removed OpenAI-compatible routes return Gemini-style
+`404 NOT_FOUND` errors.
 Quota, timeout, and server-side failures map to Gemini statuses such as
 `RESOURCE_EXHAUSTED`, `DEADLINE_EXCEEDED`, `UNAVAILABLE`, or `INTERNAL`.
 
@@ -1065,9 +989,6 @@ Tuned models and permissions:
 
 Generated files:
 
-- OpenAI-compatible image generation also stores each image as a local Gemini
-  `generatedFiles/*` resource so Gemini-style clients can list, fetch, and
-  download generated media.
 - Gemini image model calls through `generateContent`, `generateImages`, and
   `predict` are mapped to Antigravity image generation and return inline/base64
   image payloads plus local `generatedFiles/*` metadata. Image options are
@@ -1116,8 +1037,7 @@ Notes:
   capability metadata for the local Gemini compatibility surface.
 - `models.list` supports Gemini `pageSize` / `pageToken` pagination with the
   official default page size of 50 and maximum page size of 1000. `/v1/models`
-  keeps the OpenAI model-list shape by default, but returns the Gemini
-  `{"models": ...}` shape when Gemini pagination query parameters are present.
+  and `/v1beta/models` return the Gemini `{"models": ...}` shape.
 - Gemini list-style routes accept both REST-style `pageSize` / `pageToken` and
   SDK-style `page_size` / `page_token` query aliases. Batch and operation list
   routes also accept `filter`, `return_partial_success`, and
@@ -1199,10 +1119,12 @@ Notes:
   and semantic/vector `tools.file_search` retrieval are not fully implemented
   yet.
 
-## Responses API Compatibility
+## Removed OpenAI Compatibility
 
-Implemented:
+The previous OpenAI-compatible surface has been removed from the public
+runtime:
 
+- `POST /v1/chat/completions`
 - `POST /v1/responses`
 - `GET /v1/responses/{response_id}`
 - `DELETE /v1/responses/{response_id}`
@@ -1210,34 +1132,13 @@ Implemented:
 - `GET /v1/responses/{response_id}/input_items`
 - `POST /v1/responses/input_tokens`
 - `POST /v1/responses/{response_id}/compact`
-- durable response storage through SQLite
-- `previous_response_id`
-- `store=false`
-- text, image input, custom function tools, and streaming response events
-- `text.format` / chat `response_format` mapped to Gemini JSON output controls
-- `reasoning` mapped to Gemini thinking configuration when the selected model supports it
-- Responses `web_search_preview` mapped to Gemini Google Search grounding
+- `POST /v1/images/generations`
 
-Unsupported OpenAI-hosted tools are rejected with an OpenAI-style 400 error,
-including file search, code interpreter, computer use, MCP, shell, and
-apply-patch style tools. `web_search_preview` is supported through Gemini
-grounding, so its result shape is compatible for text output but not a byte-for-
-byte OpenAI hosted web-search transcript.
+Use Gemini-native equivalents under `/v1beta`, such as `generateContent`,
+`streamGenerateContent`, `countTokens`, `generateImages`, files, cached
+contents, batches, and interactions.
 
-## Hermes Custom Provider Example
-
-Use this as an OpenAI-compatible provider:
-
-```yaml
-providers:
-  antigravity:
-    name: antigravity
-    api: http://127.0.0.1:8765/v1
-    api_key: not-used
-    default_model: Gemini 3.5 Flash (High)
-```
-
-If `ANTIGRAVITY_PROXY_API_KEY` is set, use that value as `api_key`.
+## Hermes Gemini Provider Example
 
 For a generic Gemini-compatible client with a custom Base URL field, use:
 

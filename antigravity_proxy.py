@@ -1,9 +1,9 @@
 """
-Antigravity OpenAI-compatible Proxy Server
+Antigravity Gemini-compatible Proxy Server
 
-Wraps AntigravityClient behind OpenAI /v1/chat/completions and /v1/models
-endpoints so that any OpenAI-compatible client (including Hermes Agent) can
-use Antigravity models.
+Wraps AntigravityClient behind Gemini REST-compatible v1/v1beta endpoints so
+Gemini-native clients, including Hermes Agent's Gemini provider, can use
+Antigravity models.
 
 Usage:
     python antigravity_proxy.py
@@ -5893,7 +5893,7 @@ async def lifespan(app: FastAPI):
 # FastAPI app
 # ---------------------------------------------------------------------------
 app = FastAPI(
-    title="Antigravity OpenAI Proxy",
+    title="Antigravity Gemini Proxy",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -5977,6 +5977,17 @@ def _gemini_stable_alias_path(path: str) -> str:
     if suffix.startswith(stable_prefixes):
         return "/v1beta/" + suffix
     return path
+
+
+def _is_openai_compat_path(path: str) -> bool:
+    normalized = path.rstrip("/") or "/"
+    if normalized == "/v1/chat/completions":
+        return True
+    if normalized == "/v1/images/generations":
+        return True
+    if normalized == "/v1/responses" or normalized.startswith("/v1/responses/"):
+        return True
+    return False
 
 
 def _gemini_alias_query_string(query_string: bytes) -> bytes:
@@ -6360,6 +6371,12 @@ async def _optional_api_key_auth(request: Request, call_next):
     if aliased_path != request.scope.get("path"):
         request.scope["path"] = aliased_path
         request.scope["raw_path"] = aliased_path.encode("ascii", errors="ignore")
+    if _is_openai_compat_path(str(request.scope.get("path") or request.url.path)):
+        return _gemini_error_response(
+            "OpenAI-compatible endpoints have been removed. Use the Gemini REST API under /v1beta.",
+            status_code=404,
+            status="NOT_FOUND",
+        )
     aliased_query = _gemini_alias_query_string(request.scope.get("query_string", b""))
     if aliased_query != request.scope.get("query_string", b""):
         request.scope["query_string"] = aliased_query
@@ -7400,15 +7417,12 @@ def _gemini_models_list_response(page_size: int, page_token: str | None) -> dict
 
 @app.get("/v1/models")
 async def list_models(request: Request):
-    """Return the list of supported models (OpenAI-compatible)."""
-    query = request.query_params
-    if "pageSize" in query or "pageToken" in query or "page_size" in query or "page_token" in query:
-        try:
-            page_size, page_token = _gemini_list_query_params(request, default_page_size=50, max_page_size=1000)
-        except HTTPException as exc:
-            return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT", field="pageSize")
-        return _gemini_models_list_response(page_size, page_token)
-    return ModelListResponse(data=_MODELS)
+    """Return the list of supported models (Gemini stable-compatible)."""
+    try:
+        page_size, page_token = _gemini_list_query_params(request, default_page_size=50, max_page_size=1000)
+    except HTTPException as exc:
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT", field="pageSize")
+    return _gemini_models_list_response(page_size, page_token)
 
 
 @app.get("/v1beta/models")
@@ -10690,7 +10704,6 @@ async def gemini_delete_operation(operation_id: str):
     return JSONResponse({})
 
 
-@app.post("/v1/chat/completions")
 async def chat_completions(req: ChatCompletionRequest):
     """OpenAI-compatible chat completions endpoint.
 
@@ -10965,7 +10978,6 @@ async def chat_completions(req: ChatCompletionRequest):
     )
 
 
-@app.post("/v1/responses")
 async def create_response(req: ResponseCreateRequest):
     if req.background:
         response = {
@@ -11011,7 +11023,6 @@ async def create_response(req: ResponseCreateRequest):
     return JSONResponse(response)
 
 
-@app.post("/v1/responses/input_tokens")
 async def count_response_input_tokens(req: ResponseInputTokensRequest):
     messages, _items = _normalize_responses_input(req.input, instructions=req.instructions)
     return {
@@ -11020,7 +11031,6 @@ async def count_response_input_tokens(req: ResponseInputTokensRequest):
     }
 
 
-@app.get("/v1/responses/{response_id}")
 async def retrieve_response(response_id: str):
     response = _responses_store_get(response_id)
     if not response:
@@ -11028,14 +11038,12 @@ async def retrieve_response(response_id: str):
     return JSONResponse(response)
 
 
-@app.delete("/v1/responses/{response_id}")
 async def delete_response(response_id: str):
     if not _responses_store_delete(response_id):
         raise HTTPException(status_code=404, detail=f"Response '{response_id}' not found.")
     return {"id": response_id, "object": "response.deleted", "deleted": True}
 
 
-@app.post("/v1/responses/{response_id}/cancel")
 async def cancel_response(response_id: str):
     response = _responses_store_get(response_id)
     if not response:
@@ -11045,7 +11053,6 @@ async def cancel_response(response_id: str):
     return JSONResponse(response)
 
 
-@app.get("/v1/responses/{response_id}/input_items")
 async def list_response_input_items(response_id: str):
     items = _responses_store_get_input_items(response_id)
     if items is None:
@@ -11059,7 +11066,6 @@ async def list_response_input_items(response_id: str):
     }
 
 
-@app.post("/v1/responses/{response_id}/compact")
 async def compact_response(response_id: str):
     response = _responses_store_get(response_id)
     if not response:
@@ -11305,7 +11311,7 @@ async def searxng_search(
 
 
 # ---------------------------------------------------------------------------
-# Image generation (OpenAI-compatible /v1/images/generations)
+# Legacy OpenAI image-generation helper retained unregistered for easy rollback.
 # ---------------------------------------------------------------------------
 class ImageGenerationRequest(BaseModel):
     prompt: str
@@ -11318,7 +11324,6 @@ class ImageGenerationRequest(BaseModel):
     model_config = {"extra": "allow"}
 
 
-@app.post("/v1/images/generations")
 async def create_image(req: ImageGenerationRequest):
     """Generate an image via Antigravity (Gemini native image output).
 

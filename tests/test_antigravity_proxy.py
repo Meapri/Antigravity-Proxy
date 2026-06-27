@@ -233,66 +233,18 @@ def test_gemini_error_status_mapping_for_quota_and_server_errors():
     assert internal["details"][0]["reason"] == "INTERNAL"
 
 
-def test_chat_raw_path_maps_structured_output_thinking_and_grounding(monkeypatch):
-    seen = {}
-
-    class FakeClient:
-        def generate_raw(self, *, request, model=""):
-            seen["request"] = request
-            seen["model"] = model
-            return {
-                "response": {
-                    "candidates": [{
-                        "content": {"parts": [{"text": "{\"answer\":\"ok\"}"}]}
-                    }],
-                    "usageMetadata": {
-                        "promptTokenCount": 5,
-                        "candidatesTokenCount": 3,
-                        "totalTokenCount": 8,
-                    },
-                }
-            }
-
-    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+def test_openai_compat_endpoints_are_removed():
     client = TestClient(proxy.app)
 
-    response = client.post("/v1/chat/completions", json={
-        "model": "Gemini 3.5 Flash (High)",
-        "messages": [{"role": "user", "content": "answer as json"}],
-        "tools": [{"type": "web_search_preview"}],
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "answer",
-                "schema": {
-                    "type": "object",
-                    "properties": {"answer": {"type": "string"}},
-                    "required": ["answer"],
-                },
-            },
-        },
-        "reasoning": {"effort": "low"},
-    })
+    chat = client.post("/v1/chat/completions", json={"model": "x", "messages": []})
+    responses = client.post("/v1/responses", json={"model": "x", "input": "hi"})
+    image = client.post("/v1/images/generations", json={"prompt": "draw"})
 
-    assert response.status_code == 200
-    gen = seen["request"]["generationConfig"]
-    assert gen["responseMimeType"] == "application/json"
-    assert gen["responseSchema"]["properties"]["answer"]["type"] == "string"
-    assert gen["thinkingConfig"] == {"thinkingLevel": "low"}
-    assert seen["request"]["tools"] == [{"google_search": {}}]
-
-
-def test_chat_rejects_unsupported_hosted_tool():
-    client = TestClient(proxy.app)
-
-    response = client.post("/v1/chat/completions", json={
-        "model": "Gemini 3.5 Flash (High)",
-        "messages": [{"role": "user", "content": "hello"}],
-        "tools": [{"type": "file_search"}],
-    })
-
-    assert response.status_code == 400
-    assert response.json()["error"]["message"] == "Unsupported tool type: file_search"
+    for response in (chat, responses, image):
+        assert response.status_code == 404
+        body = response.json()
+        assert body["error"]["status"] == "NOT_FOUND"
+        assert "OpenAI-compatible endpoints have been removed" in body["error"]["message"]
 
 
 def test_gemini_models_and_count_tokens():
@@ -595,13 +547,13 @@ def test_gemini_unmatched_routes_use_gemini_error_shape():
     client = TestClient(proxy.app)
 
     gemini_missing = client.get("/v1beta/not-a-route")
-    openai_missing = client.get("/v1/chat/completions/not-a-route")
+    removed_openai = client.post("/v1/chat/completions", json={"model": "x", "messages": []})
 
     assert gemini_missing.status_code == 404
     assert gemini_missing.json()["error"]["status"] == "NOT_FOUND"
     assert gemini_missing.json()["error"]["code"] == 404
-    assert openai_missing.status_code == 404
-    assert openai_missing.json()["error"]["type"] == "invalid_request_error"
+    assert removed_openai.status_code == 404
+    assert removed_openai.json()["error"]["status"] == "NOT_FOUND"
 
 
 def test_gemini_v1_model_routes_do_not_break_openai_models(monkeypatch, tmp_path):
@@ -639,7 +591,8 @@ def test_gemini_v1_model_routes_do_not_break_openai_models(monkeypatch, tmp_path
     )
 
     assert openai_models.status_code == 200
-    assert openai_models.json()["object"] == "list"
+    assert "models" in openai_models.json()
+    assert "data" not in openai_models.json()
     assert gemini_models.status_code == 200
     assert len(gemini_models.json()["models"]) == 1
     assert gemini_models.json()["models"][0]["name"].startswith("models/")
@@ -4507,73 +4460,14 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert deleted_model.status_code == 200
 
 
-def test_openai_image_generation_registers_gemini_generated_file(tmp_path, monkeypatch):
-    monkeypatch.setenv("ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR", str(tmp_path / "generated"))
-    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
-
-    class FakeClient:
-        def generate_image(self, *, prompt, output_dir, aspect_ratio="", image_size=""):
-            output = output_dir / "image.png"
-            output.write_bytes(b"fake-png")
-            return output
-
-    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+def test_openai_image_generation_endpoint_is_removed():
     client = TestClient(proxy.app)
 
     created = client.post("/v1/images/generations", json={"prompt": "draw a square"})
 
-    assert created.status_code == 200
-    generated_name = created.json()["data"][0]["generated_file"]
-    listed = client.get("/v1beta/generatedFiles")
-    operations = client.get("/v1beta/generatedFiles/operations")
-    fetched = client.get(f"/v1beta/{generated_name}")
-    downloaded = client.get(f"/v1beta/{generated_name}:download")
-    v1_listed = client.get("/v1/generatedFiles")
-    v1_operations = client.get("/v1/generatedFiles/operations")
-    operation_id = operations.json()["operations"][0]["name"].rsplit("/", 1)[-1]
-    v1_operation = client.get(f"/v1/generatedFiles/operations/{operation_id}")
-    nested_operation = client.get(f"/v1beta/{generated_name}/operations/{operation_id}")
-    v1_waited = client.post(f"/v1/generatedFiles/operations/{operation_id}:wait")
-    v1_cancelled = client.post(f"/v1/generatedFiles/operations/{operation_id}:cancel")
-    v1_fetched = client.get(f"/v1/{generated_name}")
-    v1_downloaded = client.get(f"/v1/{generated_name}:download")
-    v1_deleted = client.delete(f"/v1/{generated_name}")
-    v1_missing = client.get(f"/v1/{generated_name}")
-
-    assert listed.status_code == 200
-    assert listed.json()["generatedFiles"][0]["name"] == generated_name
-    assert listed.json()["generatedFiles"][0]["source"] == "GENERATED"
-    assert listed.json()["generatedFiles"][0]["state"] == "ACTIVE"
-    assert listed.json()["generatedFiles"][0]["downloadUri"].endswith(":download")
-    assert listed.json()["generatedFiles"][0]["sha256Hash"] == "8ISxNRxBzzxVTZMqOpeJkqObkC8onG4hO2Qow7OFQe0="
-    assert operations.status_code == 200
-    assert operations.json()["operations"][0]["metadata"]["generatedFile"] == generated_name
-    assert fetched.status_code == 200
-    assert fetched.json()["mimeType"] == "image/png"
-    assert fetched.json()["source"] == "GENERATED"
-    assert fetched.json()["downloadUri"].endswith(":download")
-    assert fetched.json()["sha256Hash"] == "8ISxNRxBzzxVTZMqOpeJkqObkC8onG4hO2Qow7OFQe0="
-    assert downloaded.status_code == 200
-    assert downloaded.content == b"fake-png"
-    assert v1_listed.status_code == 200
-    assert v1_listed.json()["generatedFiles"][0]["name"] == generated_name
-    assert v1_operations.status_code == 200
-    assert v1_operations.json()["operations"][0]["metadata"]["generatedFile"] == generated_name
-    assert v1_operation.status_code == 200
-    assert v1_operation.json()["metadata"]["generatedFile"] == generated_name
-    assert nested_operation.status_code == 200
-    assert nested_operation.json()["metadata"]["generatedFile"] == generated_name
-    assert v1_waited.status_code == 200
-    assert v1_waited.json()["name"] == v1_operation.json()["name"]
-    assert v1_cancelled.status_code == 200
-    assert v1_cancelled.json() == {}
-    assert v1_fetched.status_code == 200
-    assert v1_fetched.json()["mimeType"] == "image/png"
-    assert v1_fetched.json()["source"] == "GENERATED"
-    assert v1_downloaded.status_code == 200
-    assert v1_downloaded.content == b"fake-png"
-    assert v1_deleted.status_code == 200
-    assert v1_missing.status_code == 404
+    assert created.status_code == 404
+    assert created.json()["error"]["status"] == "NOT_FOUND"
+    assert "OpenAI-compatible endpoints have been removed" in created.json()["error"]["message"]
 
 
 def test_gemini_image_model_generate_content_predict_and_generate_images(tmp_path, monkeypatch):
