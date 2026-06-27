@@ -2303,6 +2303,21 @@ def _gemini_operation_list_response(operations: list[dict[str, Any]], page_size:
     return {"operations": operations[start:end], "nextPageToken": str(end) if end < len(operations) else ""}
 
 
+def _gemini_permission_list_response(permissions: Any, request: Request) -> dict[str, Any]:
+    page_size, page_token = _gemini_list_query_params(
+        request,
+        default_page_size=10,
+        max_page_size=1000,
+        clamp_page_size=True,
+    )
+    source = permissions.values() if isinstance(permissions, dict) else (permissions or [])
+    items = [item for item in source if isinstance(item, dict)]
+    items.sort(key=lambda item: item.get("name") or "")
+    start = int(page_token or 0) if page_token and page_token.isdigit() else 0
+    end = start + page_size
+    return {"permissions": items[start:end], "nextPageToken": str(end) if end < len(items) else ""}
+
+
 def _gemini_list_query_params(
     request: Request,
     *,
@@ -7265,11 +7280,11 @@ async def gemini_delete_corpus_document(corpus_id: str, document_id: str):
 
 @app.get("/v1/corpora/{corpus_id}/permissions")
 @app.get("/v1beta/corpora/{corpus_id}/permissions")
-async def gemini_list_corpus_permissions(corpus_id: str):
+async def gemini_list_corpus_permissions(corpus_id: str, request: Request):
     meta = _gemini_load_corpora_index().get(_gemini_corpus_name(corpus_id))
     if not meta:
         return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
-    return {"permissions": list((meta.get("permissions") or {}).values())}
+    return _gemini_permission_list_response(meta.get("permissions") or {}, request)
 
 
 @app.post("/v1/corpora/{corpus_id}/permissions")
@@ -8025,11 +8040,11 @@ async def gemini_transfer_tuned_model_ownership(tuned_model_id: str, request: Re
 
 @app.get("/v1/tunedModels/{tuned_model_id}/permissions")
 @app.get("/v1beta/tunedModels/{tuned_model_id}/permissions")
-async def gemini_list_tuned_model_permissions(tuned_model_id: str):
+async def gemini_list_tuned_model_permissions(tuned_model_id: str, request: Request):
     meta = _gemini_get_tuned_meta(tuned_model_id)
     if not meta:
         return _gemini_error_response(f"Tuned model '{tuned_model_id}' not found.", status_code=404, status="NOT_FOUND")
-    return {"permissions": list((meta.get("permissions") or {}).values())}
+    return _gemini_permission_list_response(meta.get("permissions") or {}, request)
 
 
 @app.post("/v1/tunedModels/{tuned_model_id}/permissions")

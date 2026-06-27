@@ -3312,8 +3312,18 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
             "grantee_type": "user",
         },
     })
+    second_perm = client.post(f"/v1/corpora/{corpus_id}/permissions", json={
+        "permission": {
+            "email_address": "writer@example.com",
+            "role": "writer",
+            "grantee_type": "user",
+        },
+    })
     perm_id = perm.json()["name"].rsplit("/", 1)[-1]
-    listed_perms = client.get(f"/v1/corpora/{corpus_id}/permissions")
+    listed_perms = client.get(f"/v1/corpora/{corpus_id}/permissions?pageSize=1")
+    listed_perms_next = client.get(
+        f"/v1/corpora/{corpus_id}/permissions?page_size=1&page_token={listed_perms.json()['nextPageToken']}"
+    )
     fetched_perm = client.get(f"/v1/corpora/{corpus_id}/permissions/{perm_id}")
     patched_perm = client.patch(f"/v1/corpora/{corpus_id}/permissions/{perm_id}?updateMask=permission.role", json={
         "permission": {
@@ -3323,10 +3333,15 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     })
 
     assert perm.status_code == 200
+    assert second_perm.status_code == 200
     assert perm.json()["emailAddress"] == "reader@example.com"
     assert perm.json()["granteeType"] == "USER"
     assert listed_perms.status_code == 200
-    assert listed_perms.json()["permissions"][0]["role"] == "READER"
+    assert len(listed_perms.json()["permissions"]) == 1
+    assert listed_perms.json()["nextPageToken"] == "1"
+    assert listed_perms_next.status_code == 200
+    assert len(listed_perms_next.json()["permissions"]) == 1
+    assert listed_perms_next.json()["nextPageToken"] == ""
     assert fetched_perm.json()["role"] == "READER"
     assert patched_perm.json()["role"] == "WRITER"
     assert patched_perm.json()["emailAddress"] == "reader@example.com"
@@ -3724,6 +3739,10 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
         "email_address": "new-owner@example.com",
     })
     owner_perms = client.get("/v1/tunedModels/my_tuned/permissions")
+    paged_owner_perms = client.get("/v1beta/tunedModels/my_tuned/permissions?pageSize=1")
+    paged_owner_perms_next = client.get(
+        f"/v1beta/tunedModels/my_tuned/permissions?page_size=1&page_token={paged_owner_perms.json()['nextPageToken']}"
+    )
     assert model_owner_transfer.status_code == 200
     assert model_owner_transfer.json()["owner"] == "new-owner@example.com"
     assert any(
@@ -3734,6 +3753,10 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
         item["role"] == "WRITER" and item["emailAddress"] == "user@example.com"
         for item in owner_perms.json()["permissions"]
     )
+    assert len(paged_owner_perms.json()["permissions"]) == 1
+    assert paged_owner_perms.json()["nextPageToken"] == "1"
+    assert len(paged_owner_perms_next.json()["permissions"]) == 1
+    assert paged_owner_perms_next.json()["nextPageToken"] == ""
 
     generated = client.post("/v1/tunedModels/my_tuned:generateContent", json={
         "contents": [{"role": "user", "parts": [{"text": "hello tuned"}]}],

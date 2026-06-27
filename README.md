@@ -977,8 +977,9 @@ Tuned models and permissions:
   string or SDK wrapper body for mutable metadata fields such as `displayName`,
   `description`, `baseModel`, `tuningTask`, and `readerProjectNumbers`.
 - `tunedModels/{id}:generateContent`, `:streamGenerateContent`,
-  `:countTokens`, `:computeTokens`, `:embedContent`, and
-  `:batchEmbedContents` forward to or reuse the configured `baseModel`
+  `:generateText`, `:batchGenerateContent`, `:countTokens`,
+  `:computeTokens`, `:embedContent`, `:batchEmbedContents`, and
+  `:asyncBatchEmbedContent` forward to or reuse the configured `baseModel`
   compatibility path.
 - `permissions` are stored locally for Gemini SDK compatibility; corpus and
   tuned-model permission create/patch accept `permission` wrappers plus
@@ -986,7 +987,9 @@ Tuned models and permissions:
   role/grantee enums to Gemini-style uppercase values. Permission patch honors
   `updateMask` / `update_mask` for `role`, `granteeType`, and `emailAddress`,
   and tuned-model permission routes also accept full permission resource names
-  in the `{permission}` path segment.
+  in the `{permission}` path segment. Permission list routes support
+  `pageSize` / `pageToken` and SDK `page_size` / `page_token`, default to 10
+  items, and clamp oversized pages to 1000.
 
 Generated files:
 
