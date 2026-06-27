@@ -720,10 +720,10 @@ fetched as bounded text context, private/loopback/link-local addresses are
 blocked by default, and `urlContextMetadata` is attached to candidates.
 `codeExecution`, `googleMaps`, and `mcpServers` are recognized but return
 `UNIMPLEMENTED` because the current Antigravity backend does not expose those
-hosted tools. `computerUse` remains rejected on plain `generateContent`, but
-`interactions.create` accepts Gemini native `computer_use` tools and returns a
-`requires_action` interaction with a predefined Computer Use `functionCall` for
-the client or Hermes/cua-driver loop to execute.
+hosted tools. `computerUse` on `generateContent`, `streamGenerateContent`,
+tuned-model generate routes, and `interactions.create` is mapped locally to a
+predefined Computer Use `functionCall` for the client or Hermes/cua-driver loop
+to execute.
 `toolConfig.functionCallingConfig.mode` and `allowedFunctionNames` are
 normalized from common SDK spellings. Function
 calling mode aliases such as `required`, `forced`, and `force` are treated as
@@ -1232,6 +1232,9 @@ Notes:
   resource-specific list fields.
 - Interactions streaming uses Gemini's `event_type` SSE discriminator with
   `step.start`, `step.delta`, `step.stop`, and `interaction.completed` events.
+- Repeated slashes in Gemini SDK paths are normalized before routing, so
+  collection-base clients that produce paths such as `/v1beta//interactions`
+  are accepted without a redirect.
 - File Search Store int64 counters, including `activeDocumentsCount`,
   `pendingDocumentsCount`, `failedDocumentsCount`, and `sizeBytes`, are returned
   as strings per the Gemini REST schema.
@@ -1314,8 +1317,11 @@ Notes:
 - Interactions accept Gemini-style content items such as `{"type":"text"}`,
   `{"type":"image","image_url":...}`, `inline_data`, and `file_data`;
   snake_case Gemini SDK fields are normalized to REST casing before forwarding.
-- Interaction responses include `steps` with `model_output` content blocks, and
-  streaming emits `interaction.step.completed` events for step-aware clients.
+- Interaction responses include SDK-recognized `steps` with `model_output`
+  content blocks. The proxy avoids non-standard step types in stored create
+  responses so `google-genai` can parse the interaction without `UnknownStep`
+  fallbacks. Streaming emits `interaction.step.completed` events for step-aware
+  clients.
 - Interactions with `tools: [{"type":"computer_use","environment":"browser"}]`
   return `status: "requires_action"` with a Computer Use `functionCall` instead
   of forwarding the hosted tool to the Antigravity upstream.

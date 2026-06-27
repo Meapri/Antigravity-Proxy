@@ -6789,6 +6789,15 @@ def _gemini_stable_alias_path(path: str) -> str:
     return path
 
 
+def _normalize_repeated_slashes(path: str) -> str:
+    if "//" not in path:
+        return path
+    prefix = "/" if path.startswith("/") else ""
+    parts = [part for part in path.split("/") if part]
+    normalized = prefix + "/".join(parts)
+    return normalized or "/"
+
+
 def _is_openai_compat_path(path: str) -> bool:
     normalized = path.rstrip("/") or "/"
     if normalized == "/v1/chat/completions":
@@ -7177,6 +7186,11 @@ def _responses_sse(response: dict[str, Any]):
 
 @app.middleware("http")
 async def _optional_api_key_auth(request: Request, call_next):
+    current_path = str(request.scope.get("path") or "")
+    normalized_path = _normalize_repeated_slashes(current_path)
+    if normalized_path != current_path:
+        request.scope["path"] = normalized_path
+        request.scope["raw_path"] = normalized_path.encode("ascii", errors="ignore")
     aliased_path = _gemini_stable_alias_path(request.scope.get("path", ""))
     if aliased_path != request.scope.get("path"):
         request.scope["path"] = aliased_path
@@ -9854,7 +9868,14 @@ async def gemini_tuned_generate_content(tuned_model_id: str, request: Request):
         body = _gemini_normalize_generate_body(body)
         body = _gemini_apply_cached_content(body)
         body = _gemini_apply_url_context(_gemini_apply_file_search(body))
-        _gemini_reject_unsupported_builtin_tools(body)
+        _gemini_reject_unsupported_builtin_tools(body, allow_computer_use=True)
+        computer_use_response = _gemini_generate_computer_use_response_if_needed(
+            model_name=str(model.get("name") or tuned_model_id),
+            model=model,
+            body=body,
+        )
+        if computer_use_response is not None:
+            return JSONResponse(computer_use_response)
         body = _gemini_inline_local_files(body)
         body.pop("model", None)
         data = await asyncio.to_thread(
@@ -9909,7 +9930,17 @@ async def gemini_tuned_stream_generate_content(tuned_model_id: str, request: Req
         body = _gemini_normalize_generate_body(body)
         body = _gemini_apply_cached_content(body)
         body = _gemini_apply_url_context(_gemini_apply_file_search(body))
-        _gemini_reject_unsupported_builtin_tools(body)
+        _gemini_reject_unsupported_builtin_tools(body, allow_computer_use=True)
+        computer_use_response = _gemini_generate_computer_use_response_if_needed(
+            model_name=str(model.get("name") or tuned_model_id),
+            model=model,
+            body=body,
+        )
+        if computer_use_response is not None:
+            async def _computer_use_gen():
+                yield f"data: {json.dumps(computer_use_response, ensure_ascii=False)}\n\n"
+
+            return StreamingResponse(_computer_use_gen(), media_type="text/event-stream")
         body = _gemini_inline_local_files(body)
         body.pop("model", None)
         return _gemini_streaming_response(
@@ -12225,14 +12256,7 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
         "output": response,
         "outputText": text,
         "history": new_history,
-        "steps": [
-            _gemini_interaction_model_output_step(text, response),
-            {
-                "type": "model_response",
-                "status": "completed",
-                "outputText": text,
-            }
-        ],
+        "steps": [_gemini_interaction_model_output_step(text, response)],
         "usage": usage,
         "usageMetadata": response.get("usageMetadata") or response.get("usage_metadata") or usage,
     }

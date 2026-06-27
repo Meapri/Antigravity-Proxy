@@ -2092,7 +2092,7 @@ def test_gemini_generate_content_normalizes_safety_and_tool_config_shortcuts(mon
     }]
 
 
-def test_gemini_generate_content_rejects_unsupported_builtin_tools():
+def test_gemini_generate_content_handles_and_rejects_builtin_tools():
     client = TestClient(proxy.app)
 
     code_execution = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
@@ -3606,6 +3606,48 @@ def test_gemini_interactions_create_previous_store_and_stream(tmp_path, monkeypa
     assert '"event_type": "step.delta"' in body
     assert '"event_type": "step.stop"' in body
     assert "data: [DONE]" in body
+
+
+def test_google_genai_sdk_interactions_create_get_delete_with_double_slash_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", str(tmp_path / "interactions"))
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            return {
+                "response": {
+                    "candidates": [{
+                        "content": {"role": "model", "parts": [{"text": "sdk interaction ok"}]},
+                        "finishReason": "STOP",
+                    }],
+                    "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 2, "totalTokenCount": 3},
+                }
+            }
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    app_client = TestClient(proxy.app)
+    sdk_http = httpx.Client(transport=_FastApiTransport(app_client))
+    sdk = genai.Client(
+        api_key="test-key",
+        http_options=types.HttpOptions(
+            base_url="http://testserver/v1beta",
+            api_version="",
+            httpx_client=sdk_http,
+        ),
+    )
+
+    interaction = sdk.interactions.create(model="gemini-3-flash-agent", input="hello")
+    fetched = sdk.interactions.get(interaction.id)
+    deleted = sdk.interactions.delete(interaction.id)
+
+    assert interaction.id.startswith("int_")
+    assert interaction.status == "completed"
+    assert interaction.output_text == "sdk interaction ok"
+    assert interaction.model == "models/gemini-3-flash-agent"
+    assert [step.type for step in interaction.steps] == ["model_output"]
+    assert interaction.steps[0].content[0].text == "sdk interaction ok"
+    assert fetched.id == interaction.id
+    assert deleted is None
+    assert app_client.get(f"/v1beta/interactions/{interaction.id}").status_code == 404
 
 
 def test_gemini_interactions_native_computer_use_requires_action(tmp_path, monkeypatch):
@@ -5758,6 +5800,23 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     })
     assert generated_full_name.status_code == 200
     assert generated_full_name.json()["candidates"][0]["content"]["parts"][0]["text"] == "tuned ok"
+
+    tuned_computer_use = client.post("/v1beta/tunedModels/my-tuned:generateContent", json={
+        "contents": "use browser",
+        "tools": [{"computer_use": {"environment": "browser"}}],
+    })
+    with client.stream("POST", "/v1beta/tunedModels/my-tuned:streamGenerateContent", json={
+        "contents": "use browser",
+        "tools": [{"computer_use": {"environment": "browser"}}],
+    }) as tuned_computer_stream:
+        tuned_computer_stream_body = tuned_computer_stream.read().decode()
+
+    assert tuned_computer_use.status_code == 200
+    assert tuned_computer_use.json()["candidates"][0]["content"]["parts"][0]["functionCall"]["name"] == "open_web_browser"
+    assert tuned_computer_use.json()["computerUse"]["environment"] == "ENVIRONMENT_BROWSER"
+    assert tuned_computer_stream.status_code == 200
+    assert '"functionCall": {"id": "computer_call_' in tuned_computer_stream_body
+    assert '"name": "open_web_browser"' in tuned_computer_stream_body
 
     text_generated = client.post("/v1beta/tunedModels/my-tuned:generateText", json={
         "prompt": {"text": "legacy tuned text"},
