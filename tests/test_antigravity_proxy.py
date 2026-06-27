@@ -2521,6 +2521,23 @@ def test_gemini_files_upload_and_file_data_inline_conversion(tmp_path, monkeypat
     assert parts[1]["inlineData"]["mimeType"] == "text/plain"
     assert parts[1]["inlineData"]["data"]
 
+    object_file_uri = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": [{
+            "role": "user",
+            "parts": [
+                {"fileData": {"fileUri": {"uri": file_resource["uri"], "mimeType": "text/plain"}}},
+                {"fileData": {"file": file_resource}},
+            ],
+        }]
+    })
+
+    assert object_file_uri.status_code == 200
+    parts = seen["request"]["contents"][0]["parts"]
+    assert parts[0]["inlineData"]["mimeType"] == "text/plain"
+    assert parts[0]["inlineData"]["data"]
+    assert parts[1]["inlineData"]["mimeType"] == "text/plain"
+    assert parts[1]["inlineData"]["data"]
+
     deleted = client.delete(f"/v1beta/{file_resource['name']}")
     assert deleted.status_code == 200
     missing = client.get(f"/v1beta/{file_resource['name']}")

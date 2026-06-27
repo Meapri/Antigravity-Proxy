@@ -3248,6 +3248,21 @@ def _gemini_file_uri_to_inline(file_uri: str) -> dict[str, Any] | None:
     return {"inlineData": {"mimeType": meta.get("mimeType") or "application/octet-stream", "data": data}}
 
 
+def _gemini_file_data_reference(value: Any) -> tuple[str, str | None]:
+    if not isinstance(value, dict):
+        return str(value or "").strip(), None
+    file_obj = value.get("file") if isinstance(value.get("file"), dict) else None
+    uri_value = value.get("fileUri") or value.get("uri") or value.get("name")
+    mime_type = value.get("mimeType")
+    if not uri_value and file_obj:
+        uri_value = file_obj.get("uri") or file_obj.get("fileUri") or file_obj.get("name")
+        mime_type = mime_type or file_obj.get("mimeType")
+    if isinstance(uri_value, dict):
+        mime_type = mime_type or uri_value.get("mimeType")
+        uri_value = uri_value.get("uri") or uri_value.get("fileUri") or uri_value.get("name")
+    return str(uri_value or "").strip(), str(mime_type).strip() if mime_type else None
+
+
 def _gemini_remote_file_uri_to_inline(file_uri: str, mime_type: str | None = None) -> dict[str, Any] | None:
     parsed = urlparse(file_uri)
     if parsed.scheme not in {"http", "https"}:
@@ -3287,11 +3302,11 @@ def _gemini_inline_local_files(value: Any) -> Any:
         return value
     file_data = value.get("fileData")
     if isinstance(file_data, dict):
-        uri = str(file_data.get("fileUri") or file_data.get("uri") or "")
+        uri, mime_type = _gemini_file_data_reference(file_data)
         inline = _gemini_file_uri_to_inline(uri)
         if inline:
             return inline
-        inline = _gemini_remote_file_uri_to_inline(uri, str(file_data.get("mimeType") or "") or None)
+        inline = _gemini_remote_file_uri_to_inline(uri, mime_type)
         if inline:
             return inline
     return {key: _gemini_inline_local_files(child) for key, child in value.items()}

@@ -794,6 +794,8 @@ file upload flows usable even though Antigravity's internal endpoint does not
 expose a native public Files API. The proxy also accepts Gemini SDK-style File
 resource objects directly inside `contents[].parts`, for example
 `{"name": "files/...", "uri": "files/...", "mimeType": "text/plain"}`.
+`fileData.fileUri` may also be a file resource object, and `fileData.file`
+wrappers are accepted for SDK/adapter compatibility.
 Bytes-style SDK parts such as `{"data": "...", "mimeType": "image/png"}` are
 normalized to Gemini `inlineData`.
 
