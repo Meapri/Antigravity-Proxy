@@ -1895,6 +1895,9 @@ def test_gemini_snake_case_query_aliases(tmp_path, monkeypatch):
         "update_mask": "display_name",
         "generateContentBatch": {"displayName": "body masked"},
     })
+    snake_query_masked = client.patch(f"/v1beta/{first['name']}:updateGenerateContentBatch?update_mask=batch.display_name", json={
+        "batch": {"display_name": "snake query masked"},
+    })
     bad_patch = client.patch(f"/v1beta/{first['name']}:updateGenerateContentBatch?updateMask=state", json={
         "state": "BATCH_STATE_CANCELLED",
     })
@@ -1916,6 +1919,8 @@ def test_gemini_snake_case_query_aliases(tmp_path, monkeypatch):
     assert priority.json()["metadata"]["batchResource"]["priority"] == "7"
     assert body_masked.status_code == 200
     assert body_masked.json()["metadata"]["batchResource"]["displayName"] == "body masked"
+    assert snake_query_masked.status_code == 200
+    assert snake_query_masked.json()["metadata"]["batchResource"]["displayName"] == "snake query masked"
     assert bad_patch.status_code == 400
 
 

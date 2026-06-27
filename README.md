@@ -869,7 +869,10 @@ Embeddings and batch operations:
   Batch Mode jobs.
 - `batches.updateGenerateContentBatch` and `batches.updateEmbedContentBatch`
   accept wrapper bodies plus `updateMask` / `update_mask` for `displayName`
-  and `priority`, and return the same completed `batches/*` operation view.
+  and `priority`, including SDK-style paths such as `display_name`,
+  `batch.display_name`, `generate_content_batch.display_name`, and
+  `embed_content_batch.priority`. They return the same completed `batches/*`
+  operation view.
 - `batches.list` supports `filter` terms for common operation and batch fields
   such as `done`, `displayName`, `state`, `model`, and
   `metadata.batchResource.*`; `returnPartialSuccess` /

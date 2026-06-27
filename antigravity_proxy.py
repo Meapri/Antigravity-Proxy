@@ -2386,11 +2386,14 @@ def _gemini_batch_update_fields(update_mask: str | None, body: dict[str, Any]) -
     aliases = {
         "display_name": "displayName",
         "displayName": "displayName",
+        "batch.displayName": "displayName",
+        "batch.display_name": "displayName",
         "generateContentBatch.displayName": "displayName",
         "embedContentBatch.displayName": "displayName",
         "generate_content_batch.display_name": "displayName",
         "embed_content_batch.display_name": "displayName",
         "priority": "priority",
+        "batch.priority": "priority",
         "generateContentBatch.priority": "priority",
         "embedContentBatch.priority": "priority",
         "generate_content_batch.priority": "priority",
@@ -8762,6 +8765,7 @@ async def gemini_update_generate_content_batch(batch_id: str, request: Request, 
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        updateMask = updateMask or request.query_params.get("update_mask")
         return _gemini_batch_operation(_gemini_patch_batch(batch_id, body, updateMask))
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
@@ -8777,6 +8781,7 @@ async def gemini_update_embed_content_batch(batch_id: str, request: Request, upd
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        updateMask = updateMask or request.query_params.get("update_mask")
         return _gemini_batch_operation(_gemini_patch_batch(batch_id, body, updateMask))
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
