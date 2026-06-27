@@ -13,7 +13,10 @@ from pathlib import Path
 from typing import Any
 
 
-DISCOVERY_URL = "https://generativelanguage.googleapis.com/$discovery/rest?version=v1beta"
+DISCOVERY_URLS = {
+    "v1": "https://generativelanguage.googleapis.com/$discovery/rest?version=v1",
+    "v1beta": "https://generativelanguage.googleapis.com/$discovery/rest?version=v1beta",
+}
 TESTS_PATH = Path("tests/test_antigravity_proxy.py")
 
 
@@ -27,7 +30,7 @@ def _walk_methods(resource: dict[str, Any]):
         yield from _walk_methods(child)
 
 
-def fetch_discovery(url: str = DISCOVERY_URL) -> tuple[str, tuple[tuple[str, str], ...]]:
+def fetch_discovery(url: str) -> tuple[str, tuple[tuple[str, str], ...]]:
     with urllib.request.urlopen(url, timeout=30) as response:
         payload = json.loads(response.read().decode("utf-8"))
     revision = str(payload.get("revision", ""))
@@ -45,21 +48,23 @@ def _literal_after_assignment(source: str, name: str):
     raise RuntimeError(f"Could not find {name} in {TESTS_PATH}")
 
 
-def load_fixture(path: Path = TESTS_PATH) -> tuple[str, tuple[tuple[str, str], ...]]:
+def load_fixture(version: str, path: Path = TESTS_PATH) -> tuple[str, tuple[tuple[str, str], ...]]:
     source = path.read_text(encoding="utf-8")
-    revision = _literal_after_assignment(source, "GEMINI_V1BETA_DISCOVERY_REVISION")
-    routes_name_match = re.search(r"GEMINI_V1BETA_DISCOVERY_ROUTES_\d+", source)
+    prefix = "GEMINI_V1_DISCOVERY" if version == "v1" else "GEMINI_V1BETA_DISCOVERY"
+    revision = _literal_after_assignment(source, f"{prefix}_REVISION")
+    routes_name_match = re.search(rf"{prefix}_ROUTES_\d+", source)
     if not routes_name_match:
         raise RuntimeError(f"Could not find Gemini route fixture in {path}")
     routes = _literal_after_assignment(source, routes_name_match.group(0))
     return str(revision), tuple(tuple(item) for item in routes)
 
 
-def format_fixture(revision: str, routes: tuple[tuple[str, str], ...]) -> str:
+def format_fixture(version: str, revision: str, routes: tuple[tuple[str, str], ...]) -> str:
+    prefix = "GEMINI_V1_DISCOVERY" if version == "v1" else "GEMINI_V1BETA_DISCOVERY"
     lines = [
-        f'GEMINI_V1BETA_DISCOVERY_REVISION = "{revision}"',
+        f'{prefix}_REVISION = "{revision}"',
         "",
-        f"GEMINI_V1BETA_DISCOVERY_ROUTES_{revision} = (",
+        f"{prefix}_ROUTES_{revision} = (",
     ]
     lines.extend(f'    ("{method}", "{flat_path}"),' for method, flat_path in routes)
     lines.append(")")
@@ -69,15 +74,17 @@ def format_fixture(revision: str, routes: tuple[tuple[str, str], ...]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="fail if the committed fixture is stale")
-    parser.add_argument("--url", default=DISCOVERY_URL, help="Gemini discovery URL")
+    parser.add_argument("--version", choices=sorted(DISCOVERY_URLS), default="v1beta", help="Gemini API version")
+    parser.add_argument("--url", default=None, help="Gemini discovery URL override")
     args = parser.parse_args()
 
-    revision, routes = fetch_discovery(args.url)
+    url = args.url or DISCOVERY_URLS[args.version]
+    revision, routes = fetch_discovery(url)
     if not args.check:
-        print(format_fixture(revision, routes))
+        print(format_fixture(args.version, revision, routes))
         return 0
 
-    fixture_revision, fixture_routes = load_fixture()
+    fixture_revision, fixture_routes = load_fixture(args.version)
     if (revision, routes) == (fixture_revision, fixture_routes):
         print(f"Gemini discovery fixture is current: revision {revision}, {len(routes)} routes.")
         return 0

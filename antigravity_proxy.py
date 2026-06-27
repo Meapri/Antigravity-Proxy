@@ -476,6 +476,7 @@ _GEMINI_KEY_ALIASES = {
     "image_config": "imageConfig",
     "aspect_ratio": "aspectRatio",
     "image_size": "imageSize",
+    "sample_image_size": "sampleImageSize",
     "number_of_images": "numberOfImages",
     "sample_count": "sampleCount",
     "speech_config": "speechConfig",
@@ -517,6 +518,7 @@ _GEMINI_KEY_ALIASES = {
     "embed_content_batch": "embedContentBatch",
     "input_config": "inputConfig",
     "output_config": "outputConfig",
+    "webhook_config": "webhookConfig",
     "instances_format": "instancesFormat",
     "predictions_format": "predictionsFormat",
     "epoch_count": "epochCount",
@@ -2573,7 +2575,7 @@ def _gemini_image_options_from_body(body: dict[str, Any]) -> dict[str, Any]:
         image_config = normalized.get("imageConfig")
         if isinstance(image_config, dict):
             options.update(_gemini_normalize_request(image_config))
-    for key in ("aspectRatio", "imageSize", "numberOfImages", "sampleCount"):
+    for key in ("aspectRatio", "imageSize", "sampleImageSize", "numberOfImages", "sampleCount"):
         if body.get(key) is not None:
             options[key] = body[key]
     return options
@@ -2604,6 +2606,8 @@ async def _gemini_generate_image_payload(model_name: str, body: dict[str, Any]) 
     image_size = (
         body.get("imageSize")
         or options.get("imageSize")
+        or body.get("sampleImageSize")
+        or options.get("sampleImageSize")
         or "1K"
     )
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -3758,7 +3762,7 @@ def _gemini_batch_body(body: Any) -> Any:
     for key in ("batch", "generateContentBatch", "embedContentBatch"):
         if isinstance(body.get(key), dict):
             merged = dict(body[key])
-            for outer_key in ("model", "displayName", "inputConfig", "outputConfig", "requests", "config", "priority", "updateMask"):
+            for outer_key in ("model", "displayName", "inputConfig", "outputConfig", "requests", "config", "priority", "updateMask", "webhookConfig"):
                 if outer_key in body and outer_key not in merged:
                     merged[outer_key] = body[outer_key]
             merged["_batchKind"] = "embed" if key == "embedContentBatch" else "generate"
@@ -3872,7 +3876,7 @@ def _gemini_batch_update_fields(update_mask: str | None, body: dict[str, Any]) -
 def _gemini_batch_optional_fields(body: dict[str, Any]) -> dict[str, Any]:
     return {
         key: body[key]
-        for key in ("inputConfig", "outputConfig", "priority")
+        for key in ("inputConfig", "outputConfig", "priority", "webhookConfig")
         if key in body and body[key] is not None
     }
 
@@ -3886,6 +3890,26 @@ def _gemini_store_batch(batch: dict[str, Any]) -> dict[str, Any]:
 
 def _gemini_get_batch(name: str) -> dict[str, Any] | None:
     return _gemini_load_batches_index().get(_gemini_batch_name(name))
+
+
+def _gemini_batch_resource(batch: dict[str, Any]) -> dict[str, Any]:
+    fields = (
+        "name",
+        "displayName",
+        "model",
+        "state",
+        "createTime",
+        "updateTime",
+        "endTime",
+        "inputConfig",
+        "output",
+        "priority",
+        "batchStats",
+    )
+    out = {key: batch[key] for key in fields if batch.get(key) is not None}
+    if "batchStats" not in out and isinstance(batch.get("stats"), dict):
+        out["batchStats"] = batch["stats"]
+    return out
 
 
 def _gemini_get_vertex_batch_job(name: str, project: str | None = None, location: str | None = None) -> dict[str, Any] | None:
@@ -6045,6 +6069,78 @@ def _gemini_file_search_store_names(tool: dict[str, Any]) -> list[str]:
     return names
 
 
+def _gemini_file_search_configs(body: dict[str, Any]) -> list[dict[str, Any]]:
+    tools = body.get("tools") if isinstance(body.get("tools"), list) else []
+    configs: list[dict[str, Any]] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        search_cfg = (
+            tool.get("file_search")
+            or tool.get("fileSearch")
+            or tool.get("fileSearchRetrieval")
+            or tool.get("file_search_retrieval")
+        )
+        if isinstance(search_cfg, dict):
+            configs.append(_gemini_normalize_request(search_cfg))
+        elif any(key in tool for key in ("file_search", "fileSearch", "fileSearchRetrieval", "file_search_retrieval")):
+            configs.append({})
+    return configs
+
+
+def _gemini_file_search_top_k(configs: list[dict[str, Any]]) -> int:
+    for config in configs:
+        raw = config.get("topK")
+        if raw is None:
+            continue
+        value = _gemini_int_value(raw)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return max(1, min(value, 20))
+    return 5
+
+
+def _gemini_custom_metadata_value(custom_metadata: Any, key: str) -> Any:
+    if isinstance(custom_metadata, dict):
+        return custom_metadata.get(key)
+    if isinstance(custom_metadata, list):
+        for item in custom_metadata:
+            if not isinstance(item, dict):
+                continue
+            item_key = item.get("key") or item.get("name")
+            if item_key != key:
+                continue
+            if "stringValue" in item:
+                return item["stringValue"]
+            if "numericValue" in item:
+                return item["numericValue"]
+            if "value" in item:
+                return item["value"]
+    return None
+
+
+def _gemini_file_search_metadata_matches(doc: dict[str, Any], metadata_filter: Any) -> bool:
+    if not metadata_filter:
+        return True
+    if isinstance(metadata_filter, dict):
+        filters = metadata_filter.items()
+    elif isinstance(metadata_filter, str):
+        filters = []
+        for raw in re.split(r"\s+(?:AND|and)\s+", metadata_filter.strip()):
+            match = re.match(
+                r"^(?:document\.)?(?:custom_metadata|customMetadata)\.([\w.-]+)\s*(=|:)\s*['\"]?(.+?)['\"]?$",
+                raw.strip(),
+            )
+            if match:
+                filters.append((match.group(1), match.group(3)))
+    else:
+        return True
+    for key, expected in filters:
+        actual = _gemini_custom_metadata_value(doc.get("customMetadata"), str(key))
+        if str(actual) != str(expected):
+            return False
+    return True
+
+
 def _gemini_search_score(query: str, text: str) -> int:
     import re
 
@@ -6054,18 +6150,19 @@ def _gemini_search_score(query: str, text: str) -> int:
 
 
 def _gemini_file_search_context(body: dict[str, Any]) -> str:
-    tools = body.get("tools") if isinstance(body.get("tools"), list) else []
+    configs = _gemini_file_search_configs(body)
     store_names: list[str] = []
-    for tool in tools:
-        if not isinstance(tool, dict):
-            continue
-        if any(key in tool for key in ("file_search", "fileSearch", "fileSearchRetrieval", "file_search_retrieval")):
-            store_names.extend(_gemini_file_search_store_names(tool))
+    metadata_filters: list[Any] = []
+    for config in configs:
+        store_names.extend(_gemini_file_search_store_names({"fileSearch": config}))
+        if config.get("metadataFilter") is not None:
+            metadata_filters.append(config["metadataFilter"])
     if not store_names:
         return ""
 
     index = _gemini_load_fss_index()
     query = _gemini_extract_search_query(body)
+    top_k = _gemini_file_search_top_k(configs)
     matches: list[tuple[int, str, dict[str, Any]]] = []
     for store_name in store_names:
         store = index.get(_gemini_fss_name(store_name))
@@ -6074,12 +6171,14 @@ def _gemini_file_search_context(body: dict[str, Any]) -> str:
         for doc in (store.get("documents") or {}).values():
             if not isinstance(doc, dict):
                 continue
+            if metadata_filters and not any(_gemini_file_search_metadata_matches(doc, item) for item in metadata_filters):
+                continue
             text = str(doc.get("textPreview") or "")
             score = _gemini_search_score(query, text)
             if score or not query:
                 matches.append((score, str(doc.get("name") or ""), doc))
     matches.sort(key=lambda item: (-item[0], item[1]))
-    selected = matches[:5]
+    selected = matches[:top_k]
     if not selected:
         return ""
     blocks = []
@@ -10766,6 +10865,8 @@ def _gemini_create_completed_embed_batch(model: dict[str, Any], body: dict[str, 
         "done": True,
         "response": response_payload,
     }
+    if batch.get("webhookConfig") is not None:
+        operation["metadata"]["webhookConfig"] = batch["webhookConfig"]
     stored_batch = _gemini_store_batch(batch)
     _gemini_store_operation({**operation, "name": operation_name})
     return operation, stored_batch
@@ -11322,6 +11423,8 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
         "done": True,
         "response": response_payload,
     }
+    if batch.get("webhookConfig") is not None:
+        operation["metadata"]["webhookConfig"] = batch["webhookConfig"]
     _gemini_store_operation({**operation, "name": operation_name})
     stored_batch = _gemini_store_batch(batch)
     await _gemini_emit_webhook_event("batch.succeeded", stored_batch)
@@ -11977,7 +12080,7 @@ async def gemini_update_generate_content_batch(batch_id: str, request: Request, 
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
         updateMask = updateMask or request.query_params.get("update_mask")
-        return _gemini_batch_operation(_gemini_patch_batch(batch_id, body, updateMask))
+        return _gemini_batch_resource(_gemini_patch_batch(batch_id, body, updateMask))
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
@@ -11993,7 +12096,7 @@ async def gemini_update_embed_content_batch(batch_id: str, request: Request, upd
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
         updateMask = updateMask or request.query_params.get("update_mask")
-        return _gemini_batch_operation(_gemini_patch_batch(batch_id, body, updateMask))
+        return _gemini_batch_resource(_gemini_patch_batch(batch_id, body, updateMask))
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)

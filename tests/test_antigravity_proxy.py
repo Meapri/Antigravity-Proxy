@@ -27,6 +27,43 @@ class StaticCredentials(credentials.Credentials):
 
 GEMINI_V1BETA_DISCOVERY_REVISION = "20260626"
 
+GEMINI_V1_DISCOVERY_REVISION = "20260626"
+
+GEMINI_V1_DISCOVERY_ROUTES_20260626 = (
+    ("DELETE", "v1/batches/{batchesId}"),
+    ("DELETE", "v1/operations/{operationsId}"),
+    ("GET", "v1/batches"),
+    ("GET", "v1/batches/{batchesId}"),
+    ("GET", "v1/corpora/{corporaId}/operations/{operationsId}"),
+    ("GET", "v1/fileSearchStores/{fileSearchStoresId}/operations/{operationsId}"),
+    ("GET", "v1/fileSearchStores/{fileSearchStoresId}/upload/operations/{operationsId}"),
+    ("GET", "v1/generatedFiles/{generatedFilesId}/operations/{operationsId}"),
+    ("GET", "v1/models"),
+    ("GET", "v1/models/{modelsId}"),
+    ("GET", "v1/models/{modelsId}/operations"),
+    ("GET", "v1/models/{modelsId}/operations/{operationsId}"),
+    ("GET", "v1/operations"),
+    ("GET", "v1/tunedModels/{tunedModelsId}/operations"),
+    ("GET", "v1/tunedModels/{tunedModelsId}/operations/{operationsId}"),
+    ("PATCH", "v1/batches/{batchesId}:updateEmbedContentBatch"),
+    ("PATCH", "v1/batches/{batchesId}:updateGenerateContentBatch"),
+    ("POST", "v1/batches/{batchesId}:cancel"),
+    ("POST", "v1/dynamic/{dynamicId}:generateContent"),
+    ("POST", "v1/dynamic/{dynamicId}:streamGenerateContent"),
+    ("POST", "v1/models/{modelsId}:asyncBatchEmbedContent"),
+    ("POST", "v1/models/{modelsId}:batchEmbedContents"),
+    ("POST", "v1/models/{modelsId}:batchGenerateContent"),
+    ("POST", "v1/models/{modelsId}:countTokens"),
+    ("POST", "v1/models/{modelsId}:embedContent"),
+    ("POST", "v1/models/{modelsId}:generateContent"),
+    ("POST", "v1/models/{modelsId}:streamGenerateContent"),
+    ("POST", "v1/tunedModels/{tunedModelsId}/operations/{operationsId}:cancel"),
+    ("POST", "v1/tunedModels/{tunedModelsId}:asyncBatchEmbedContent"),
+    ("POST", "v1/tunedModels/{tunedModelsId}:batchGenerateContent"),
+    ("POST", "v1/tunedModels/{tunedModelsId}:generateContent"),
+    ("POST", "v1/tunedModels/{tunedModelsId}:streamGenerateContent"),
+)
+
 GOOGLE_GENAI_SDK_VERSION = "2.10.0"
 
 GOOGLE_GENAI_SDK_METHODS_2_10_0 = {
@@ -266,6 +303,17 @@ def test_gemini_v1beta_discovery_20260626_flatpaths_match_fastapi_routes():
     assert GEMINI_V1BETA_DISCOVERY_REVISION == "20260626"
     missing = []
     for method, flat_path in GEMINI_V1BETA_DISCOVERY_ROUTES_20260626:
+        path = _sample_discovery_path(flat_path)
+        if not _matched_route_paths(method, path):
+            missing.append(f"{method} {flat_path} -> {path}")
+
+    assert missing == []
+
+
+def test_gemini_v1_discovery_20260626_flatpaths_match_fastapi_routes():
+    assert GEMINI_V1_DISCOVERY_REVISION == "20260626"
+    missing = []
+    for method, flat_path in GEMINI_V1_DISCOVERY_ROUTES_20260626:
         path = _sample_discovery_path(flat_path)
         if not _matched_route_paths(method, path):
             missing.append(f"{method} {flat_path} -> {path}")
@@ -1191,6 +1239,7 @@ def test_gemini_async_batch_embed_and_batch_update(tmp_path, monkeypatch):
         },
         "config": {"output_dimensionality": "6"},
         "priority": "HIGH",
+        "webhook_config": {"uri": "https://example.test/batch-hook"},
     })
 
     assert created.status_code == 200
@@ -1205,6 +1254,8 @@ def test_gemini_async_batch_embed_and_batch_update(tmp_path, monkeypatch):
     wrapped_operation = wrapped_created.json()
     assert wrapped_operation["metadata"]["batchResource"]["displayName"] == "wrapped embed job"
     assert wrapped_operation["metadata"]["batchResource"]["priority"] == "HIGH"
+    assert wrapped_operation["metadata"]["batchResource"]["webhookConfig"]["uri"] == "https://example.test/batch-hook"
+    assert wrapped_operation["metadata"]["webhookConfig"]["uri"] == "https://example.test/batch-hook"
     assert len(wrapped_operation["response"]["embeddings"]) == 2
     assert len(wrapped_operation["response"]["embeddings"][0]["values"]) == 6
 
@@ -1218,7 +1269,10 @@ def test_gemini_async_batch_embed_and_batch_update(tmp_path, monkeypatch):
 
     assert updated.status_code == 200
     assert updated.json()["name"] == batch_name
-    assert updated.json()["metadata"]["batchResource"]["displayName"] == "renamed"
+    assert updated.json()["displayName"] == "renamed"
+    assert updated.json()["batchStats"]["requestCount"] == "2"
+    assert "done" not in updated.json()
+    assert "response" not in updated.json()
     assert fetched.json()["name"] == batch_name
     assert fetched.json()["metadata"]["operation"] == operation["metadata"]["operation"]
     assert fetched.json()["metadata"]["batchResource"]["displayName"] == "renamed"
@@ -3819,9 +3873,13 @@ def test_gemini_batches_v1_aliases(tmp_path, monkeypatch):
     assert fetched.status_code == 200
     assert fetched.json()["metadata"]["batchResource"]["displayName"] == "v1 docs batch"
     assert patched.status_code == 200
-    assert patched.json()["metadata"]["batchResource"]["displayName"] == "v1 renamed batch"
+    assert patched.json()["displayName"] == "v1 renamed batch"
+    assert patched.json()["state"] == "BATCH_STATE_SUCCEEDED"
+    assert "done" not in patched.json()
     assert embed_patched.status_code == 200
-    assert embed_patched.json()["metadata"]["batchResource"]["priority"] == "HIGH"
+    assert embed_patched.json()["priority"] == "HIGH"
+    assert embed_patched.json()["batchStats"]["requestCount"] == "1"
+    assert "response" not in embed_patched.json()
     assert cancelled.status_code == 200
     assert deleted.status_code == 200
     assert missing.status_code == 404
@@ -3882,13 +3940,14 @@ def test_gemini_snake_case_query_aliases(tmp_path, monkeypatch):
     assert done_filtered.status_code == 200
     assert len(done_filtered.json()["operations"]) == 2
     assert patched.status_code == 200
-    assert patched.json()["metadata"]["batchResource"]["displayName"] == "patched"
+    assert patched.json()["displayName"] == "patched"
+    assert "done" not in patched.json()
     assert priority.status_code == 200
-    assert priority.json()["metadata"]["batchResource"]["priority"] == "7"
+    assert priority.json()["priority"] == "7"
     assert body_masked.status_code == 200
-    assert body_masked.json()["metadata"]["batchResource"]["displayName"] == "body masked"
+    assert body_masked.json()["displayName"] == "body masked"
     assert snake_query_masked.status_code == 200
-    assert snake_query_masked.json()["metadata"]["batchResource"]["displayName"] == "snake query masked"
+    assert snake_query_masked.json()["displayName"] == "snake query masked"
     assert bad_patch.status_code == 400
 
 
@@ -5995,11 +6054,32 @@ def test_gemini_file_search_tool_injects_local_context(tmp_path, monkeypatch):
     store = client.post("/v1beta/fileSearchStores", json={"displayName": "knowledge"}).json()
     store_id = store["name"].split("/", 1)[1]
     uploaded = client.post(
-        f"/upload/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore?displayName=plan.txt",
-        content=b"Project Atlas launch window is October.",
-        headers={"Content-Type": "text/plain"},
+        f"/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore",
+        json={
+            "display_name": "plan.txt",
+            "text": "Project Atlas launch window is October.",
+            "custom_metadata": {"project": "atlas"},
+        },
+    )
+    uploaded_second = client.post(
+        f"/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore",
+        json={
+            "display_name": "backup.txt",
+            "text": "Project Atlas launch backup is November.",
+            "custom_metadata": {"project": "atlas"},
+        },
+    )
+    uploaded_filtered = client.post(
+        f"/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore",
+        json={
+            "display_name": "other.txt",
+            "text": "Project Atlas launch secret is September.",
+            "custom_metadata": {"project": "zephyr"},
+        },
     )
     assert uploaded.status_code == 200
+    assert uploaded_second.status_code == 200
+    assert uploaded_filtered.status_code == 200
 
     response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
         "contents": [{"role": "user", "parts": [{"text": "When is Project Atlas launch?"}]}],
@@ -6007,7 +6087,7 @@ def test_gemini_file_search_tool_injects_local_context(tmp_path, monkeypatch):
             "file_search": {
                 "file_search_store_names": [store["name"]],
                 "metadata_filter": 'document.custom_metadata.project="atlas"',
-                "top_k": "3",
+                "top_k": "1",
             }
         }],
     })
@@ -6015,7 +6095,8 @@ def test_gemini_file_search_tool_injects_local_context(tmp_path, monkeypatch):
     assert response.status_code == 200
     injected = seen["request"]["contents"][0]["parts"][0]["text"]
     assert "Local Gemini file_search results" in injected
-    assert "Project Atlas launch window is October" in injected
+    assert injected.count("Project Atlas launch") == 1
+    assert "Project Atlas launch secret is September" not in injected
     assert seen["request"]["contents"][1]["parts"][0]["text"] == "When is Project Atlas launch?"
     assert "tools" not in seen["request"]
 
@@ -6435,6 +6516,10 @@ def test_gemini_image_model_generate_content_predict_and_generate_images(tmp_pat
             "image_config": {"aspect_ratio": "4:3", "image_size": "1K"},
         },
     })
+    sample_image_size = client.post("/v1beta/models/gemini-image-latest:generateImages", json={
+        "prompt": "draw sample image size",
+        "parameters": {"aspect_ratio": "3:4", "sample_image_size": "2K"},
+    })
 
     assert content.status_code == 200
     inline = content.json()["candidates"][0]["content"]["parts"][0]["inlineData"]
@@ -6453,20 +6538,23 @@ def test_gemini_image_model_generate_content_predict_and_generate_images(tmp_pat
     assert generated_image["generatedFile"]["name"].startswith("generatedFiles/")
     assert config_prompt.status_code == 200
     assert config_prompt.json()["generatedImages"][0]["image"]["imageBytes"]
+    assert sample_image_size.status_code == 200
+    assert sample_image_size.json()["generatedImages"][0]["image"]["imageBytes"]
     assert image_calls == [
         {"prompt": "draw image", "aspect_ratio": "16:9", "image_size": "2K"},
         {"prompt": "draw predict", "aspect_ratio": "1:1", "image_size": "1K"},
         {"prompt": "draw generated", "aspect_ratio": "9:16", "image_size": "2K"},
         {"prompt": "draw generated", "aspect_ratio": "9:16", "image_size": "2K"},
         {"prompt": "draw config prompt", "aspect_ratio": "4:3", "image_size": "1K"},
+        {"prompt": "draw sample image size", "aspect_ratio": "3:4", "image_size": "2K"},
     ]
 
     listed = client.get("/v1beta/generatedFiles")
     listed_clamped = client.get("/v1beta/generatedFiles?pageSize=51")
     assert listed.status_code == 200
-    assert len(listed.json()["generatedFiles"]) == 5
+    assert len(listed.json()["generatedFiles"]) == 6
     assert listed_clamped.status_code == 200
-    assert len(listed_clamped.json()["generatedFiles"]) == 5
+    assert len(listed_clamped.json()["generatedFiles"]) == 6
 
     generated_file_name = generated_image["generatedFile"]["name"]
     fetched_file = client.get(f"/v1beta/{generated_file_name}")
