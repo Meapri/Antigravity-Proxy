@@ -3423,6 +3423,7 @@ def _gemini_cached_update_mask(update_mask: str | None) -> set[str] | None:
 
 def _gemini_create_cached_content(body: dict[str, Any]) -> dict[str, Any]:
     body = _gemini_cached_body(body)
+    usage = _gemini_count_tokens_response(_gemini_count_tokens_request(body))
     now = int(time.time())
     iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
     cache_id = "cache_" + uuid.uuid4().hex
@@ -3436,7 +3437,10 @@ def _gemini_create_cached_content(body: dict[str, Any]) -> dict[str, Any]:
         "updateTime": iso,
         "ttl": body.get("ttl") if not body.get("expireTime") else None,
         "expireTime": body.get("expireTime") or expire_iso,
-        "usageMetadata": {"totalTokenCount": _estimate_tokens(body)},
+        "usageMetadata": {
+            "totalTokenCount": usage.get("totalTokens", 0),
+            "promptTokensDetails": usage.get("promptTokensDetails", []),
+        },
         "payload": body,
     }
     index = _gemini_load_cached_index()

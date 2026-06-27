@@ -300,6 +300,8 @@ def test_gemini_count_tokens_applies_generate_content_request_cache(tmp_path, mo
     })
     assert created.status_code == 200
     cache_name = created.json()["name"]
+    assert created.json()["usageMetadata"]["totalTokenCount"] > 0
+    assert created.json()["usageMetadata"]["promptTokensDetails"][0]["modality"] == "TEXT"
 
     uncached = client.post("/v1beta/models/gemini-3-flash-agent:countTokens", json={
         "contents": [{"role": "user", "parts": [{"text": "new prompt"}]}],
@@ -2730,6 +2732,8 @@ def test_gemini_cached_contents_merge_into_generate_request(tmp_path, monkeypatc
         "category": "HARM_CATEGORY_HARASSMENT",
         "threshold": "BLOCK_ONLY_HIGH",
     }]
+    assert wrapped_created.json()["usageMetadata"]["totalTokenCount"] > created.json()["usageMetadata"]["totalTokenCount"]
+    assert wrapped_created.json()["usageMetadata"]["promptTokensDetails"][0]["modality"] == "TEXT"
     assert wrapped_created.json()["expireTime"]
 
     paged = client.get("/v1beta/cachedContents?pageSize=1")

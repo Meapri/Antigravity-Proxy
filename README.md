@@ -799,7 +799,8 @@ Cached content creation uses the same SDK-friendly normalization as
 `safetySettings`, and shortcut `toolConfig` forms. When a `cachedContent`
 wrapper is present, sibling fields such as `model`, `displayName`, `ttl`,
 `expireTime`, and `config` are merged into the wrapped cache resource if the
-wrapped object did not already provide them.
+wrapped object did not already provide them. Cache `usageMetadata` is computed
+with the same local token-estimation path used by `countTokens`.
 
 Embeddings and batch operations:
 
