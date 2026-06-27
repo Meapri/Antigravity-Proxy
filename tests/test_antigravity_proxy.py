@@ -6523,6 +6523,60 @@ def test_openai_image_generation_endpoint_is_removed():
     assert "OpenAI-compatible endpoints have been removed" in created.json()["error"]["message"]
 
 
+def test_searxng_search_is_public_and_accepts_get_form_and_json(monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_PROXY_API_KEY", "secret")
+    calls = []
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            calls.append({"request": request, "model": model})
+            query = request["contents"][0]["parts"][0]["text"]
+            return {
+                "response": {
+                    "candidates": [{
+                        "content": {"parts": [{"text": f"Answer for {query}"}]},
+                        "groundingMetadata": {
+                            "groundingChunks": [
+                                {"web": {"uri": "https://example.test/a", "title": "Example A"}},
+                                {"web": {"uri": "https://example.test/b", "title": "Example B"}},
+                            ],
+                            "groundingSupports": [{
+                                "segment": {"text": "cited snippet"},
+                                "groundingChunkIndices": [0],
+                            }],
+                            "webSearchQueries": [query],
+                        },
+                    }]
+                }
+            }
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    get_response = client.get("/search?q=atlas&format=json&pageno=1&limit=1")
+    form_response = client.post(
+        "/search",
+        content="q=atlas+form&format=json&pageno=1&limit=1",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    json_response = client.post("/search", json={"q": "atlas json", "pageno": 1, "limit": 1})
+    second_page = client.get("/search?q=atlas&pageno=2")
+    protected = client.get("/v1beta/models")
+
+    assert get_response.status_code == 200
+    assert get_response.json()["query"] == "atlas"
+    assert get_response.json()["number_of_results"] == 1
+    assert get_response.json()["results"][0]["url"] == "https://example.test/a"
+    assert form_response.status_code == 200
+    assert form_response.json()["query"] == "atlas form"
+    assert json_response.status_code == 200
+    assert json_response.json()["query"] == "atlas json"
+    assert second_page.status_code == 200
+    assert second_page.json()["results"] == []
+    assert protected.status_code == 401
+    assert calls[0]["request"]["tools"] == [{"google_search": {}}]
+
+
 def test_gemini_image_model_generate_content_predict_and_generate_images(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR", str(tmp_path / "generated"))
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))

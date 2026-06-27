@@ -7631,7 +7631,7 @@ async def _optional_api_key_auth(request: Request, call_next):
     if aliased_query != request.scope.get("query_string", b""):
         request.scope["query_string"] = aliased_query
     expected = _proxy_api_key()
-    if not expected or request.url.path == "/health":
+    if not expected or request.url.path in {"/health", "/search"}:
         return await call_next(request)
     if _request_api_key_valid(request):
         return await call_next(request)
@@ -13798,15 +13798,47 @@ async def _get_or_fetch_search(query: str, limit: int) -> dict[str, Any]:
         _SEARCH_INFLIGHT.pop(query, None)
 
 
+def _coerce_search_int(value: Any, default: int, *, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+async def _searxng_request_params(request: Request, q: str, pageno: int, limit: int) -> tuple[str, int, int]:
+    params: dict[str, Any] = dict(request.query_params)
+    if request.method.upper() == "POST":
+        content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        raw = await request.body()
+        body_params: dict[str, Any] = {}
+        if content_type == "application/json" and raw:
+            try:
+                decoded = json.loads(raw.decode("utf-8"))
+            except Exception:
+                decoded = {}
+            if isinstance(decoded, dict):
+                body_params = decoded
+        elif raw:
+            body_params = dict(parse_qsl(raw.decode("utf-8", errors="replace"), keep_blank_values=True))
+        params = {**body_params, **params}
+    query = str(params.get("q") or params.get("query") or q or "").strip()
+    page = _coerce_search_int(params.get("pageno", params.get("page", pageno)), pageno, minimum=1, maximum=1000)
+    result_limit = _coerce_search_int(params.get("limit", params.get("count", limit)), limit, minimum=1, maximum=20)
+    return query, page, result_limit
+
+
 @app.get("/search")
+@app.post("/search")
 async def searxng_search(
+    request: Request,
     q: str = Query("", description="search query"),
     format: str = Query("json"),
     pageno: int = Query(1),
     limit: int = Query(10, ge=1, le=20),
 ):
     """SearXNG-compatible JSON search endpoint (Gemini Google-Search grounded)."""
-    query = (q or "").strip()
+    query, pageno, limit = await _searxng_request_params(request, q, pageno, limit)
     empty = {"query": query, "number_of_results": 0, "results": [], "answers": []}
     if not query or pageno > 1:
         # Grounding has no pagination; page >1 simply has no further results.
