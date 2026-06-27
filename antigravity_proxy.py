@@ -737,7 +737,9 @@ def _gemini_response_modality_value(value: Any) -> Any:
         "modality_unspecified": "MODALITY_UNSPECIFIED",
         "text": "TEXT",
         "image": "IMAGE",
+        "video": "VIDEO",
         "audio": "AUDIO",
+        "document": "DOCUMENT",
     }
     return aliases.get(normalized, value)
 
@@ -1654,7 +1656,16 @@ def _gemini_normalize_usage_metadata(value: Any, *, request_body: dict[str, Any]
         "cacheTokensDetails",
     ):
         if isinstance(usage.get(key), list):
-            usage[key] = [_gemini_normalize_response_object(item) if isinstance(item, dict) else item for item in usage[key]]
+            normalized_items: list[Any] = []
+            for item in usage[key]:
+                if isinstance(item, dict):
+                    normalized_item = _gemini_normalize_response_object(item)
+                    if isinstance(normalized_item, dict) and "modality" in normalized_item:
+                        normalized_item["modality"] = _gemini_response_modality_value(normalized_item["modality"])
+                    normalized_items.append(normalized_item)
+                else:
+                    normalized_items.append(item)
+            usage[key] = normalized_items
     if usage.get("promptTokenCount") is None:
         usage["promptTokenCount"] = _estimate_tokens(request_body or {})
     if usage.get("candidatesTokenCount") is None:

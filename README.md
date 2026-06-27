@@ -1104,7 +1104,8 @@ Notes:
   `candidates_token_count`, `total_token_count`, and `service_tier` are
   normalized to `promptTokenCount`, `candidatesTokenCount`,
   `totalTokenCount`, and `serviceTier`; nested modality entries normalize
-  `token_count` to `tokenCount`.
+  `token_count` to `tokenCount` and common lowercase modalities such as
+  `document` to Gemini enum values such as `DOCUMENT`.
 - Files are stored locally under `data/gemini_files` by default; override with
   `ANTIGRAVITY_GEMINI_FILES_DIR`. File resources include Gemini-style
   `downloadUri`, `source`, base64 `sha256Hash`, and video metadata fields when
