@@ -3226,7 +3226,7 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     })
     assert listed.status_code == 200
     assert fetched.json()["displayName"] == "My tuned"
-    assert fetched.json()["supportedGenerationMethods"] == ["generateContent", "countTokens", "computeTokens"]
+    assert fetched.json()["supportedGenerationMethods"] == ["generateContent", "streamGenerateContent", "countTokens", "computeTokens"]
     assert listed_operations.status_code == 200
     assert listed_operations.json()["operations"][0]["name"] == created.json()["name"]
     assert fetched_operation.status_code == 200
@@ -3317,6 +3317,14 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert seen["request"]["generationConfig"]["responseMimeType"] == "text/plain"
     assert seen["request"]["toolConfig"]["functionCallingConfig"] == {"mode": "NONE"}
     assert "processingOptions" not in seen["request"]
+
+    with client.stream("POST", "/v1beta/tunedModels/my_tuned:streamGenerateContent", json={
+        "contents": "hello tuned stream",
+    }) as streamed:
+        stream_body = streamed.read().decode()
+    assert streamed.status_code == 200
+    assert "data:" in stream_body
+    assert "tuned ok" in stream_body
 
     counted = client.post("/v1/tunedModels/my_tuned:countTokens", json={
         "contents": [{"role": "user", "parts": [{"text": "hello tuned"}]}]

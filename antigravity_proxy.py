@@ -4094,7 +4094,7 @@ def _gemini_tuned_resource(meta: dict[str, Any]) -> dict[str, Any]:
         "temperature": meta.get("temperature"),
         "topP": meta.get("topP"),
         "topK": meta.get("topK"),
-        "supportedGenerationMethods": ["generateContent", "countTokens", "computeTokens"],
+        "supportedGenerationMethods": ["generateContent", "streamGenerateContent", "countTokens", "computeTokens"],
     }
     for key in (
         "tunedModelSource",
@@ -7541,6 +7541,31 @@ async def gemini_tuned_generate_content(tuned_model_id: str, request: Request):
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
     except Exception as exc:
         log.exception("Gemini tuned model generateContent failed")
+        return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
+
+
+@app.post("/v1/tunedModels/{tuned_model_id}:streamGenerateContent")
+@app.post("/v1beta/tunedModels/{tuned_model_id}:streamGenerateContent")
+async def gemini_tuned_stream_generate_content(tuned_model_id: str, request: Request):
+    try:
+        model = _gemini_tuned_base_model(tuned_model_id)
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body = _gemini_apply_generate_config(body)
+        body = _gemini_apply_response_format(body)
+        body = _gemini_normalize_generate_body(body)
+        body = _gemini_apply_cached_content(body)
+        body = _gemini_apply_file_search(body)
+        _gemini_reject_unsupported_builtin_tools(body)
+        body = _gemini_inline_local_files(body)
+        body.pop("model", None)
+        return _gemini_streaming_response(body=body, antigravity_model=str(model["antigravity_model"]))
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini tuned model streamGenerateContent failed")
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
