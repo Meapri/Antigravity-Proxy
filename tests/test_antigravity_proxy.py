@@ -3331,6 +3331,12 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
             "email_address": "ignored@example.com",
         }
     })
+    snake_query_perm = client.patch(f"/v1/corpora/{corpus_id}/permissions/{perm_id}?update_mask=permission.role", json={
+        "permission": {
+            "role": "reader",
+            "email_address": "ignored@example.com",
+        }
+    })
 
     assert perm.status_code == 200
     assert second_perm.status_code == 200
@@ -3345,6 +3351,9 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     assert fetched_perm.json()["role"] == "READER"
     assert patched_perm.json()["role"] == "WRITER"
     assert patched_perm.json()["emailAddress"] == "reader@example.com"
+    assert snake_query_perm.status_code == 200
+    assert snake_query_perm.json()["role"] == "READER"
+    assert snake_query_perm.json()["emailAddress"] == "reader@example.com"
 
     assert client.delete(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks/{chunk_id}").status_code == 200
     assert client.delete(f"/v1/corpora/{corpus_id}/permissions/{perm_id}").status_code == 200
@@ -3723,6 +3732,12 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
         },
         "update_mask": "permission.role",
     })
+    snake_query_perm = client.patch(f"/v1/tunedModels/my_tuned/permissions/{perm_id}?update_mask=permission.role", json={
+        "permission": {
+            "role": "writer",
+            "email_address": "still-ignored@example.com",
+        }
+    })
     promoted = client.post(f"/v1/tunedModels/my_tuned/permissions/{perm_id}:transferOwnership")
     fetched_perm = client.get(f"/v1/tunedModels/my_tuned/permissions/{perm.json()['name']}")
     assert listed_perms.status_code == 200
@@ -3732,6 +3747,9 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert patched_perm.status_code == 200
     assert patched_perm.json()["role"] == "WRITER"
     assert patched_perm.json()["emailAddress"] == "user@example.com"
+    assert snake_query_perm.status_code == 200
+    assert snake_query_perm.json()["role"] == "WRITER"
+    assert snake_query_perm.json()["emailAddress"] == "user@example.com"
     assert promoted.status_code == 200
     assert fetched_perm.json()["role"] == "OWNER"
 

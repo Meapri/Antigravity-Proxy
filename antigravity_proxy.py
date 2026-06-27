@@ -7331,6 +7331,7 @@ async def gemini_patch_corpus_permission(corpus_id: str, permission_id: str, req
         return _gemini_error_response(f"Permission '{permission_id}' not found.", status_code=404, status="NOT_FOUND")
     raw_body = await request.json()
     body = _gemini_permission_body(raw_body)
+    updateMask = updateMask or request.query_params.get("update_mask")
     if isinstance(raw_body, dict):
         updateMask = updateMask or raw_body.get("updateMask")
     if isinstance(body, dict):
@@ -8086,6 +8087,7 @@ async def gemini_patch_tuned_model_permission(tuned_model_id: str, permission_id
         return _gemini_error_response(f"Permission '{permission_id}' not found.", status_code=404, status="NOT_FOUND")
     raw_body = await request.json()
     body = _gemini_permission_body(raw_body)
+    updateMask = updateMask or request.query_params.get("update_mask")
     if isinstance(raw_body, dict):
         updateMask = updateMask or raw_body.get("updateMask")
     if isinstance(body, dict):
