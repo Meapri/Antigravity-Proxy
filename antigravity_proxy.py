@@ -3203,6 +3203,124 @@ def _gemini_now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def _gemini_auth_tokens_root() -> Path:
+    return Path(os.getenv("ANTIGRAVITY_GEMINI_AUTH_TOKENS_DIR", "data/gemini_auth_tokens")).expanduser()
+
+
+def _gemini_auth_tokens_index_path() -> Path:
+    return _gemini_auth_tokens_root() / "index.json"
+
+
+def _gemini_load_auth_tokens_index() -> dict[str, dict[str, Any]]:
+    path = _gemini_auth_tokens_index_path()
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        log.warning("Failed to read Gemini auth_tokens index; starting empty.")
+        return {}
+
+
+def _gemini_save_auth_tokens_index(index: dict[str, dict[str, Any]]) -> None:
+    root = _gemini_auth_tokens_root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = _gemini_auth_tokens_index_path()
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _gemini_auth_token_name(value: str) -> str:
+    key = value.strip().strip("/")
+    for prefix in ("v1beta/", "v1/"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+            break
+    if key.startswith("authTokens/"):
+        return key
+    if key.startswith("auth_tokens/"):
+        return "authTokens/" + key.split("/", 1)[1]
+    return "authTokens/" + key
+
+
+def _gemini_epoch_from_rfc3339(value: Any) -> float | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _gemini_auth_token_valid(token: str, *, consume: bool = False) -> bool:
+    name = _gemini_auth_token_name(token)
+    index = _gemini_load_auth_tokens_index()
+    meta = index.get(name)
+    if not meta:
+        return False
+    now = time.time()
+    expire_at = float(meta.get("expireAt") or 0)
+    if expire_at and expire_at <= now:
+        index.pop(name, None)
+        _gemini_save_auth_tokens_index(index)
+        return False
+    uses_remaining = meta.get("usesRemaining")
+    if isinstance(uses_remaining, int) and uses_remaining <= 0:
+        index.pop(name, None)
+        _gemini_save_auth_tokens_index(index)
+        return False
+    if consume and isinstance(uses_remaining, int):
+        meta["usesRemaining"] = uses_remaining - 1
+        meta["updateTime"] = _gemini_now_iso()
+        index[name] = meta
+        _gemini_save_auth_tokens_index(index)
+    return True
+
+
+def _gemini_create_auth_token(body: dict[str, Any]) -> dict[str, Any]:
+    normalized = _gemini_normalize_request(body)
+    if not isinstance(normalized, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+    now = time.time()
+    expire_at = _gemini_epoch_from_rfc3339(normalized.get("expireTime")) or (now + 30 * 60)
+    new_session_expire_at = _gemini_epoch_from_rfc3339(normalized.get("newSessionExpireTime"))
+    uses = normalized.get("uses")
+    try:
+        uses_remaining = int(uses) if uses is not None else None
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="uses must be an integer.")
+    if isinstance(uses_remaining, int) and uses_remaining < 1:
+        raise HTTPException(status_code=400, detail="uses must be at least 1.")
+    token_name = "authTokens/" + secrets.token_urlsafe(32)
+    meta = {
+        "name": token_name,
+        "createTime": _gemini_now_iso(),
+        "updateTime": _gemini_now_iso(),
+        "expireTime": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(expire_at)),
+        "expireAt": expire_at,
+        "newSessionExpireTime": (
+            time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(new_session_expire_at))
+            if new_session_expire_at
+            else None
+        ),
+        "uses": uses_remaining,
+        "usesRemaining": uses_remaining,
+        "bidiGenerateContentSetup": normalized.get("bidiGenerateContentSetup"),
+        "fieldMask": normalized.get("fieldMask"),
+        "payload": normalized,
+    }
+    index = _gemini_load_auth_tokens_index()
+    index[token_name] = meta
+    _gemini_save_auth_tokens_index(index)
+    return {"name": token_name}
+
+
 def _gemini_batches_root() -> Path:
     return Path(os.getenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", "data/gemini_batches")).expanduser()
 
@@ -6343,6 +6461,18 @@ def _proxy_api_key() -> str:
     return os.getenv("ANTIGRAVITY_PROXY_API_KEY", "").strip()
 
 
+def _gemini_auth_token_candidates_from_auth_header(auth: str) -> list[str]:
+    auth = auth.strip()
+    if not auth:
+        return []
+    lowered = auth.lower()
+    if lowered.startswith("bearer "):
+        return [auth[7:].strip()]
+    if lowered.startswith("token "):
+        return [auth[6:].strip()]
+    return []
+
+
 def _request_api_key_valid(request: Request) -> bool:
     expected = _proxy_api_key()
     if not expected:
@@ -6363,14 +6493,16 @@ def _websocket_api_key_valid(websocket: WebSocket) -> bool:
     if not expected:
         return True
     auth = websocket.headers.get("authorization", "").strip()
-    bearer = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
     candidates = [
-        bearer,
+        *_gemini_auth_token_candidates_from_auth_header(auth),
         websocket.headers.get("x-api-key", "").strip(),
         websocket.headers.get("x-goog-api-key", "").strip(),
         websocket.query_params.get("key", "").strip(),
+        websocket.query_params.get("access_token", "").strip(),
     ]
-    return any(candidate and secrets.compare_digest(candidate, expected) for candidate in candidates)
+    if any(candidate and secrets.compare_digest(candidate, expected) for candidate in candidates):
+        return True
+    return any(candidate and _gemini_auth_token_valid(candidate, consume=True) for candidate in candidates)
 
 
 def _is_gemini_http_path(path: str) -> bool:
@@ -6390,6 +6522,8 @@ def _is_gemini_http_path(path: str) -> bool:
     gemini_prefixes = (
         "cachedContents",
         "corpora",
+        "auth_tokens",
+        "authTokens",
         "fileSearchStores",
         "files",
         "generatedFiles",
@@ -8261,6 +8395,21 @@ async def gemini_resumable_upload(session_id: str, request: Request):
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
     except Exception as exc:
         log.exception("Gemini resumable upload failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.post("/v1/auth_tokens")
+@app.post("/v1beta/auth_tokens")
+async def gemini_create_auth_token(request: Request):
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        return _gemini_create_auth_token(body)
+    except HTTPException as exc:
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT")
+    except Exception as exc:
+        log.exception("Gemini auth_tokens create failed")
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 

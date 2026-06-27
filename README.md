@@ -430,7 +430,11 @@ Implemented Gemini-compatible routes:
 - `POST /v1beta/interactions/{interaction}:cancel`
 - `DELETE /v1beta/interactions/{interaction}`
 - `WS /ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`
+- `WS /v1alpha/live`
 - `WS /v1beta/live`
+- `WS /v1/live`
+- `POST /v1/auth_tokens`
+- `POST /v1beta/auth_tokens`
 - `POST /v1/batches`
 - `GET /v1/batches`
 - `GET /v1/batches/{batch}`
@@ -1172,6 +1176,13 @@ Live API:
 - Live protocol errors use the same Gemini `error` payload and `google.rpc`
   details as the REST and SSE compatibility routes. WebSocket aliases are
   available at `/v1/live`, `/v1beta/live`, and `/v1alpha/live`.
+- Experimental Developer API auth tokens are implemented through
+  `POST /v1beta/auth_tokens` and `POST /v1/auth_tokens`. The proxy stores local
+  token metadata under `data/gemini_auth_tokens` by default; override with
+  `ANTIGRAVITY_GEMINI_AUTH_TOKENS_DIR`. Created tokens are returned as
+  `authTokens/...` resources and can authenticate Live WebSocket sessions via
+  `access_token`, `key`, `x-goog-api-key`, `x-api-key`, `Bearer`, or `Token`
+  credentials until they expire or exhaust their optional `uses` count.
 
 Notes:
 
@@ -1186,6 +1197,10 @@ Notes:
   `filter` terms over fields such as `name`, `displayName`,
   `supportedGenerationMethods`, `capabilities.*`, and `metadata.*`.
   `/v1/models` and `/v1beta/models` return the Gemini `{"models": ...}` shape.
+- `google-genai` `client.models.update` / `delete` is supported for mutable
+  `tunedModels/...` resources. Base Antigravity model resources remain
+  read-only and return Gemini `UNIMPLEMENTED` for update/delete because there is
+  no safe upstream operation for modifying or deleting the fixed model catalog.
 - Gemini list-style routes accept both REST-style `pageSize` / `pageToken` and
   SDK-style `page_size` / `page_token` query aliases. Batch and operation list
   routes also accept `filter`, `return_partial_success`, and

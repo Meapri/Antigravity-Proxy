@@ -2418,6 +2418,28 @@ def test_google_genai_sdk_developer_files_upload_and_models_filter(tmp_path, mon
     assert downloaded_by_download_uri == b"sdk file upload"
 
 
+def test_google_genai_sdk_auth_tokens_create_and_live_access(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_AUTH_TOKENS_DIR", str(tmp_path / "auth_tokens"))
+    monkeypatch.setenv("ANTIGRAVITY_PROXY_API_KEY", "secret")
+    app_client = TestClient(proxy.app)
+    sdk_http = httpx.Client(transport=_FastApiTransport(app_client))
+    sdk = genai.Client(
+        api_key="secret",
+        http_options=types.HttpOptions(
+            base_url="http://testserver/v1beta",
+            api_version="",
+            httpx_client=sdk_http,
+        ),
+    )
+
+    token = sdk.auth_tokens.create(config={"uses": 2, "expire_time": "2099-01-01T00:00:00Z"})
+
+    assert token.name.startswith("authTokens/")
+    with app_client.websocket_connect(f"/v1beta/live?access_token={token.name}") as ws:
+        ws.send_json({"setup": {"model": "models/gemini-3-flash-agent"}})
+        assert ws.receive_json() == {"setupComplete": {}}
+
+
 def test_google_genai_sdk_vertex_caches_lifecycle(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR", str(tmp_path / "cached"))
     app_client = TestClient(proxy.app)
@@ -2565,6 +2587,39 @@ def test_google_genai_sdk_vertex_tuning_jobs(tmp_path, monkeypatch):
     assert fetched.name == job.name
     assert {item.name for item in listed} == {job.name}
     assert cancelled.sdk_http_response.headers["content-type"].startswith("application/json")
+
+
+def test_google_genai_sdk_models_update_delete_tuned_model(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_TUNED_MODELS_DIR", str(tmp_path / "tuned_models"))
+    app_client = TestClient(proxy.app)
+    sdk_http = httpx.Client(transport=_FastApiTransport(app_client))
+    sdk = genai.Client(
+        api_key="test-key",
+        http_options=types.HttpOptions(
+            base_url="http://testserver/v1beta",
+            api_version="",
+            httpx_client=sdk_http,
+        ),
+    )
+    created = app_client.post("/v1beta/tunedModels", json={
+        "tunedModelId": "sdk_model_update",
+        "tunedModel": {
+            "displayName": "SDK model update",
+            "baseModel": "models/gemini-3-flash-agent",
+        },
+    })
+
+    updated = sdk.models.update(
+        model="tunedModels/sdk_model_update",
+        config={"display_name": "Updated by SDK"},
+    )
+    deleted = sdk.models.delete(model="tunedModels/sdk_model_update")
+
+    assert created.status_code == 200
+    assert updated.name == "tunedModels/sdk_model_update"
+    assert updated.display_name == "Updated by SDK"
+    assert deleted.sdk_http_response.headers["content-type"].startswith("application/json")
+    assert app_client.get("/v1beta/tunedModels/sdk_model_update").status_code == 404
 
 
 def test_google_genai_sdk_vertex_validate_reward():
