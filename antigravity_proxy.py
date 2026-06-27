@@ -385,6 +385,8 @@ _GEMINI_KEY_ALIASES = {
     "response_mime_type": "responseMimeType",
     "response_schema": "responseSchema",
     "response_json_schema": "responseJsonSchema",
+    "_response_json_schema": "responseJsonSchema",
+    "_responseJsonSchema": "responseJsonSchema",
     "response_format": "responseFormat",
     "responseFormat": "responseFormat",
     "enable_enhanced_civic_answers": "enableEnhancedCivicAnswers",
@@ -621,6 +623,9 @@ def _gemini_normalize_generation_config(value: Any) -> Any:
     if not isinstance(value, dict):
         return value
     out = _gemini_normalize_request(value)
+    response_format = out.pop("responseFormat", None)
+    if response_format is not None:
+        _gemini_apply_response_format_to_generation_config(out, response_format)
     for key in ("stopSequences", "responseModalities"):
         if key in out:
             out[key] = _gemini_string_list(out[key])
@@ -645,6 +650,45 @@ def _gemini_normalize_generation_config(value: Any) -> Any:
             thinking["includeThoughts"] = _gemini_bool_value(thinking["includeThoughts"])
         out["thinkingConfig"] = thinking
     return out
+
+
+def _gemini_apply_response_format_to_generation_config(gen: dict[str, Any], fmt: Any) -> None:
+    if isinstance(fmt, dict):
+        nested_json_schema = fmt.get("jsonSchema") if isinstance(fmt.get("jsonSchema"), dict) else None
+        fmt_type = str(fmt.get("type") or "").strip().lower()
+        mime = (
+            fmt.get("mimeType")
+            or fmt.get("responseMimeType")
+            or (nested_json_schema or {}).get("mimeType")
+            or (nested_json_schema or {}).get("responseMimeType")
+        )
+        if mime:
+            gen["responseMimeType"] = mime
+        elif fmt_type in {"json_object", "json_schema", "application/json"} or nested_json_schema:
+            gen["responseMimeType"] = "application/json"
+
+        schema = (
+            fmt.get("schema")
+            or fmt.get("responseSchema")
+            or (nested_json_schema or {}).get("schema")
+            or (nested_json_schema or {}).get("responseSchema")
+        )
+        if isinstance(schema, dict):
+            gen["responseSchema"] = _sanitize_schema(dict(schema))
+        json_schema = (
+            fmt.get("responseJsonSchema")
+            or fmt.get("_responseJsonSchema")
+            or (nested_json_schema or {}).get("responseJsonSchema")
+            or (nested_json_schema or {}).get("_responseJsonSchema")
+        )
+        if isinstance(json_schema, dict):
+            gen["responseJsonSchema"] = _sanitize_schema(dict(json_schema))
+    elif isinstance(fmt, str) and fmt.strip():
+        fmt_type = fmt.strip().lower()
+        if "/" in fmt_type:
+            gen["responseMimeType"] = fmt.strip()
+        elif fmt_type in {"json", "json_object", "json_schema"}:
+            gen["responseMimeType"] = "application/json"
 
 
 def _gemini_normalize_embedding_config(value: Any) -> dict[str, Any]:
@@ -773,37 +817,7 @@ def _gemini_apply_response_format(body: dict[str, Any]) -> dict[str, Any]:
         schema = out.pop("responseJsonSchema")
         gen["responseJsonSchema"] = _sanitize_schema(dict(schema)) if isinstance(schema, dict) else schema
 
-    if isinstance(fmt, dict):
-        nested_json_schema = fmt.get("jsonSchema") if isinstance(fmt.get("jsonSchema"), dict) else None
-        fmt_type = str(fmt.get("type") or "").strip().lower()
-        mime = (
-            fmt.get("mimeType")
-            or fmt.get("responseMimeType")
-            or (nested_json_schema or {}).get("mimeType")
-            or (nested_json_schema or {}).get("responseMimeType")
-        )
-        if mime:
-            gen["responseMimeType"] = mime
-        elif fmt_type in {"json_object", "json_schema"} or nested_json_schema:
-            gen["responseMimeType"] = "application/json"
-
-        schema = (
-            fmt.get("schema")
-            or fmt.get("responseSchema")
-            or (nested_json_schema or {}).get("schema")
-            or (nested_json_schema or {}).get("responseSchema")
-        )
-        if isinstance(schema, dict):
-            gen["responseSchema"] = _sanitize_schema(dict(schema))
-        json_schema = fmt.get("responseJsonSchema") or (nested_json_schema or {}).get("responseJsonSchema")
-        if isinstance(json_schema, dict):
-            gen["responseJsonSchema"] = _sanitize_schema(dict(json_schema))
-    elif isinstance(fmt, str) and fmt.strip():
-        fmt_type = fmt.strip().lower()
-        if "/" in fmt_type:
-            gen["responseMimeType"] = fmt.strip()
-        elif fmt_type in {"json", "json_object", "json_schema"}:
-            gen["responseMimeType"] = "application/json"
+    _gemini_apply_response_format_to_generation_config(gen, fmt)
 
     if gen:
         out["generationConfig"] = _gemini_normalize_generation_config(gen)

@@ -970,6 +970,43 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
     assert json_schema["propertyOrdering"] == ["score"]
 
 
+def test_gemini_generation_config_accepts_nested_response_format(monkeypatch):
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "hi",
+        "generation_config": {
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {"answer": {"type": "string", "min_length": 1}},
+                    },
+                    "_responseJsonSchema": {
+                        "type": "object",
+                        "properties": {"score": {"type": "integer", "minimum": 0}},
+                    },
+                },
+            },
+        },
+    })
+
+    assert response.status_code == 200
+    gen = seen["request"]["generationConfig"]
+    assert gen["responseMimeType"] == "application/json"
+    assert gen["responseSchema"]["properties"]["answer"]["minLength"] == 1
+    assert gen["responseJsonSchema"]["properties"]["score"]["minimum"] == 0
+
+
 def test_gemini_generate_content_accepts_provider_google_options(monkeypatch):
     seen = {}
 
