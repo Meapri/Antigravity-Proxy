@@ -384,8 +384,10 @@ _GEMINI_KEY_ALIASES = {
     "processingOptions": "processingOptions",
     "response_mime_type": "responseMimeType",
     "response_schema": "responseSchema",
+    "response_json_schema": "responseJsonSchema",
     "response_format": "responseFormat",
     "responseFormat": "responseFormat",
+    "enable_enhanced_civic_answers": "enableEnhancedCivicAnswers",
     "generate_content_request": "generateContentRequest",
     "generateContentRequest": "generateContentRequest",
     "http_options": "httpOptions",
@@ -536,6 +538,7 @@ _GEMINI_GENERATION_CONFIG_KEYS = {
     "stopSequences",
     "responseMimeType",
     "responseSchema",
+    "responseJsonSchema",
     "responseLogprobs",
     "logprobs",
     "presencePenalty",
@@ -547,6 +550,7 @@ _GEMINI_GENERATION_CONFIG_KEYS = {
     "imageConfig",
     "speechConfig",
     "routingConfig",
+    "enableEnhancedCivicAnswers",
 }
 
 _GEMINI_SDK_TRANSPORT_KEYS = {
@@ -622,11 +626,13 @@ def _gemini_normalize_generation_config(value: Any) -> Any:
     for key in ("temperature", "topP", "presencePenalty", "frequencyPenalty"):
         if key in out:
             out[key] = _gemini_float_value(out[key])
-    for key in ("responseLogprobs",):
+    for key in ("responseLogprobs", "enableEnhancedCivicAnswers"):
         if key in out:
             out[key] = _gemini_bool_value(out[key])
     if isinstance(out.get("responseSchema"), dict):
         out["responseSchema"] = _sanitize_schema(dict(out["responseSchema"]))
+    if isinstance(out.get("responseJsonSchema"), dict):
+        out["responseJsonSchema"] = _sanitize_schema(dict(out["responseJsonSchema"]))
     if isinstance(out.get("thinkingConfig"), dict):
         thinking = _gemini_normalize_request(out["thinkingConfig"])
         if "thinkingBudget" in thinking:
@@ -759,6 +765,9 @@ def _gemini_apply_response_format(body: dict[str, Any]) -> dict[str, Any]:
     if out.get("responseSchema") is not None:
         schema = out.pop("responseSchema")
         gen["responseSchema"] = _sanitize_schema(dict(schema)) if isinstance(schema, dict) else schema
+    if out.get("responseJsonSchema") is not None:
+        schema = out.pop("responseJsonSchema")
+        gen["responseJsonSchema"] = _sanitize_schema(dict(schema)) if isinstance(schema, dict) else schema
 
     if isinstance(fmt, dict):
         nested_json_schema = fmt.get("jsonSchema") if isinstance(fmt.get("jsonSchema"), dict) else None
@@ -782,6 +791,9 @@ def _gemini_apply_response_format(body: dict[str, Any]) -> dict[str, Any]:
         )
         if isinstance(schema, dict):
             gen["responseSchema"] = _sanitize_schema(dict(schema))
+        json_schema = fmt.get("responseJsonSchema") or (nested_json_schema or {}).get("responseJsonSchema")
+        if isinstance(json_schema, dict):
+            gen["responseJsonSchema"] = _sanitize_schema(dict(json_schema))
     elif isinstance(fmt, str) and fmt.strip():
         fmt_type = fmt.strip().lower()
         if "/" in fmt_type:

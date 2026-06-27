@@ -679,6 +679,10 @@ values into Gemini REST `Content` objects before forwarding.
 They also accept the common SDK-style top-level `config` object and merge it
 into Gemini REST fields such as `generationConfig`, `systemInstruction`,
 `toolConfig`, `safetySettings`, `tools`, `cachedContent`, and `labels`.
+Generation config aliases include `responseSchema` / `response_schema`,
+`responseJsonSchema` / `response_json_schema`, `thinkingConfig` /
+`thinking_config`, `responseModalities` / `response_modalities`, and
+`enableEnhancedCivicAnswers` / `enable_enhanced_civic_answers`.
 `service_tier` / `serviceTier` and `store` are preserved as top-level
 GenerateContent request fields.
 Google provider wrappers such as `providerOptions.google` and

@@ -899,6 +899,12 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
                 "property_ordering": ["answer"],
                 "any_of": [{"type": "object", "properties": {"answer": {"type": "string"}}}],
             },
+            "response_json_schema": {
+                "type": "object",
+                "properties": {"score": {"type": "integer", "minimum": 0}},
+                "property_ordering": ["score"],
+            },
+            "enable_enhanced_civic_answers": "true",
             "tool_config": {"function_calling_config": {"mode": "none"}},
             "labels": {"source": "sdk"},
             "service_tier": "PRIORITY",
@@ -924,6 +930,7 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
     assert seen["request"]["generationConfig"]["topP"] == 0.9
     assert seen["request"]["generationConfig"]["topK"] == 40
     assert seen["request"]["generationConfig"]["responseLogprobs"] is True
+    assert seen["request"]["generationConfig"]["enableEnhancedCivicAnswers"] is True
     assert seen["request"]["generationConfig"]["stopSequences"] == ["END"]
     assert seen["request"]["generationConfig"]["responseModalities"] == ["TEXT"]
     assert seen["request"]["generationConfig"]["responseMimeType"] == "application/json"
@@ -932,6 +939,9 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
     assert schema["properties"]["answer"]["minLength"] == 1
     assert schema["propertyOrdering"] == ["answer"]
     assert schema["anyOf"] == [{"type": "object", "properties": {"answer": {"type": "string"}}}]
+    json_schema = seen["request"]["generationConfig"]["responseJsonSchema"]
+    assert json_schema["properties"]["score"]["minimum"] == 0
+    assert json_schema["propertyOrdering"] == ["score"]
 
 
 def test_gemini_generate_content_accepts_provider_google_options(monkeypatch):
