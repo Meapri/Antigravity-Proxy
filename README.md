@@ -673,7 +673,12 @@ snake_case SDK spellings for fields such as `generation_config`,
 `response_mime_type`, `inline_data`, `file_data`, `googleSearch`,
 `googleSearchRetrieval`, `urlContext`, and `codeExecution`. `googleSearch` and
 legacy `googleSearchRetrieval` are forwarded as `google_search`, and local
-`file_search` tools are converted into retrieved context. `urlContext` and
+`file_search` tools are converted into retrieved context. Gemini tool option
+aliases are normalized too, including `google_search.search_types`,
+`google_search.time_range_filter`,
+`google_search_retrieval.dynamic_retrieval_config.dynamic_threshold`,
+`file_search.file_search_store_names`, `file_search.metadata_filter`, and
+`file_search.top_k`. `urlContext` and
 `codeExecution` are recognized but return
 `UNIMPLEMENTED` because the current Antigravity backend does not expose those
 hosted tools. `toolConfig.functionCallingConfig.mode` and

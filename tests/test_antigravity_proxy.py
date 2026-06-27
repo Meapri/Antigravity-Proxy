@@ -1298,10 +1298,60 @@ def test_gemini_generate_content_normalizes_tools_unions(monkeypatch):
 
     legacy_search = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
         "contents": "hi",
-        "tools": [{"googleSearchRetrieval": {"dynamic_retrieval_config": {"mode": "MODE_DYNAMIC"}}}],
+        "tools": [{
+            "google_search_retrieval": {
+                "dynamic_retrieval_config": {
+                    "mode": "MODE_DYNAMIC",
+                    "dynamic_threshold": "0.35",
+                }
+            }
+        }],
     })
     assert legacy_search.status_code == 200
-    assert seen["request"]["tools"] == [{"google_search": {"dynamic_retrieval_config": {"mode": "MODE_DYNAMIC"}}}]
+    assert seen["request"]["tools"] == [{
+        "google_search": {
+            "dynamicRetrievalConfig": {
+                "mode": "MODE_DYNAMIC",
+                "dynamicThreshold": 0.35,
+            }
+        }
+    }]
+
+    google_search_options = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "hi",
+        "tools": {
+            "google_search": {
+                "search_types": {"web_search": {}, "image_search": {}},
+                "time_range_filter": {
+                    "start_time": "2026-01-01T00:00:00Z",
+                    "end_time": "2026-01-02T00:00:00Z",
+                },
+            }
+        },
+    })
+    assert google_search_options.status_code == 200
+    assert seen["request"]["tools"] == [{
+        "google_search": {
+            "searchTypes": {"webSearch": {}, "imageSearch": {}},
+            "timeRangeFilter": {
+                "startTime": "2026-01-01T00:00:00Z",
+                "endTime": "2026-01-02T00:00:00Z",
+            },
+        }
+    }]
+    assert proxy._gemini_normalize_tools_value({
+        "file_search": {
+            "file_search_store_names": ["fileSearchStores/local"],
+            "metadata_filter": 'document.custom_metadata.project="atlas"',
+            "top_k": "3",
+        }
+    }) == [{
+        "file_search": {
+            "fileSearchStoreNames": ["fileSearchStores/local"],
+            "metadataFilter": 'document.custom_metadata.project="atlas"',
+            "topK": 3,
+        }
+    }]
 
     function_declarations = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
         "contents": "hi",
@@ -3728,7 +3778,13 @@ def test_gemini_file_search_tool_injects_local_context(tmp_path, monkeypatch):
 
     response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
         "contents": [{"role": "user", "parts": [{"text": "When is Project Atlas launch?"}]}],
-        "tools": [{"file_search": {"file_search_store_names": [store["name"]]}}],
+        "tools": [{
+            "file_search": {
+                "file_search_store_names": [store["name"]],
+                "metadata_filter": 'document.custom_metadata.project="atlas"',
+                "top_k": "3",
+            }
+        }],
     })
 
     assert response.status_code == 200

@@ -503,10 +503,24 @@ _GEMINI_KEY_ALIASES = {
     "codeExecution": "codeExecution",
     "google_search": "google_search",
     "googleSearch": "google_search",
+    "google_search_retrieval": "googleSearchRetrieval",
+    "dynamic_retrieval_config": "dynamicRetrievalConfig",
+    "dynamic_threshold": "dynamicThreshold",
+    "search_types": "searchTypes",
+    "web_search": "webSearch",
+    "image_search": "imageSearch",
+    "time_range_filter": "timeRangeFilter",
+    "start_time": "startTime",
+    "end_time": "endTime",
     "url_context": "url_context",
     "urlContext": "url_context",
     "file_search": "file_search",
     "fileSearch": "file_search",
+    "file_search_store_names": "fileSearchStoreNames",
+    "file_search_store_name": "fileSearchStoreName",
+    "file_search_stores": "fileSearchStores",
+    "file_search_store": "fileSearchStore",
+    "metadata_filter": "metadataFilter",
     "file_data": "fileData",
     "fileData": "fileData",
     "inline_data": "inlineData",
@@ -1213,6 +1227,26 @@ def _gemini_normalize_function_declaration(decl: dict[str, Any]) -> dict[str, An
     return out
 
 
+def _gemini_normalize_builtin_tool_options(tool: dict[str, Any]) -> dict[str, Any]:
+    out = dict(tool)
+    google_search = out.get("google_search")
+    if isinstance(google_search, dict):
+        normalized_search = dict(google_search)
+        dynamic = normalized_search.get("dynamicRetrievalConfig")
+        if isinstance(dynamic, dict) and "dynamicThreshold" in dynamic:
+            dynamic = dict(dynamic)
+            dynamic["dynamicThreshold"] = _gemini_float_value(dynamic["dynamicThreshold"])
+            normalized_search["dynamicRetrievalConfig"] = dynamic
+        out["google_search"] = normalized_search
+    file_search = out.get("file_search")
+    if isinstance(file_search, dict):
+        normalized_file_search = dict(file_search)
+        if "topK" in normalized_file_search:
+            normalized_file_search["topK"] = _gemini_int_value(normalized_file_search["topK"])
+        out["file_search"] = normalized_file_search
+    return out
+
+
 def _gemini_normalize_tools_value(value: Any) -> list[dict[str, Any]]:
     if value is None:
         return []
@@ -1245,6 +1279,7 @@ def _gemini_normalize_tools_value(value: Any) -> list[dict[str, Any]]:
             item = dict(item)
             item["google_search"] = item.pop("googleSearch")
         if any(key in item for key in ("google_search", "codeExecution", "urlContext", "file_search", "fileSearchRetrieval")):
+            item = _gemini_normalize_builtin_tool_options(item)
             tools.append(item)
             continue
         if item.get("name") or item.get("function") or item.get("declaration"):
