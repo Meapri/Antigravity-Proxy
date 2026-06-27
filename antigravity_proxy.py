@@ -2066,6 +2066,27 @@ async def _gemini_legacy_generate(model_name: str, body: dict[str, Any]) -> dict
     return _gemini_unwrap_response(data)
 
 
+async def _gemini_tuned_legacy_generate(tuned_model_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    model = _gemini_tuned_base_model(tuned_model_id)
+    request_body = _gemini_legacy_body_to_generate(body)
+    request_body = _gemini_apply_response_format(request_body)
+    request_body = _gemini_normalize_generate_body(request_body)
+    request_body = _gemini_apply_cached_content(request_body)
+    request_body = _gemini_apply_file_search(request_body)
+    _gemini_reject_unsupported_builtin_tools(request_body)
+    request_body = _gemini_inline_local_files(request_body)
+    data = await asyncio.to_thread(
+        _get_client().generate_raw,
+        request=request_body,
+        model=str(model["antigravity_model"]),
+    )
+    return _gemini_finalize_generate_response(
+        _gemini_unwrap_response(data),
+        model_name=_gemini_tuned_name(tuned_model_id),
+        request_body=request_body,
+    )
+
+
 def _gemini_embedding_values(text: str, *, dimensions: int = 768) -> list[float]:
     dimensions = max(1, min(int(dimensions or 768), 3072))
     values: list[float] = []
@@ -4327,6 +4348,7 @@ def _gemini_tuned_resource(meta: dict[str, Any]) -> dict[str, Any]:
         "supportedGenerationMethods": [
             "generateContent",
             "streamGenerateContent",
+            "generateText",
             "batchGenerateContent",
             "countTokens",
             "computeTokens",
@@ -7792,6 +7814,22 @@ async def gemini_tuned_generate_content(tuned_model_id: str, request: Request):
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
+@app.post("/v1/tunedModels/{tuned_model_id}:generateText")
+@app.post("/v1beta/tunedModels/{tuned_model_id}:generateText")
+async def gemini_tuned_generate_text(tuned_model_id: str, request: Request):
+    try:
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        return await _gemini_tuned_legacy_generate(tuned_model_id, body)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini tuned model generateText failed")
+        return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
+
+
 @app.post("/v1/tunedModels/{tuned_model_id}:streamGenerateContent")
 @app.post("/v1beta/tunedModels/{tuned_model_id}:streamGenerateContent")
 async def gemini_tuned_stream_generate_content(tuned_model_id: str, request: Request):
@@ -7917,6 +7955,51 @@ async def gemini_tuned_async_batch_embed_content(tuned_model_id: str, request: R
     except Exception as exc:
         log.exception("Gemini tuned model asyncBatchEmbedContent failed")
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.post("/v1/tunedModels/{tuned_model_id}:transferOwnership")
+@app.post("/v1beta/tunedModels/{tuned_model_id}:transferOwnership")
+async def gemini_transfer_tuned_model_ownership(tuned_model_id: str, request: Request):
+    try:
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        email = body.get("emailAddress")
+        if not isinstance(email, str) or not email.strip():
+            raise HTTPException(status_code=400, detail="transferOwnership requires emailAddress.")
+        email = email.strip()
+        index = _gemini_load_tuned_index()
+        name = _gemini_tuned_name(tuned_model_id)
+        meta = index.get(name)
+        if not meta:
+            raise HTTPException(status_code=404, detail=f"Tuned model '{tuned_model_id}' not found.")
+        permissions = meta.setdefault("permissions", {})
+        if not isinstance(permissions, dict):
+            permissions = {}
+            meta["permissions"] = permissions
+        now = _gemini_now_iso()
+        for perm in permissions.values():
+            if isinstance(perm, dict) and perm.get("role") == "OWNER":
+                perm["role"] = "WRITER"
+        owner_id = "owner_" + hashlib.sha256(email.lower().encode("utf-8")).hexdigest()[:16]
+        owner_name = f"{name}/permissions/{owner_id}"
+        permissions[owner_name] = {
+            "name": owner_name,
+            "role": "OWNER",
+            "granteeType": "USER",
+            "emailAddress": email,
+        }
+        meta["owner"] = email
+        meta["updateTime"] = now
+        index[name] = meta
+        _gemini_save_tuned_index(index)
+        return {"name": name, "owner": email, "permission": permissions[owner_name]}
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini tuned model transferOwnership failed")
+        return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
 @app.get("/v1/tunedModels/{tuned_model_id}/permissions")

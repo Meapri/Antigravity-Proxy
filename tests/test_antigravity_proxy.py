@@ -3634,6 +3634,7 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert fetched.json()["supportedGenerationMethods"] == [
         "generateContent",
         "streamGenerateContent",
+        "generateText",
         "batchGenerateContent",
         "countTokens",
         "computeTokens",
@@ -3709,6 +3710,21 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert promoted.status_code == 200
     assert fetched_perm.json()["role"] == "OWNER"
 
+    model_owner_transfer = client.post("/v1beta/tunedModels/my_tuned:transferOwnership", json={
+        "email_address": "new-owner@example.com",
+    })
+    owner_perms = client.get("/v1/tunedModels/my_tuned/permissions")
+    assert model_owner_transfer.status_code == 200
+    assert model_owner_transfer.json()["owner"] == "new-owner@example.com"
+    assert any(
+        item["role"] == "OWNER" and item["emailAddress"] == "new-owner@example.com"
+        for item in owner_perms.json()["permissions"]
+    )
+    assert any(
+        item["role"] == "WRITER" and item["emailAddress"] == "user@example.com"
+        for item in owner_perms.json()["permissions"]
+    )
+
     generated = client.post("/v1/tunedModels/my_tuned:generateContent", json={
         "contents": [{"role": "user", "parts": [{"text": "hello tuned"}]}],
         "provider_options": {
@@ -3731,6 +3747,15 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert seen["request"]["generationConfig"]["responseMimeType"] == "text/plain"
     assert seen["request"]["toolConfig"]["functionCallingConfig"] == {"mode": "NONE"}
     assert "processingOptions" not in seen["request"]
+
+    text_generated = client.post("/v1beta/tunedModels/my_tuned:generateText", json={
+        "prompt": {"text": "legacy tuned text"},
+        "temperature": "0.1",
+    })
+    assert text_generated.status_code == 200
+    assert text_generated.json()["modelVersion"] == "tunedModels/my_tuned"
+    assert seen["request"]["contents"][0]["parts"][0]["text"] == "legacy tuned text"
+    assert seen["request"]["generationConfig"]["temperature"] == 0.1
 
     with client.stream("POST", "/v1beta/tunedModels/my_tuned:streamGenerateContent", json={
         "contents": "hello tuned stream",

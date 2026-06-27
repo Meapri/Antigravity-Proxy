@@ -604,7 +604,9 @@ Implemented Gemini-compatible routes:
 - `DELETE /v1/tunedModels/{tuned_model}`
 - `POST /v1/tunedModels/{tuned_model}:generateContent`
 - `POST /v1/tunedModels/{tuned_model}:streamGenerateContent`
+- `POST /v1/tunedModels/{tuned_model}:generateText`
 - `POST /v1/tunedModels/{tuned_model}:batchGenerateContent`
+- `POST /v1/tunedModels/{tuned_model}:transferOwnership`
 - `POST /v1/tunedModels/{tuned_model}:countTokens`
 - `POST /v1/tunedModels/{tuned_model}:computeTokens`
 - `POST /v1/tunedModels/{tuned_model}:embedContent`
@@ -628,7 +630,9 @@ Implemented Gemini-compatible routes:
 - `DELETE /v1beta/tunedModels/{tuned_model}`
 - `POST /v1beta/tunedModels/{tuned_model}:generateContent`
 - `POST /v1beta/tunedModels/{tuned_model}:streamGenerateContent`
+- `POST /v1beta/tunedModels/{tuned_model}:generateText`
 - `POST /v1beta/tunedModels/{tuned_model}:batchGenerateContent`
+- `POST /v1beta/tunedModels/{tuned_model}:transferOwnership`
 - `POST /v1beta/tunedModels/{tuned_model}:countTokens`
 - `POST /v1beta/tunedModels/{tuned_model}:computeTokens`
 - `POST /v1beta/tunedModels/{tuned_model}:embedContent`
@@ -692,8 +696,10 @@ values into Gemini REST `Content` objects before forwarding.
 The Gemini `dynamic/{dynamic_model}:generateContent` and
 `:streamGenerateContent` discovery routes are accepted as aliases for the same
 model generation pipeline. Tuned models also expose the discovery-listed
-`batchGenerateContent` and `asyncBatchEmbedContent` methods, mapped through the
-same local completed-operation compatibility layer as model batch calls.
+`generateText`, `batchGenerateContent`, and `asyncBatchEmbedContent` methods,
+mapped through the same local generation and completed-operation
+compatibility layers as model calls. Tuned model `transferOwnership` updates
+the local tuned-model owner and permission state.
 They also accept the common SDK-style top-level `config` object and merge it
 into Gemini REST fields such as `generationConfig`, `systemInstruction`,
 `toolConfig`, `safetySettings`, `tools`, `cachedContent`, and `labels`.
