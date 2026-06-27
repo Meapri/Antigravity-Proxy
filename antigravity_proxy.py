@@ -9478,8 +9478,12 @@ async def gemini_count_tokens(model_name: str, request: Request, project: str | 
 
 
 @app.post("/v1/models/{model_name:path}:computeTokens")
+@app.post("/v1/publishers/google/models/{model_name:path}:computeTokens")
+@app.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:computeTokens")
 @app.post("/v1beta/models/{model_name:path}:computeTokens")
-async def gemini_compute_tokens(model_name: str, request: Request):
+@app.post("/v1beta/publishers/google/models/{model_name:path}:computeTokens")
+@app.post("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:computeTokens")
+async def gemini_compute_tokens(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Gemini-compatible approximate computeTokens endpoint."""
     try:
         _resolve_gemini_model(model_name)
@@ -9541,8 +9545,12 @@ async def gemini_batch_embed_contents(model_name: str, request: Request, project
 
 
 @app.post("/v1/models/{model_name:path}:embedText")
+@app.post("/v1/publishers/google/models/{model_name:path}:embedText")
+@app.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:embedText")
 @app.post("/v1beta/models/{model_name:path}:embedText")
-async def gemini_embed_text(model_name: str, request: Request):
+@app.post("/v1beta/publishers/google/models/{model_name:path}:embedText")
+@app.post("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:embedText")
+async def gemini_embed_text(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Legacy Gemini embedText endpoint mapped to deterministic local vectors."""
     try:
         _resolve_gemini_model(model_name)
@@ -9566,8 +9574,12 @@ async def gemini_embed_text(model_name: str, request: Request):
 
 
 @app.post("/v1/models/{model_name:path}:batchEmbedText")
+@app.post("/v1/publishers/google/models/{model_name:path}:batchEmbedText")
+@app.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:batchEmbedText")
 @app.post("/v1beta/models/{model_name:path}:batchEmbedText")
-async def gemini_batch_embed_text(model_name: str, request: Request):
+@app.post("/v1beta/publishers/google/models/{model_name:path}:batchEmbedText")
+@app.post("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:batchEmbedText")
+async def gemini_batch_embed_text(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Legacy Gemini batchEmbedText endpoint mapped to deterministic local vectors."""
     try:
         _resolve_gemini_model(model_name)
@@ -9602,8 +9614,12 @@ async def gemini_batch_embed_text(model_name: str, request: Request):
 
 
 @app.post("/v1/models/{model_name:path}:asyncBatchEmbedContent")
+@app.post("/v1/publishers/google/models/{model_name:path}:asyncBatchEmbedContent")
+@app.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:asyncBatchEmbedContent")
 @app.post("/v1beta/models/{model_name:path}:asyncBatchEmbedContent")
-async def gemini_async_batch_embed_content(model_name: str, request: Request):
+@app.post("/v1beta/publishers/google/models/{model_name:path}:asyncBatchEmbedContent")
+@app.post("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:asyncBatchEmbedContent")
+async def gemini_async_batch_embed_content(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Gemini-compatible asyncBatchEmbedContent as an immediately completed operation."""
     try:
         model = _resolve_gemini_model(model_name)
@@ -9737,8 +9753,12 @@ async def gemini_predict(model_name: str, request: Request, project: str | None 
 
 
 @app.post("/v1/models/{model_name:path}:generateImages")
+@app.post("/v1/publishers/google/models/{model_name:path}:generateImages")
+@app.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:generateImages")
 @app.post("/v1beta/models/{model_name:path}:generateImages")
-async def gemini_generate_images(model_name: str, request: Request):
+@app.post("/v1beta/publishers/google/models/{model_name:path}:generateImages")
+@app.post("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:generateImages")
+async def gemini_generate_images(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Gemini/Imagen-compatible generateImages endpoint backed by Antigravity image generation."""
     try:
         body = _gemini_normalize_request(await request.json())
@@ -9787,8 +9807,12 @@ def _gemini_video_unimplemented_operation(model_name: str, body: dict[str, Any])
 
 
 @app.post("/v1/models/{model_name:path}:generateVideos")
+@app.post("/v1/publishers/google/models/{model_name:path}:generateVideos")
+@app.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:generateVideos")
 @app.post("/v1beta/models/{model_name:path}:generateVideos")
-async def gemini_generate_videos(model_name: str, request: Request):
+@app.post("/v1beta/publishers/google/models/{model_name:path}:generateVideos")
+@app.post("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:generateVideos")
+async def gemini_generate_videos(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Gemini/Veo-compatible video generation operation placeholder."""
     try:
         body = _gemini_normalize_request(await request.json())
@@ -9806,8 +9830,12 @@ async def gemini_generate_videos(model_name: str, request: Request):
 
 
 @app.post("/v1/models/{model_name:path}:predictLongRunning")
+@app.post("/v1/publishers/google/models/{model_name:path}:predictLongRunning")
+@app.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:predictLongRunning")
 @app.post("/v1beta/models/{model_name:path}:predictLongRunning")
-async def gemini_predict_long_running(model_name: str, request: Request):
+@app.post("/v1beta/publishers/google/models/{model_name:path}:predictLongRunning")
+@app.post("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:predictLongRunning")
+async def gemini_predict_long_running(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Gemini/Vertex-compatible predictLongRunning as a completed operation."""
     try:
         body = _gemini_normalize_request(await request.json())
@@ -9848,8 +9876,12 @@ async def gemini_predict_long_running(model_name: str, request: Request):
 
 
 @app.post("/v1/models/{model_name:path}:countTextTokens")
+@app.post("/v1/publishers/google/models/{model_name:path}:countTextTokens")
+@app.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:countTextTokens")
 @app.post("/v1beta/models/{model_name:path}:countTextTokens")
-async def gemini_count_text_tokens(model_name: str, request: Request):
+@app.post("/v1beta/publishers/google/models/{model_name:path}:countTextTokens")
+@app.post("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:countTextTokens")
+async def gemini_count_text_tokens(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Legacy Gemini countTextTokens endpoint mapped to local token estimation."""
     try:
         _resolve_gemini_model(model_name)
@@ -9864,15 +9896,23 @@ async def gemini_count_text_tokens(model_name: str, request: Request):
 
 
 @app.post("/v1/models/{model_name:path}:countMessageTokens")
+@app.post("/v1/publishers/google/models/{model_name:path}:countMessageTokens")
+@app.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:countMessageTokens")
 @app.post("/v1beta/models/{model_name:path}:countMessageTokens")
-async def gemini_count_message_tokens(model_name: str, request: Request):
+@app.post("/v1beta/publishers/google/models/{model_name:path}:countMessageTokens")
+@app.post("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:countMessageTokens")
+async def gemini_count_message_tokens(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Legacy Gemini countMessageTokens endpoint mapped to local token estimation."""
     return await gemini_count_text_tokens(model_name, request)
 
 
 @app.post("/v1/models/{model_name:path}:generateText")
+@app.post("/v1/publishers/google/models/{model_name:path}:generateText")
+@app.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:generateText")
 @app.post("/v1beta/models/{model_name:path}:generateText")
-async def gemini_generate_text(model_name: str, request: Request):
+@app.post("/v1beta/publishers/google/models/{model_name:path}:generateText")
+@app.post("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:generateText")
+async def gemini_generate_text(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Legacy Gemini generateText endpoint mapped to generateContent."""
     try:
         body = _gemini_normalize_request(await request.json())
@@ -9898,8 +9938,12 @@ async def gemini_generate_text(model_name: str, request: Request):
 
 
 @app.post("/v1/models/{model_name:path}:generateMessage")
+@app.post("/v1/publishers/google/models/{model_name:path}:generateMessage")
+@app.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:generateMessage")
 @app.post("/v1beta/models/{model_name:path}:generateMessage")
-async def gemini_generate_message(model_name: str, request: Request):
+@app.post("/v1beta/publishers/google/models/{model_name:path}:generateMessage")
+@app.post("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:generateMessage")
+async def gemini_generate_message(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Legacy Gemini generateMessage endpoint mapped to generateContent."""
     try:
         body = _gemini_normalize_request(await request.json())
@@ -9920,8 +9964,12 @@ async def gemini_generate_message(model_name: str, request: Request):
 
 
 @app.post("/v1/models/{model_name:path}:generateAnswer")
+@app.post("/v1/publishers/google/models/{model_name:path}:generateAnswer")
+@app.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:generateAnswer")
 @app.post("/v1beta/models/{model_name:path}:generateAnswer")
-async def gemini_generate_answer(model_name: str, request: Request):
+@app.post("/v1beta/publishers/google/models/{model_name:path}:generateAnswer")
+@app.post("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:generateAnswer")
+async def gemini_generate_answer(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Legacy Semantic Retriever generateAnswer endpoint mapped to generateContent."""
     try:
         body = _gemini_normalize_request(await request.json())
@@ -10054,8 +10102,12 @@ def _gemini_streaming_response(*, body: dict[str, Any], model_name: str, antigra
 
 
 @app.post("/v1/models/{model_name:path}:batchGenerateContent")
+@app.post("/v1/publishers/google/models/{model_name:path}:batchGenerateContent")
+@app.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:batchGenerateContent")
 @app.post("/v1beta/models/{model_name:path}:batchGenerateContent")
-async def gemini_batch_generate_content(model_name: str, request: Request):
+@app.post("/v1beta/publishers/google/models/{model_name:path}:batchGenerateContent")
+@app.post("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:batchGenerateContent")
+async def gemini_batch_generate_content(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Gemini-compatible batchGenerateContent as an immediately completed operation."""
     try:
         body = _gemini_batch_body(_gemini_normalize_request(await request.json()))

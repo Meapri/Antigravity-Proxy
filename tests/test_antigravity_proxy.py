@@ -138,6 +138,27 @@ def test_gemini_v1beta_discovery_20260626_flatpaths_match_fastapi_routes():
     assert missing == []
 
 
+def test_vertex_model_aliases_cover_all_v1beta_model_post_methods():
+    route_paths = {
+        route.path
+        for route in proxy.app.routes
+        if "POST" in getattr(route, "methods", set())
+    }
+    model_suffixes = sorted(
+        path.split("{model_name:path}", 1)[1]
+        for path in route_paths
+        if path.startswith("/v1beta/models/{model_name:path}:")
+    )
+
+    assert model_suffixes
+    for suffix in model_suffixes:
+        assert f"/v1beta/publishers/google/models/{{model_name:path}}{suffix}" in route_paths
+        assert (
+            f"/v1beta/projects/{{project}}/locations/{{location}}/publishers/google/models/{{model_name:path}}{suffix}"
+            in route_paths
+        )
+
+
 def test_model_normalization_adds_capabilities_and_hides_internal(monkeypatch):
     monkeypatch.delenv("ANTIGRAVITY_PROXY_INCLUDE_INTERNAL_MODELS", raising=False)
     models = [
@@ -374,6 +395,10 @@ def test_gemini_compute_tokens_accepts_wrappers_and_media():
     v1_response = client.post("/v1/models/gemini-3-flash-agent:computeTokens", json={
         "contents": "sdk string input",
     })
+    vertex_response = client.post(
+        "/v1beta/projects/proj/locations/global/publishers/google/models/gemini-3-flash-agent:computeTokens",
+        json={"contents": "vertex token input"},
+    )
 
     assert response.status_code == 200
     body = response.json()
@@ -385,6 +410,8 @@ def test_gemini_compute_tokens_accepts_wrappers_and_media():
     assert base64.b64decode(body["tokensInfo"][1]["tokens"][-1]).decode("utf-8") == "<inline:image/png>"
     assert v1_response.status_code == 200
     assert v1_response.json()["tokensInfo"][0]["role"] == "user"
+    assert vertex_response.status_code == 200
+    assert vertex_response.json()["tokensInfo"][0]["role"] == "user"
     assert "computeTokens" in client.get("/v1beta/models/gemini-3-flash-agent").json()["supportedGenerationMethods"]
 
     tools_response = client.post("/v1beta/models/gemini-3-flash-agent:computeTokens", json={
@@ -454,6 +481,10 @@ def test_gemini_video_model_and_generate_videos_operation(tmp_path, monkeypatch)
     predicted = client.post("/v1beta/models/veo-3.1-generate-preview:predictLongRunning", json={
         "instances": [{"prompt": "make another short clip"}],
     })
+    vertex_predicted = client.post(
+        "/v1beta/projects/proj/locations/us-central1/publishers/google/models/veo-3.1-generate-preview:predictLongRunning",
+        json={"instances": [{"prompt": "make a vertex short clip"}]},
+    )
 
     assert model.status_code == 200
     assert model.json()["name"] == "models/veo-3.1-generate-preview"
@@ -478,6 +509,9 @@ def test_gemini_video_model_and_generate_videos_operation(tmp_path, monkeypatch)
 
     assert predicted.status_code == 200
     assert predicted.json()["error"]["status"] == "UNIMPLEMENTED"
+    assert vertex_predicted.status_code == 200
+    assert vertex_predicted.json()["metadata"]["model"] == "models/veo-3.1-generate-preview"
+    assert vertex_predicted.json()["error"]["status"] == "UNIMPLEMENTED"
 
 
 def test_gemini_model_aliases_resolve_for_public_style_names(monkeypatch):
@@ -652,6 +686,19 @@ def test_gemini_embeddings_are_deterministic():
             {"content": {"parts": [{"text": "two"}]}, "outputDimensionality": 16},
         ]
     })
+    vertex = client.post(
+        "/v1beta/projects/proj/locations/global/publishers/google/models/gemini-3-flash-agent:embedContent",
+        json=payload,
+    )
+    vertex_batch = client.post(
+        "/v1beta/projects/proj/locations/global/publishers/google/models/gemini-3-flash-agent:batchEmbedContents",
+        json={
+            "requests": [
+                {"content": {"parts": [{"text": "vertex one"}]}, "outputDimensionality": 12},
+                {"content": {"parts": [{"text": "vertex two"}]}, "outputDimensionality": 12},
+            ]
+        },
+    )
 
     assert first.status_code == 200
     values = first.json()["embedding"]["values"]
@@ -664,6 +711,11 @@ def test_gemini_embeddings_are_deterministic():
     assert len(batch.json()["embeddings"][0]["values"]) == 16
     assert batch.json()["usageMetadata"]["promptTokenCount"] > first.json()["usageMetadata"]["promptTokenCount"]
     assert batch.json()["usageMetadata"]["promptTokenDetails"][0]["tokenCount"] == batch.json()["usageMetadata"]["promptTokenCount"]
+    assert vertex.status_code == 200
+    assert len(vertex.json()["embedding"]["values"]) == 32
+    assert vertex_batch.status_code == 200
+    assert len(vertex_batch.json()["embeddings"]) == 2
+    assert len(vertex_batch.json()["embeddings"][0]["values"]) == 12
 
 
 def test_gemini_embeddings_respect_task_type_title_and_snake_case():
@@ -2292,11 +2344,22 @@ def test_gemini_batch_generate_content_operation(tmp_path, monkeypatch):
             {"contents": [{"role": "user", "parts": [{"text": "second"}]}]},
         ]
     })
+    vertex_created = client.post(
+        "/v1beta/projects/proj/locations/global/publishers/google/models/gemini-3-flash-agent:batchGenerateContent",
+        json={
+            "requests": [
+                {"contents": [{"role": "user", "parts": [{"text": "vertex first"}]}]},
+                {"contents": [{"role": "user", "parts": [{"text": "vertex second"}]}]},
+            ]
+        },
+    )
 
     assert created.status_code == 200
+    assert vertex_created.status_code == 200
     operation = created.json()
     assert operation["done"] is True
     assert len(operation["response"]["responses"]) == 2
+    assert len(vertex_created.json()["response"]["responses"]) == 2
 
     fetched = client.get(f"/v1beta/{operation['name']}")
     listed = client.get("/v1beta/operations")
@@ -2320,8 +2383,8 @@ def test_gemini_batch_generate_content_operation(tmp_path, monkeypatch):
     assert batch.json()["metadata"]["batchResource"]["name"] == batch_name
     assert operation["metadata"]["stats"]["successfulRequestCount"] == "2"
     assert batches.status_code == 200
-    assert batches.json()["operations"][0]["name"] == batch_name
-    assert batches.json()["batches"][0]["operation"] == operation["name"]
+    assert batch_name in {item["name"] for item in batches.json()["operations"]}
+    assert operation["name"] in {item["operation"] for item in batches.json()["batches"]}
     assert deleted.status_code == 200
 
 

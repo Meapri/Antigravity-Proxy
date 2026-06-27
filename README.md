@@ -340,14 +340,13 @@ const response = await ai.models.generateContent({
 });
 ```
 
-For that SDK mode, the proxy accepts Vertex collection aliases such as
-`/v1beta/publishers/google/models/{model}:generateContent`,
-`:streamGenerateContent`, `:countTokens`, `:embedContent`,
-`:batchEmbedContents`, and `:predict`, plus model list/get aliases. Full
-Vertex resource paths such as
+For those SDK modes, the proxy accepts Vertex collection aliases such as
+`/v1beta/publishers/google/models/{model}:generateContent` and full Vertex
+resource paths such as
 `/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model}:generateContent`
-are also accepted for the same model methods. Model names may be passed as a
-plain model ID, `models/{model}`, `publishers/google/models/{model}`,
+for every `/v1beta/models/{model}:...` model method implemented by the proxy,
+plus model list/get aliases. Model names may be passed as a plain model ID,
+`models/{model}`, `publishers/google/models/{model}`,
 `projects/{project}/locations/{location}/publishers/google/models/{model}`, or
 `google/{model}`.
 
