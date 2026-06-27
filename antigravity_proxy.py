@@ -4327,10 +4327,12 @@ def _gemini_tuned_resource(meta: dict[str, Any]) -> dict[str, Any]:
         "supportedGenerationMethods": [
             "generateContent",
             "streamGenerateContent",
+            "batchGenerateContent",
             "countTokens",
             "computeTokens",
             "embedContent",
             "batchEmbedContents",
+            "asyncBatchEmbedContent",
         ],
     }
     for key in (
@@ -7815,6 +7817,24 @@ async def gemini_tuned_stream_generate_content(tuned_model_id: str, request: Req
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
+@app.post("/v1/tunedModels/{tuned_model_id}:batchGenerateContent")
+@app.post("/v1beta/tunedModels/{tuned_model_id}:batchGenerateContent")
+async def gemini_tuned_batch_generate_content(tuned_model_id: str, request: Request):
+    try:
+        body = _gemini_batch_body(_gemini_normalize_request(await request.json()))
+        if isinstance(body, dict) and body.pop("_batchKind", None) == "embed":
+            raise HTTPException(status_code=400, detail="batchGenerateContent does not accept embedContentBatch.")
+        base_model = _gemini_tuned_base_model(tuned_model_id)
+        operation, _batch = await _gemini_create_completed_batch(_gemini_model_name(base_model), body)
+        return operation
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini tuned model batchGenerateContent failed")
+        return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
+
+
 @app.post("/v1/tunedModels/{tuned_model_id}:countTokens")
 @app.post("/v1beta/tunedModels/{tuned_model_id}:countTokens")
 async def gemini_tuned_count_tokens(tuned_model_id: str, request: Request):
@@ -7878,6 +7898,24 @@ async def gemini_tuned_batch_embed_contents(tuned_model_id: str, request: Reques
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
     except Exception as exc:
         log.exception("Gemini tuned model batchEmbedContents failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.post("/v1/tunedModels/{tuned_model_id}:asyncBatchEmbedContent")
+@app.post("/v1beta/tunedModels/{tuned_model_id}:asyncBatchEmbedContent")
+async def gemini_tuned_async_batch_embed_content(tuned_model_id: str, request: Request):
+    try:
+        model = _gemini_tuned_base_model(tuned_model_id)
+        body = _gemini_batch_body(_gemini_normalize_request(await request.json()))
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        operation, _batch = _gemini_create_completed_embed_batch(model, body)
+        return operation
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini tuned model asyncBatchEmbedContent failed")
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
@@ -8459,6 +8497,8 @@ async def gemini_generate_answer(model_name: str, request: Request):
 
 @app.post("/v1/models/{model_name:path}:generateContent")
 @app.post("/v1beta/models/{model_name:path}:generateContent")
+@app.post("/v1/dynamic/{model_name:path}:generateContent")
+@app.post("/v1beta/dynamic/{model_name:path}:generateContent")
 async def gemini_generate_content(model_name: str, request: Request):
     """Gemini REST-compatible generateContent endpoint backed by Antigravity."""
     try:
@@ -9390,6 +9430,8 @@ async def gemini_live_websocket(websocket: WebSocket):
 
 @app.post("/v1/models/{model_name:path}:streamGenerateContent")
 @app.post("/v1beta/models/{model_name:path}:streamGenerateContent")
+@app.post("/v1/dynamic/{model_name:path}:streamGenerateContent")
+@app.post("/v1beta/dynamic/{model_name:path}:streamGenerateContent")
 async def gemini_stream_generate_content(model_name: str, request: Request):
     """Gemini REST-compatible SSE streamGenerateContent endpoint."""
     try:

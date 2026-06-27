@@ -1030,6 +1030,34 @@ def test_gemini_generate_content_maps_tool_choice_to_tool_config(monkeypatch):
     }
 
 
+def test_gemini_dynamic_generate_and_stream_routes(monkeypatch):
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen.setdefault("requests", []).append(request)
+            seen.setdefault("models", []).append(model)
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "dynamic ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    generated = client.post("/v1beta/dynamic/gemini-3-flash-agent:generateContent", json={
+        "contents": "hello dynamic",
+    })
+    with client.stream("POST", "/v1/dynamic/gemini-3-flash-agent:streamGenerateContent", json={
+        "contents": "hello dynamic stream",
+    }) as streamed:
+        stream_body = streamed.read().decode()
+
+    assert generated.status_code == 200
+    assert generated.json()["candidates"][0]["content"]["parts"][0]["text"] == "dynamic ok"
+    assert streamed.status_code == 200
+    assert "data:" in stream_body
+    assert seen["models"] == ["gemini-3-flash-agent", "gemini-3-flash-agent"]
+    assert seen["requests"][0]["contents"][0]["parts"][0]["text"] == "hello dynamic"
+
+
 def test_gemini_function_calling_config_accepts_required_alias(monkeypatch):
     seen = {}
 
@@ -3606,10 +3634,12 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert fetched.json()["supportedGenerationMethods"] == [
         "generateContent",
         "streamGenerateContent",
+        "batchGenerateContent",
         "countTokens",
         "computeTokens",
         "embedContent",
         "batchEmbedContents",
+        "asyncBatchEmbedContent",
     ]
     assert listed_operations.status_code == 200
     assert listed_operations.json()["operations"][0]["name"] == created.json()["name"]
@@ -3709,6 +3739,27 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert streamed.status_code == 200
     assert "data:" in stream_body
     assert "tuned ok" in stream_body
+
+    tuned_batch = client.post("/v1beta/tunedModels/my_tuned:batchGenerateContent", json={
+        "display_name": "tuned batch",
+        "requests": [
+            {"contents": [{"role": "user", "parts": [{"text": "batch tuned"}]}]},
+        ],
+    })
+    tuned_async_embed = client.post("/v1/tunedModels/my_tuned:asyncBatchEmbedContent", json={
+        "embed_content_batch": {
+            "display_name": "tuned async embed",
+            "requests": [
+                {"content": {"parts": [{"text": "embed tuned"}]}},
+            ],
+        },
+    })
+    assert tuned_batch.status_code == 200
+    assert tuned_batch.json()["metadata"]["batchResource"]["displayName"] == "tuned batch"
+    assert tuned_batch.json()["response"]["responses"][0]["candidates"][0]["content"]["parts"][0]["text"] == "tuned ok"
+    assert tuned_async_embed.status_code == 200
+    assert tuned_async_embed.json()["metadata"]["batchResource"]["displayName"] == "tuned async embed"
+    assert tuned_async_embed.json()["response"]["embeddings"][0]["values"]
 
     counted = client.post("/v1/tunedModels/my_tuned:countTokens", json={
         "contents": [{"role": "user", "parts": [{"text": "hello tuned"}]}]

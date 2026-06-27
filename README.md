@@ -364,6 +364,8 @@ Implemented Gemini-compatible routes:
 - `DELETE /v1/models/{model}/operations/{operation}`
 - `POST /v1/models/{model}:generateContent`
 - `POST /v1/models/{model}:streamGenerateContent`
+- `POST /v1/dynamic/{dynamic_model}:generateContent`
+- `POST /v1/dynamic/{dynamic_model}:streamGenerateContent`
 - `POST /v1/models/{model}:countTokens`
 - `POST /v1/models/{model}:computeTokens`
 - `POST /v1/models/{model}:countTextTokens`
@@ -390,6 +392,8 @@ Implemented Gemini-compatible routes:
 - `DELETE /v1beta/models/{model}/operations/{operation}`
 - `POST /v1beta/models/{model}:generateContent`
 - `POST /v1beta/models/{model}:streamGenerateContent`
+- `POST /v1beta/dynamic/{dynamic_model}:generateContent`
+- `POST /v1beta/dynamic/{dynamic_model}:streamGenerateContent`
 - `POST /v1beta/models/{model}:countTokens`
 - `POST /v1beta/models/{model}:computeTokens`
 - `POST /v1beta/models/{model}:countTextTokens`
@@ -600,10 +604,12 @@ Implemented Gemini-compatible routes:
 - `DELETE /v1/tunedModels/{tuned_model}`
 - `POST /v1/tunedModels/{tuned_model}:generateContent`
 - `POST /v1/tunedModels/{tuned_model}:streamGenerateContent`
+- `POST /v1/tunedModels/{tuned_model}:batchGenerateContent`
 - `POST /v1/tunedModels/{tuned_model}:countTokens`
 - `POST /v1/tunedModels/{tuned_model}:computeTokens`
 - `POST /v1/tunedModels/{tuned_model}:embedContent`
 - `POST /v1/tunedModels/{tuned_model}:batchEmbedContents`
+- `POST /v1/tunedModels/{tuned_model}:asyncBatchEmbedContent`
 - `GET /v1/tunedModels/{tuned_model}/permissions`
 - `POST /v1/tunedModels/{tuned_model}/permissions`
 - `GET /v1/tunedModels/{tuned_model}/permissions/{permission}`
@@ -622,10 +628,12 @@ Implemented Gemini-compatible routes:
 - `DELETE /v1beta/tunedModels/{tuned_model}`
 - `POST /v1beta/tunedModels/{tuned_model}:generateContent`
 - `POST /v1beta/tunedModels/{tuned_model}:streamGenerateContent`
+- `POST /v1beta/tunedModels/{tuned_model}:batchGenerateContent`
 - `POST /v1beta/tunedModels/{tuned_model}:countTokens`
 - `POST /v1beta/tunedModels/{tuned_model}:computeTokens`
 - `POST /v1beta/tunedModels/{tuned_model}:embedContent`
 - `POST /v1beta/tunedModels/{tuned_model}:batchEmbedContents`
+- `POST /v1beta/tunedModels/{tuned_model}:asyncBatchEmbedContent`
 - `GET /v1beta/tunedModels/{tuned_model}/permissions`
 - `POST /v1beta/tunedModels/{tuned_model}/permissions`
 - `GET /v1beta/tunedModels/{tuned_model}/permissions/{permission}`
@@ -681,6 +689,11 @@ threshold aliases such as `harassment`, `dangerous`, `only_high`,
 `countTokens` also normalize SDK content-union inputs such as string
 `contents`, part dictionaries, part arrays, and string `systemInstruction`
 values into Gemini REST `Content` objects before forwarding.
+The Gemini `dynamic/{dynamic_model}:generateContent` and
+`:streamGenerateContent` discovery routes are accepted as aliases for the same
+model generation pipeline. Tuned models also expose the discovery-listed
+`batchGenerateContent` and `asyncBatchEmbedContent` methods, mapped through the
+same local completed-operation compatibility layer as model batch calls.
 They also accept the common SDK-style top-level `config` object and merge it
 into Gemini REST fields such as `generationConfig`, `systemInstruction`,
 `toolConfig`, `safetySettings`, `tools`, `cachedContent`, and `labels`.
