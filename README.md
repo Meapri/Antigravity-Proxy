@@ -690,10 +690,14 @@ aliases are normalized too, including `google_search.search_types`,
 implemented as a safe local fetch-and-inject shim: URLs found in the prompt are
 fetched as bounded text context, private/loopback/link-local addresses are
 blocked by default, and `urlContextMetadata` is attached to candidates.
-`codeExecution`, `computerUse`, `googleMaps`, and `mcpServers` are recognized
-but return `UNIMPLEMENTED` because the current Antigravity backend does not
-expose those hosted tools. `toolConfig.functionCallingConfig.mode` and
-`allowedFunctionNames` are normalized from common SDK spellings. Function
+`codeExecution`, `googleMaps`, and `mcpServers` are recognized but return
+`UNIMPLEMENTED` because the current Antigravity backend does not expose those
+hosted tools. `computerUse` remains rejected on plain `generateContent`, but
+`interactions.create` accepts Gemini native `computer_use` tools and returns a
+`requires_action` interaction with a predefined Computer Use `functionCall` for
+the client or Hermes/cua-driver loop to execute.
+`toolConfig.functionCallingConfig.mode` and `allowedFunctionNames` are
+normalized from common SDK spellings. Function
 calling mode aliases such as `required`, `forced`, and `force` are treated as
 Gemini `ANY`, and `tool_choice` / `toolChoice` aliases on Gemini requests are
 folded into `toolConfig.functionCallingConfig` for custom function tools.
@@ -1162,6 +1166,9 @@ Notes:
   snake_case Gemini SDK fields are normalized to REST casing before forwarding.
 - Interaction responses include `steps` with `model_output` content blocks, and
   streaming emits `interaction.step.completed` events for step-aware clients.
+- Interactions with `tools: [{"type":"computer_use","environment":"browser"}]`
+  return `status: "requires_action"` with a Computer Use `functionCall` instead
+  of forwarding the hosted tool to the Antigravity upstream.
 - Interaction create accepts SDK-style `config` / `interaction` wrappers,
   exposes `object: "interaction"`, `created` / `updated`,
   `created_at` / `updated_at`, `outputText` / `output_text`, legacy

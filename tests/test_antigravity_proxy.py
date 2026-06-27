@@ -1801,6 +1801,14 @@ def test_gemini_generate_content_normalizes_tools_unions(monkeypatch):
             "enablePromptInjectionDetection": True,
         }
     }]
+    assert proxy._gemini_normalize_tools_value({
+        "type": "computer_use",
+        "environment": "browser",
+    }) == [{
+        "computerUse": {
+            "environment": "ENVIRONMENT_BROWSER",
+        }
+    }]
     assert proxy._gemini_url_retrieval_status_value("paywall") == "URL_RETRIEVAL_STATUS_PAYWALL"
     assert proxy._gemini_url_retrieval_status_value("unsafe") == "URL_RETRIEVAL_STATUS_UNSAFE"
     assert proxy._gemini_model_stage_value("unstable") == "UNSTABLE_EXPERIMENTAL"
@@ -2864,6 +2872,52 @@ def test_gemini_interactions_create_previous_store_and_stream(tmp_path, monkeypa
     assert "interaction.output_text.delta" in body
     assert "interaction.step.completed" in body
     assert "data: [DONE]" in body
+
+
+def test_gemini_interactions_native_computer_use_requires_action(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", str(tmp_path / "interactions"))
+
+    class FailingClient:
+        def generate_raw(self, *, request, model=""):
+            raise AssertionError("native computer_use interactions must not be forwarded upstream")
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FailingClient())
+    client = TestClient(proxy.app)
+
+    created = client.post("/v1beta/interactions", json={
+        "model": "gemini-3.5-flash",
+        "input": "Search for Gemini API on Google.",
+        "tools": [{
+            "type": "computer_use",
+            "environment": "browser",
+        }],
+    })
+
+    assert created.status_code == 200
+    body = created.json()
+    assert body["status"] == "requires_action"
+    assert body["model"] == "models/gemini-3.5-flash"
+    assert body["output"]["modelVersion"] == "gemini-3.5-flash"
+    assert body["output"]["candidates"][0]["content"]["parts"][0]["functionCall"]["name"] == "open_web_browser"
+    assert body["output"]["computerUse"]["environment"] == "ENVIRONMENT_BROWSER"
+    assert body["steps"][0]["type"] == "computer_use"
+    assert body["steps"][0]["status"] == "requires_action"
+    assert body["steps"][0]["environment"] == "ENVIRONMENT_BROWSER"
+    assert body["requiredAction"]["type"] == "submit_computer_use_result"
+    assert body["required_action"]["tool_calls"][0]["name"] == "open_web_browser"
+
+    fetched = client.get(f"/v1beta/{body['name']}")
+    assert fetched.status_code == 200
+    assert fetched.json()["status"] == "requires_action"
+
+    transient = client.post("/v1beta/interactions", json={
+        "input": "Open a browser.",
+        "store": False,
+        "tools": [{"type": "computer_use", "environment": "browser"}],
+    })
+    missing = client.get(f"/v1beta/{transient.json()['name']}")
+    assert transient.status_code == 200
+    assert missing.status_code == 404
 
 
 def test_gemini_interactions_cancel_accepts_rest_and_colon_paths(tmp_path, monkeypatch):

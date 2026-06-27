@@ -1850,6 +1850,10 @@ def _gemini_normalize_tools_value(value: Any) -> list[dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         item = _gemini_normalize_request(item)
+        tool_type = str(item.get("type") or "").strip().lower().replace("-", "_")
+        if tool_type in {"computer_use", "computeruse"}:
+            options = {key: value for key, value in item.items() if key not in {"type", "name"}}
+            item = {"computerUse": options}
         if "functionDeclaration" in item and "functionDeclarations" not in item:
             item = dict(item)
             item["functionDeclarations"] = item.pop("functionDeclaration")
@@ -10646,6 +10650,93 @@ def _gemini_interaction_model_output_step(text: str, response: dict[str, Any] | 
     }
 
 
+def _gemini_interaction_text_from_contents(contents: list[dict[str, Any]]) -> str:
+    texts: list[str] = []
+    for content in contents:
+        if not isinstance(content, dict):
+            continue
+        for part in content.get("parts") or []:
+            if isinstance(part, dict) and part.get("text") is not None:
+                texts.append(str(part["text"]))
+    return "\n".join(text for text in texts if text)
+
+
+def _gemini_public_model_resource_name(model_name: str, model: dict[str, Any]) -> str:
+    public_id = _gemini_resource_model_id(str(model_name or "")).strip()
+    if public_id and not any(ch.isspace() for ch in public_id):
+        return "models/" + public_id
+    return _gemini_model_name(model)
+
+
+def _gemini_computer_use_tools(tools: Any) -> list[dict[str, Any]]:
+    normalized = _gemini_normalize_tools_value(tools)
+    return [
+        tool
+        for tool in normalized
+        if isinstance(tool, dict) and isinstance(tool.get("computerUse"), dict)
+    ]
+
+
+def _gemini_create_computer_use_response(
+    *,
+    model_name: str,
+    model: dict[str, Any],
+    request_body: dict[str, Any],
+    contents: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+) -> tuple[dict[str, Any], str, list[dict[str, Any]], dict[str, Any]]:
+    tool = tools[0] if tools else {"computerUse": {"environment": "ENVIRONMENT_BROWSER"}}
+    computer_use = dict(tool.get("computerUse") or {})
+    environment = computer_use.get("environment") or "ENVIRONMENT_BROWSER"
+    prompt = _gemini_interaction_text_from_contents(contents)
+    call_id = "computer_call_" + uuid.uuid4().hex
+    function_call = {
+        "id": call_id,
+        "name": "open_web_browser",
+        "args": {},
+    }
+    part = {"functionCall": function_call}
+    response = _gemini_finalize_generate_response(
+        {
+            "candidates": [{
+                "content": {
+                    "role": "model",
+                    "parts": [part],
+                },
+                "finishReason": "STOP",
+            }],
+            "modelVersion": _gemini_resource_model_id(model_name),
+            "usageMetadata": {
+                "promptTokenCount": _estimate_tokens(request_body),
+                "candidatesTokenCount": 1,
+            },
+        },
+        model_name=model_name,
+        request_body=request_body,
+    )
+    response["modelVersion"] = _gemini_resource_model_id(model_name)
+    response["computerUse"] = {
+        "environment": environment,
+        "tool": computer_use,
+        "callId": call_id,
+        "action": function_call,
+    }
+    text = ""
+    step = {
+        "type": "computer_use",
+        "status": "requires_action",
+        "toolCallId": call_id,
+        "tool_call_id": call_id,
+        "environment": environment,
+        "computerUse": computer_use,
+        "action": function_call,
+        "functionCall": function_call,
+        "input": prompt,
+    }
+    usage = _gemini_interaction_usage(response.get("usageMetadata") or {})
+    return response, text, [step], usage
+
+
 async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
@@ -10759,6 +10850,52 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
         if body.get("store", True) is not False:
             _gemini_store_interaction(interaction)
             await _gemini_emit_webhook_event("interaction.completed", interaction)
+        return _gemini_interaction_resource(interaction)
+
+    computer_use_tools = _gemini_computer_use_tools(request_body.get("tools"))
+    if computer_use_tools:
+        response, text, steps, usage = _gemini_create_computer_use_response(
+            model_name=str(model_name),
+            model=model,
+            request_body=request_body,
+            contents=request_body["contents"],
+            tools=computer_use_tools,
+        )
+        candidates = response.get("candidates") or []
+        model_content = None
+        if candidates and isinstance(candidates[0], dict) and isinstance(candidates[0].get("content"), dict):
+            model_content = candidates[0]["content"]
+        interaction = {
+            "name": interaction_name,
+            "id": interaction_name.rsplit("/", 1)[-1],
+            "model": _gemini_public_model_resource_name(str(model_name), model),
+            "agent": body.get("agent"),
+            "status": "requires_action",
+            "created": now,
+            "updated": now,
+            "createTime": now,
+            "updateTime": now,
+            "previousInteractionId": previous_id or None,
+            "input": body.get("input", body.get("messages", body.get("contents"))),
+            "request": request_body,
+            "output": response,
+            "outputText": text,
+            "history": request_body["contents"] + ([model_content] if model_content else []),
+            "steps": steps,
+            "usage": usage,
+            "usageMetadata": response.get("usageMetadata") or usage,
+            "requiredAction": {
+                "type": "submit_computer_use_result",
+                "toolCalls": [step.get("functionCall") for step in steps if isinstance(step, dict) and step.get("functionCall")],
+            },
+            "required_action": {
+                "type": "submit_computer_use_result",
+                "tool_calls": [step.get("functionCall") for step in steps if isinstance(step, dict) and step.get("functionCall")],
+            },
+        }
+        if body.get("store", True) is not False:
+            _gemini_store_interaction(interaction)
+            await _gemini_emit_webhook_event("interaction.requires_action", interaction)
         return _gemini_interaction_resource(interaction)
 
     request_body = _gemini_apply_cached_content(request_body)
