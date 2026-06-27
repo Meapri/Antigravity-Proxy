@@ -1240,6 +1240,16 @@ def _gemini_normalize_generation_config(value: Any) -> Any:
                 detail="generationConfig.speechConfig.voiceConfig and multiSpeakerVoiceConfig are mutually exclusive.",
             )
         out["speechConfig"] = speech
+    if out.get("responseSchema") is not None and out.get("responseJsonSchema") is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="generationConfig.responseSchema and responseJsonSchema are mutually exclusive.",
+        )
+    if (out.get("responseSchema") is not None or out.get("responseJsonSchema") is not None) and not out.get("responseMimeType"):
+        raise HTTPException(
+            status_code=400,
+            detail="generationConfig.responseMimeType is required when responseSchema or responseJsonSchema is set.",
+        )
     return out
 
 
@@ -3127,7 +3137,7 @@ def _gemini_cancel_operation(operation: dict[str, Any]) -> None:
     if operation.get("done"):
         return
     operation["done"] = True
-    operation["error"] = {"code": 1, "message": "Operation cancelled.", "status": "CANCELLED"}
+    operation["error"] = {"code": 1, "message": "Operation cancelled.", "details": []}
     metadata = operation.get("metadata")
     if isinstance(metadata, dict):
         metadata["endTime"] = _gemini_now_iso()
@@ -4578,8 +4588,6 @@ def _gemini_file_resource(meta: dict[str, Any]) -> dict[str, Any]:
         resource["videoMetadata"] = meta["videoMetadata"]
     elif str(resource["mimeType"]).startswith("video/"):
         resource["videoMetadata"] = {}
-    if meta.get("customMetadata") is not None:
-        resource["customMetadata"] = meta["customMetadata"]
     return resource
 
 
@@ -5103,10 +5111,23 @@ def _gemini_cached_name(name: str) -> str:
 
 
 def _gemini_cached_resource(meta: dict[str, Any]) -> dict[str, Any]:
-    out = {k: v for k, v in meta.items() if k not in {"payload"} and v is not None}
+    allowed = {
+        "name",
+        "model",
+        "displayName",
+        "createTime",
+        "updateTime",
+        "ttl",
+        "expireTime",
+        "usageMetadata",
+    }
+    out = {k: v for k, v in meta.items() if k in allowed and v is not None}
+    usage = out.get("usageMetadata")
+    if isinstance(usage, dict):
+        out["usageMetadata"] = {"totalTokenCount": int(usage.get("totalTokenCount") or 0)}
     payload = meta.get("payload")
     if isinstance(payload, dict):
-        for key in ("contents", "systemInstruction", "tools", "toolConfig", "safetySettings"):
+        for key in ("contents", "systemInstruction", "tools", "toolConfig"):
             if key in payload and key not in out:
                 out[key] = payload[key]
     return out
@@ -5185,7 +5206,6 @@ def _gemini_create_cached_content(body: dict[str, Any]) -> dict[str, Any]:
         "expireTime": body.get("expireTime") or expire_iso,
         "usageMetadata": {
             "totalTokenCount": usage.get("totalTokens", 0),
-            "promptTokensDetails": usage.get("promptTokensDetails", []),
         },
         "payload": body,
     }
@@ -8395,7 +8415,7 @@ async def gemini_register_file(request: Request):
         config = body.get("config") if isinstance(body.get("config"), dict) else {}
         if "uris" in body or "uris" in config:
             return {"files": _gemini_register_files_from_uris(body)}
-        return {"file": _gemini_register_file(body)}
+        raise HTTPException(status_code=400, detail="files:register requires a uris array.")
     except HTTPException as exc:
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT")
     except Exception as exc:
@@ -9376,6 +9396,8 @@ async def gemini_import_file_to_file_search_store(store_id: str, request: Reques
             "done": True,
             "response": {
                 "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.ImportFileResponse",
+                "parent": store_name,
+                "documentName": document.get("name"),
                 "document": document,
             },
         }
@@ -11552,7 +11574,7 @@ async def gemini_cancel_batch(batch_id: str):
         operation = _gemini_get_operation(str(batch.get("operation") or ""))
         if operation and not operation.get("done"):
             operation["done"] = True
-            operation["error"] = {"code": 1, "message": "Operation cancelled.", "status": "CANCELLED"}
+            operation["error"] = {"code": 1, "message": "Operation cancelled.", "details": []}
             _gemini_store_operation(operation)
     return JSONResponse({})
 
@@ -12333,6 +12355,9 @@ async def gemini_delete_interaction(interaction_id: str):
     return JSONResponse({})
 
 
+@app.websocket("/generativelanguage.googleapis.com/v1beta/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent")
+@app.websocket("/v1beta/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent")
+@app.websocket("/v1/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent")
 @app.websocket("/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent")
 @app.websocket("/v1alpha/live")
 @app.websocket("/v1beta/live")

@@ -432,7 +432,7 @@ def test_gemini_count_tokens_applies_generate_content_request_cache(tmp_path, mo
     assert created.status_code == 200
     cache_name = created.json()["name"]
     assert created.json()["usageMetadata"]["totalTokenCount"] > 0
-    assert created.json()["usageMetadata"]["promptTokensDetails"][0]["modality"] == "TEXT"
+    assert set(created.json()["usageMetadata"]) == {"totalTokenCount"}
 
     uncached = client.post("/v1beta/models/gemini-3-flash-agent:countTokens", json={
         "contents": [{"role": "user", "parts": [{"text": "new prompt"}]}],
@@ -701,7 +701,8 @@ def test_gemini_v1_model_routes_do_not_break_openai_models(monkeypatch, tmp_path
         "outputDimensionality": 8,
     })
     registered = client.post("/v1/files:register", json={
-        "file": {"displayName": "stable.txt", "uri": "gs://bucket/stable.txt"}
+        "uris": ["gs://bucket/stable.txt"],
+        "config": {"display_name": "stable.txt"},
     })
     uploaded = client.post(
         "/upload/v1/files?uploadType=media&displayName=stable-upload.txt",
@@ -725,7 +726,7 @@ def test_gemini_v1_model_routes_do_not_break_openai_models(monkeypatch, tmp_path
     assert embedded.status_code == 200
     assert len(embedded.json()["embedding"]["values"]) == 8
     assert registered.status_code == 200
-    assert registered.json()["file"]["uri"] == "gs://bucket/stable.txt"
+    assert registered.json()["files"][0]["uri"] == "gs://bucket/stable.txt"
     assert uploaded.status_code == 200
     assert uploaded.json()["file"]["displayName"] == "stable-upload.txt"
 
@@ -1396,11 +1397,6 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
                 "property_ordering": ["answer"],
                 "any_of": [{"type": "object", "properties": {"answer": {"type": "string"}}}],
             },
-            "response_json_schema": {
-                "type": "object",
-                "properties": {"score": {"type": "integer", "minimum": 0}},
-                "property_ordering": ["score"],
-            },
             "response_format": {
                 "text": {"mime_type": "application/json"},
                 "image": {
@@ -1508,9 +1504,25 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
     assert schema["properties"]["answer"]["minLength"] == 1
     assert schema["propertyOrdering"] == ["answer"]
     assert schema["anyOf"] == [{"type": "object", "properties": {"answer": {"type": "string"}}}]
-    json_schema = seen["request"]["generationConfig"]["responseJsonSchema"]
-    assert json_schema["properties"]["score"]["minimum"] == 0
-    assert json_schema["propertyOrdering"] == ["score"]
+    assert "responseJsonSchema" not in seen["request"]["generationConfig"]
+    invalid_schema_mix = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "hi",
+        "generation_config": {
+            "response_mime_type": "application/json",
+            "response_schema": {"type": "object"},
+            "response_json_schema": {"type": "object"},
+        },
+    })
+    missing_schema_mime = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "hi",
+        "generation_config": {
+            "response_schema": {"type": "object"},
+        },
+    })
+    assert invalid_schema_mix.status_code == 400
+    assert "mutually exclusive" in invalid_schema_mix.json()["error"]["message"]
+    assert missing_schema_mime.status_code == 400
+    assert "responseMimeType is required" in missing_schema_mime.json()["error"]["message"]
 
 
 def test_gemini_generate_content_maps_tool_choice_to_tool_config(monkeypatch):
@@ -1659,10 +1671,6 @@ def test_gemini_generation_config_accepts_nested_response_format(monkeypatch):
                         "type": "object",
                         "properties": {"answer": {"type": "string", "min_length": 1}},
                     },
-                    "_responseJsonSchema": {
-                        "type": "object",
-                        "properties": {"score": {"type": "integer", "minimum": 0}},
-                    },
                 },
             },
         },
@@ -1672,7 +1680,22 @@ def test_gemini_generation_config_accepts_nested_response_format(monkeypatch):
     gen = seen["request"]["generationConfig"]
     assert gen["responseMimeType"] == "application/json"
     assert gen["responseSchema"]["properties"]["answer"]["minLength"] == 1
-    assert gen["responseJsonSchema"]["properties"]["score"]["minimum"] == 0
+    assert "responseJsonSchema" not in gen
+
+    invalid_nested_response_format = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "hi",
+        "generation_config": {
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "schema": {"type": "object"},
+                    "_responseJsonSchema": {"type": "object"},
+                },
+            },
+        },
+    })
+    assert invalid_nested_response_format.status_code == 400
+    assert "mutually exclusive" in invalid_nested_response_format.json()["error"]["message"]
 
     official_response_format = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
         "contents": "hi",
@@ -2746,6 +2769,41 @@ def test_google_genai_sdk_file_search_store_resumable_upload(tmp_path, monkeypat
     assert docs.json()["documents"][0]["displayName"] == "sdk-fss.txt"
 
 
+def test_google_genai_sdk_file_search_store_import_file_response(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILE_SEARCH_STORES_DIR", str(tmp_path / "fss"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "files"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    app_client = TestClient(proxy.app)
+    sdk_http = httpx.Client(transport=_FastApiTransport(app_client))
+    sdk = genai.Client(
+        api_key="test-key",
+        http_options=types.HttpOptions(
+            base_url="http://testserver/v1beta",
+            api_version="",
+            httpx_client=sdk_http,
+        ),
+    )
+    store = sdk.file_search_stores.create(config={"display_name": "Import store"})
+    uploaded = sdk.files.upload(
+        file=io.BytesIO(b"imported body"),
+        config={"mime_type": "text/plain", "display_name": "import-source.txt"},
+    )
+
+    operation = sdk.file_search_stores.import_file(
+        file_search_store_name=store.name,
+        file_name=uploaded.name,
+    )
+
+    assert operation.done is True
+    assert operation.response.parent == store.name
+    assert operation.response.document_name.startswith(f"{store.name}/documents/")
+    doc_id = operation.response.document_name.rsplit("/", 1)[-1]
+    media = sdk.file_search_stores.download_media(media_id=f"{store.name}/media/{doc_id}")
+    assert media == b"imported body"
+    assert sdk.file_search_stores.delete(name=store.name, config={"force": True}) is None
+    assert app_client.get(f"/v1beta/{store.name}").status_code == 404
+
+
 def test_google_genai_sdk_vertex_tuning_jobs(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_TUNING_JOBS_DIR", str(tmp_path / "tuning_jobs"))
     app_client = TestClient(proxy.app)
@@ -3120,10 +3178,18 @@ def test_gemini_operations_v1_aliases(tmp_path, monkeypatch):
     assert cancelled.json() == {}
     assert cancelled_fetched.status_code == 200
     assert cancelled_fetched.json()["done"] is True
-    assert cancelled_fetched.json()["error"]["status"] == "CANCELLED"
+    assert cancelled_fetched.json()["error"] == {
+        "code": 1,
+        "message": "Operation cancelled.",
+        "details": [],
+    }
     assert scoped_cancelled.status_code == 200
     assert scoped_cancelled_fetched.json()["done"] is True
-    assert scoped_cancelled_fetched.json()["error"]["status"] == "CANCELLED"
+    assert scoped_cancelled_fetched.json()["error"] == {
+        "code": 1,
+        "message": "Operation cancelled.",
+        "details": [],
+    }
     assert scoped_cancelled_fetched.json()["metadata"]["endTime"]
     assert wrong_scoped.status_code == 404
     assert deleted.status_code == 200
@@ -4072,6 +4138,14 @@ def test_gemini_live_websocket_text_turn(monkeypatch):
     assert response["serverContent"]["modelTurn"]["parts"][0]["text"] == "live ok"
     assert response["serverContent"]["usageMetadata"]["totalTokenCount"] > 0
 
+    for path in (
+        "/v1beta/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent",
+        "/generativelanguage.googleapis.com/v1beta/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent",
+    ):
+        with client.websocket_connect(path) as ws:
+            ws.send_json({"setup": {"model": "models/gemini-3-flash-agent"}})
+            assert ws.receive_json() == {"setupComplete": {}}
+
 
 def test_gemini_live_websocket_accepts_query_api_key(monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_PROXY_API_KEY", "secret")
@@ -4286,7 +4360,7 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "gemini_files"))
     client = TestClient(proxy.app)
 
-    registered = client.post("/v1beta/files:register", json={
+    single_register = client.post("/v1beta/files:register", json={
         "file": {
             "displayName": "external.txt",
             "mimeType": "text/plain",
@@ -4295,12 +4369,18 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
             "sizeBytes": "12",
         }
     })
+    registered = client.post("/v1beta/files:register", json={
+        "uris": ["gs://bucket/external.txt"],
+        "config": {"mime_type": "text/plain", "display_name": "external.txt"},
+    })
 
+    assert single_register.status_code == 400
+    assert single_register.json()["error"]["status"] == "INVALID_ARGUMENT"
     assert registered.status_code == 200
-    file_resource = registered.json()["file"]
+    assert "file" not in registered.json()
+    file_resource = registered.json()["files"][0]
     assert file_resource["displayName"] == "external.txt"
     assert file_resource["uri"] == "gs://bucket/external.txt"
-    assert file_resource["downloadUri"] == "https://storage.example/external.txt"
     assert file_resource["source"] == "REGISTERED"
     assert file_resource["state"] == "ACTIVE"
     assert file_resource["updateTime"]
@@ -4382,7 +4462,7 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     assert all(item["mimeType"] == "text/plain" for item in official_registered_files)
     assert [item["displayName"] for item in official_registered_files] == ["one-custom.txt", "two-custom.txt"]
     assert [item["state"] for item in official_registered_files] == ["FAILED", "ACTIVE"]
-    assert official_registered_files[0]["customMetadata"][0]["stringValue"] == "uris"
+    assert "customMetadata" not in official_registered_files[0]
 
     config_registered = client.post("/v1beta/files:register", json={
         "config": {
@@ -4403,7 +4483,7 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     assert [item["displayName"] for item in config_registered_files] == ["config-one.txt", "config-two.txt"]
     assert [item["state"] for item in config_registered_files] == ["ACTIVE", "PROCESSING"]
 
-    video = client.post("/v1beta/files:register", json={
+    video = client.post("/v1beta/files", json={
         "file": {
             "displayName": "clip.mp4",
             "mimeType": "video/mp4",
@@ -4414,7 +4494,7 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     assert video.status_code == 200
     assert video.json()["file"]["videoMetadata"]["videoDuration"] == "3s"
 
-    config_file_registered = client.post("/v1beta/files:register", json={
+    config_file_registered = client.post("/v1beta/files", json={
         "config": {
             "mime_type": "text/plain",
             "state": "file_state_processing",
@@ -4430,7 +4510,7 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     assert config_file_registered.json()["file"]["state"] == "PROCESSING"
 
     for idx in range(12):
-        created = client.post("/v1beta/files:register", json={
+        created = client.post("/v1beta/files", json={
             "file": {"displayName": f"page-{idx}.txt", "uri": f"gs://bucket/page-{idx}.txt"}
         })
         assert created.status_code == 200
@@ -4688,12 +4768,9 @@ def test_gemini_cached_contents_merge_into_generate_request(tmp_path, monkeypatc
         "parts": [{"text": "wrapped cached system"}],
     }
     assert wrapped_created.json()["toolConfig"] == {"functionCallingConfig": {"mode": "NONE"}}
-    assert wrapped_created.json()["safetySettings"] == [{
-        "category": "HARM_CATEGORY_HARASSMENT",
-        "threshold": "BLOCK_ONLY_HIGH",
-    }]
+    assert "safetySettings" not in wrapped_created.json()
     assert wrapped_created.json()["usageMetadata"]["totalTokenCount"] > created.json()["usageMetadata"]["totalTokenCount"]
-    assert wrapped_created.json()["usageMetadata"]["promptTokensDetails"][0]["modality"] == "TEXT"
+    assert set(wrapped_created.json()["usageMetadata"]) == {"totalTokenCount"}
     assert wrapped_created.json()["expireTime"]
 
     expire_created = client.post("/v1beta/cachedContents", json={

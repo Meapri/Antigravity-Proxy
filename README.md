@@ -430,6 +430,8 @@ Implemented Gemini-compatible routes:
 - `POST /v1beta/interactions/{interaction}:cancel`
 - `DELETE /v1beta/interactions/{interaction}`
 - `WS /ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`
+- `WS /v1beta/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`
+- `WS /generativelanguage.googleapis.com/v1beta/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`
 - `WS /v1alpha/live`
 - `WS /v1beta/live`
 - `WS /v1/live`
@@ -1049,6 +1051,7 @@ File search stores:
   `chunkingConfig` when supplied. It accepts `fileMetadata` /
   `file_metadata` wrappers in addition to direct fields, and returns scoped
   operation names such as `fileSearchStores/{store}/operations/{operation}`.
+  Operation responses include SDK-readable `parent` and `documentName` fields.
 - `uploadToFileSearchStore` accepts raw, multipart, or JSON direct uploads and
   stores documents locally while preserving custom metadata and
   `chunkingConfig`. JSON uploads may provide document metadata through
@@ -1175,7 +1178,8 @@ Live API:
   oriented and does not expose native bidirectional media streaming.
 - Live protocol errors use the same Gemini `error` payload and `google.rpc`
   details as the REST and SSE compatibility routes. WebSocket aliases are
-  available at `/v1/live`, `/v1beta/live`, and `/v1alpha/live`.
+  available at `/v1/live`, `/v1beta/live`, `/v1alpha/live`, `/v1beta/ws/...`,
+  and the gateway-prefixed `/generativelanguage.googleapis.com/v1beta/ws/...`.
 - Experimental Developer API auth tokens are implemented through
   `POST /v1beta/auth_tokens` and `POST /v1/auth_tokens`. The proxy stores local
   token metadata under `data/gemini_auth_tokens` by default; override with
@@ -1263,9 +1267,9 @@ Notes:
   `downloadUri`, `source`, base64 `sha256Hash`, and video metadata fields when
   available. `POST /v1beta/files` supports official metadata-only File
   creation, the same Files API surface is also available under `/v1`, and
-  `files:register` supports Gemini's `uris` array shape both top-level and
-  under `config`, plus single-file metadata under `config.file`. `files.list`
-  uses Gemini's default page size of 10 and maximum page size of 100.
+  `files:register` follows the Gemini `uris[] -> files[]` shape. `files.list`
+  uses Gemini's default page size of 10 and maximum page size of 100. File
+  responses omit non-schema fields such as `customMetadata`.
 - Cached contents are stored locally under `data/gemini_cached_contents` by
   default; override with `ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR`.
   `cachedContents` is available under both `/v1` and `/v1beta`;
@@ -1275,6 +1279,8 @@ Notes:
   `/v1beta/projects/{project}/locations/{location}/cachedContents/{cache}` are
   accepted for `google-genai` Vertex cache lifecycle compatibility. Create
   requests require `model`, matching the Gemini `CachedContent` schema.
+  Cached content responses are filtered to Gemini `CachedContent` fields and
+  expose `usageMetadata.totalTokenCount`.
 - Corpora are stored locally under `data/gemini_corpora` by default; override
   with `ANTIGRAVITY_GEMINI_CORPORA_DIR`.
 - Batch operations are stored locally under `data/gemini_operations` by default;
