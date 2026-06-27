@@ -4732,6 +4732,9 @@ def test_gemini_file_search_documents_list_clamps_page_size(tmp_path, monkeypatc
 
     store = client.post("/v1beta/fileSearchStores", json={"displayName": "many docs"}).json()
     store_id = store["name"].split("/", 1)[1]
+    for index in range(12):
+        created = client.post("/v1beta/fileSearchStores", json={"displayName": f"store-{index:02d}"})
+        assert created.status_code == 200
     for index in range(25):
         uploaded = client.post(
             f"/upload/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore?displayName=doc-{index}.txt",
@@ -4739,11 +4742,25 @@ def test_gemini_file_search_documents_list_clamps_page_size(tmp_path, monkeypatc
         )
         assert uploaded.status_code == 200
 
+    stores_default = client.get("/v1beta/fileSearchStores")
+    stores_next = client.get(f"/v1beta/fileSearchStores?pageToken={stores_default.json()['nextPageToken']}")
+    stores_oversized = client.get("/v1beta/fileSearchStores?pageSize=999")
+    docs_default = client.get(f"/v1beta/fileSearchStores/{store_id}/documents")
     listed = client.get(f"/v1beta/fileSearchStores/{store_id}/documents?pageSize=999")
     next_page = client.get(
         f"/v1beta/fileSearchStores/{store_id}/documents?page_size=999&page_token={listed.json()['nextPageToken']}"
     )
 
+    assert stores_default.status_code == 200
+    assert len(stores_default.json()["fileSearchStores"]) == 10
+    assert stores_default.json()["nextPageToken"] == "10"
+    assert stores_next.status_code == 200
+    assert len(stores_next.json()["fileSearchStores"]) == 3
+    assert stores_oversized.status_code == 200
+    assert len(stores_oversized.json()["fileSearchStores"]) == 13
+    assert docs_default.status_code == 200
+    assert len(docs_default.json()["documents"]) == 10
+    assert docs_default.json()["nextPageToken"] == "10"
     assert listed.status_code == 200
     assert len(listed.json()["documents"]) == 20
     assert listed.json()["nextPageToken"] == "20"
@@ -4852,6 +4869,7 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     filtered = client.get('/v1beta/tunedModels?filter=displayName:"Query"')
     filtered_description = client.get('/v1beta/tunedModels?filter=description:"updated"')
     fetched = client.get("/v1/tunedModels/my_tuned")
+    fetched_full_name = client.get("/v1beta/tunedModels/tunedModels/my_tuned")
     listed_operations = client.get("/v1/tunedModels/my_tuned/operations")
     filtered_operations = client.get(
         f"/v1beta/tunedModels/my_tuned/operations?filter=operation.name:{created_op_id}&return_partial_success=true"
@@ -4878,6 +4896,8 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert filtered_description.status_code == 200
     assert filtered_description.json()["tunedModels"] == []
     assert fetched.json()["displayName"] == "My tuned"
+    assert fetched_full_name.status_code == 200
+    assert fetched_full_name.json()["name"] == "tunedModels/my_tuned"
     assert fetched.json()["supportedGenerationMethods"] == [
         "generateContent",
         "streamGenerateContent",
@@ -4941,6 +4961,7 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert perm.status_code == 200
     perm_id = perm.json()["name"].rsplit("/", 1)[-1]
     listed_perms = client.get("/v1/tunedModels/my_tuned/permissions")
+    listed_perms_full_name = client.get("/v1beta/tunedModels/tunedModels/my_tuned/permissions")
     patched_perm = client.patch(f"/v1/tunedModels/my_tuned/permissions/{perm_id}", json={
         "permission": {
             "role": "writer",
@@ -4954,18 +4975,26 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
             "email_address": "still-ignored@example.com",
         }
     })
+    full_name_perm_patch = client.patch(
+        f"/v1beta/tunedModels/tunedModels/my_tuned/permissions/{perm_id}?updateMask=permission.role",
+        json={"permission": {"role": "reader", "email_address": "full-ignored@example.com"}},
+    )
     promoted = client.post(f"/v1/tunedModels/my_tuned/permissions/{perm_id}:transferOwnership")
     fetched_perm = client.get(f"/v1/tunedModels/my_tuned/permissions/{perm.json()['name']}")
     assert listed_perms.status_code == 200
     assert listed_perms.json()["permissions"][0]["emailAddress"] == "user@example.com"
     assert listed_perms.json()["permissions"][0]["granteeType"] == "USER"
     assert listed_perms.json()["permissions"][0]["role"] == "READER"
+    assert listed_perms_full_name.status_code == 200
+    assert listed_perms_full_name.json()["permissions"][0]["name"] == perm.json()["name"]
     assert patched_perm.status_code == 200
     assert patched_perm.json()["role"] == "WRITER"
     assert patched_perm.json()["emailAddress"] == "user@example.com"
     assert snake_query_perm.status_code == 200
     assert snake_query_perm.json()["role"] == "WRITER"
     assert snake_query_perm.json()["emailAddress"] == "user@example.com"
+    assert full_name_perm_patch.status_code == 200
+    assert full_name_perm_patch.json()["role"] == "READER"
     assert promoted.status_code == 200
     assert fetched_perm.json()["role"] == "OWNER"
 
@@ -5014,6 +5043,11 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert seen["request"]["generationConfig"]["responseMimeType"] == "text/plain"
     assert seen["request"]["toolConfig"]["functionCallingConfig"] == {"mode": "NONE"}
     assert "processingOptions" not in seen["request"]
+    generated_full_name = client.post("/v1beta/tunedModels/tunedModels/my_tuned:generateContent", json={
+        "contents": [{"role": "user", "parts": [{"text": "hello tuned full"}]}],
+    })
+    assert generated_full_name.status_code == 200
+    assert generated_full_name.json()["candidates"][0]["content"]["parts"][0]["text"] == "tuned ok"
 
     text_generated = client.post("/v1beta/tunedModels/my_tuned:generateText", json={
         "prompt": {"text": "legacy tuned text"},
@@ -5056,10 +5090,15 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     counted = client.post("/v1/tunedModels/my_tuned:countTokens", json={
         "contents": [{"role": "user", "parts": [{"text": "hello tuned"}]}]
     })
+    counted_full_name = client.post("/v1beta/tunedModels/tunedModels/my_tuned:countTokens", json={
+        "contents": [{"role": "user", "parts": [{"text": "hello tuned full"}]}]
+    })
     assert counted.status_code == 200
     assert counted.json()["totalTokens"] > 0
     assert counted.json()["promptTokensDetails"][0]["modality"] == "TEXT"
     assert counted.json()["cacheTokensDetails"] == []
+    assert counted_full_name.status_code == 200
+    assert counted_full_name.json()["totalTokens"] > 0
 
     computed = client.post("/v1beta/tunedModels/my_tuned:computeTokens", json={
         "contents": "hello tuned compute",

@@ -8811,7 +8811,12 @@ async def gemini_create_file_search_store(request: Request):
 @app.get("/v1/fileSearchStores")
 @app.get("/v1beta/fileSearchStores")
 async def gemini_list_file_search_stores(request: Request):
-    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
+    pageSize, pageToken = _gemini_list_query_params(
+        request,
+        default_page_size=10,
+        max_page_size=20,
+        clamp_page_size=True,
+    )
     stores = [_gemini_fss_resource(meta) for meta in _gemini_load_fss_index().values()]
     stores.sort(key=lambda item: item.get("createTime") or "")
     start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
@@ -8963,17 +8968,13 @@ async def gemini_list_file_search_documents(store_id: str, request: Request):
     meta = _gemini_get_fss_meta(store_id)
     if not meta:
         return _gemini_error_response(f"File search store '{store_id}' not found.", status_code=404, status="NOT_FOUND")
-    query = request.query_params
-    page_size_raw = query.get("pageSize") or query.get("page_size") or "20"
-    try:
-        page_size = max(1, min(20, int(page_size_raw)))
-    except (TypeError, ValueError):
-        page_size = 20
-    page_token = query.get("pageToken") or query.get("page_token") or "0"
-    try:
-        start = max(0, int(page_token))
-    except (TypeError, ValueError):
-        start = 0
+    page_size, page_token = _gemini_list_query_params(
+        request,
+        default_page_size=10,
+        max_page_size=20,
+        clamp_page_size=True,
+    )
+    start = int(page_token or 0) if page_token and page_token.isdigit() else 0
     docs = [_gemini_document_resource(doc) for doc in (meta.get("documents") or {}).values()]
     docs.sort(key=lambda item: item.get("createTime") or "")
     end = start + page_size
@@ -9223,6 +9224,8 @@ async def gemini_delete_tuned_model_operation(tuned_model_id: str, operation_id:
     return JSONResponse({})
 
 
+@app.get("/v1/tunedModels/tunedModels/{tuned_model_id}")
+@app.get("/v1beta/tunedModels/tunedModels/{tuned_model_id}")
 @app.get("/v1/tunedModels/{tuned_model_id}")
 @app.get("/v1beta/tunedModels/{tuned_model_id}")
 async def gemini_get_tuned_model(tuned_model_id: str):
@@ -9232,6 +9235,8 @@ async def gemini_get_tuned_model(tuned_model_id: str):
     return _gemini_tuned_resource(meta)
 
 
+@app.patch("/v1/tunedModels/tunedModels/{tuned_model_id}")
+@app.patch("/v1beta/tunedModels/tunedModels/{tuned_model_id}")
 @app.patch("/v1/tunedModels/{tuned_model_id}")
 @app.patch("/v1beta/tunedModels/{tuned_model_id}")
 async def gemini_patch_tuned_model(tuned_model_id: str, request: Request, updateMask: str | None = None):
@@ -9266,6 +9271,8 @@ async def gemini_patch_tuned_model(tuned_model_id: str, request: Request, update
     return _gemini_tuned_resource(meta)
 
 
+@app.delete("/v1/tunedModels/tunedModels/{tuned_model_id}")
+@app.delete("/v1beta/tunedModels/tunedModels/{tuned_model_id}")
 @app.delete("/v1/tunedModels/{tuned_model_id}")
 @app.delete("/v1beta/tunedModels/{tuned_model_id}")
 async def gemini_delete_tuned_model(tuned_model_id: str):
@@ -9278,6 +9285,8 @@ async def gemini_delete_tuned_model(tuned_model_id: str):
     return JSONResponse({})
 
 
+@app.post("/v1/tunedModels/tunedModels/{tuned_model_id}:generateContent")
+@app.post("/v1beta/tunedModels/tunedModels/{tuned_model_id}:generateContent")
 @app.post("/v1/tunedModels/{tuned_model_id}:generateContent")
 @app.post("/v1beta/tunedModels/{tuned_model_id}:generateContent")
 async def gemini_tuned_generate_content(tuned_model_id: str, request: Request):
@@ -9312,6 +9321,8 @@ async def gemini_tuned_generate_content(tuned_model_id: str, request: Request):
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
+@app.post("/v1/tunedModels/tunedModels/{tuned_model_id}:generateText")
+@app.post("/v1beta/tunedModels/tunedModels/{tuned_model_id}:generateText")
 @app.post("/v1/tunedModels/{tuned_model_id}:generateText")
 @app.post("/v1beta/tunedModels/{tuned_model_id}:generateText")
 async def gemini_tuned_generate_text(tuned_model_id: str, request: Request):
@@ -9328,6 +9339,8 @@ async def gemini_tuned_generate_text(tuned_model_id: str, request: Request):
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
+@app.post("/v1/tunedModels/tunedModels/{tuned_model_id}:streamGenerateContent")
+@app.post("/v1beta/tunedModels/tunedModels/{tuned_model_id}:streamGenerateContent")
 @app.post("/v1/tunedModels/{tuned_model_id}:streamGenerateContent")
 @app.post("/v1beta/tunedModels/{tuned_model_id}:streamGenerateContent")
 async def gemini_tuned_stream_generate_content(tuned_model_id: str, request: Request):
@@ -9357,6 +9370,8 @@ async def gemini_tuned_stream_generate_content(tuned_model_id: str, request: Req
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
+@app.post("/v1/tunedModels/tunedModels/{tuned_model_id}:batchGenerateContent")
+@app.post("/v1beta/tunedModels/tunedModels/{tuned_model_id}:batchGenerateContent")
 @app.post("/v1/tunedModels/{tuned_model_id}:batchGenerateContent")
 @app.post("/v1beta/tunedModels/{tuned_model_id}:batchGenerateContent")
 async def gemini_tuned_batch_generate_content(tuned_model_id: str, request: Request):
@@ -9375,6 +9390,8 @@ async def gemini_tuned_batch_generate_content(tuned_model_id: str, request: Requ
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
+@app.post("/v1/tunedModels/tunedModels/{tuned_model_id}:countTokens")
+@app.post("/v1beta/tunedModels/tunedModels/{tuned_model_id}:countTokens")
 @app.post("/v1/tunedModels/{tuned_model_id}:countTokens")
 @app.post("/v1beta/tunedModels/{tuned_model_id}:countTokens")
 async def gemini_tuned_count_tokens(tuned_model_id: str, request: Request):
@@ -9393,6 +9410,8 @@ async def gemini_tuned_count_tokens(tuned_model_id: str, request: Request):
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
 
 
+@app.post("/v1/tunedModels/tunedModels/{tuned_model_id}:computeTokens")
+@app.post("/v1beta/tunedModels/tunedModels/{tuned_model_id}:computeTokens")
 @app.post("/v1/tunedModels/{tuned_model_id}:computeTokens")
 @app.post("/v1beta/tunedModels/{tuned_model_id}:computeTokens")
 async def gemini_tuned_compute_tokens(tuned_model_id: str, request: Request):
@@ -9407,6 +9426,8 @@ async def gemini_tuned_compute_tokens(tuned_model_id: str, request: Request):
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
 
 
+@app.post("/v1/tunedModels/tunedModels/{tuned_model_id}:embedContent")
+@app.post("/v1beta/tunedModels/tunedModels/{tuned_model_id}:embedContent")
 @app.post("/v1/tunedModels/{tuned_model_id}:embedContent")
 @app.post("/v1beta/tunedModels/{tuned_model_id}:embedContent")
 async def gemini_tuned_embed_content(tuned_model_id: str, request: Request):
@@ -9424,6 +9445,8 @@ async def gemini_tuned_embed_content(tuned_model_id: str, request: Request):
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.post("/v1/tunedModels/tunedModels/{tuned_model_id}:batchEmbedContents")
+@app.post("/v1beta/tunedModels/tunedModels/{tuned_model_id}:batchEmbedContents")
 @app.post("/v1/tunedModels/{tuned_model_id}:batchEmbedContents")
 @app.post("/v1beta/tunedModels/{tuned_model_id}:batchEmbedContents")
 async def gemini_tuned_batch_embed_contents(tuned_model_id: str, request: Request):
@@ -9441,6 +9464,8 @@ async def gemini_tuned_batch_embed_contents(tuned_model_id: str, request: Reques
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.post("/v1/tunedModels/tunedModels/{tuned_model_id}:asyncBatchEmbedContent")
+@app.post("/v1beta/tunedModels/tunedModels/{tuned_model_id}:asyncBatchEmbedContent")
 @app.post("/v1/tunedModels/{tuned_model_id}:asyncBatchEmbedContent")
 @app.post("/v1beta/tunedModels/{tuned_model_id}:asyncBatchEmbedContent")
 async def gemini_tuned_async_batch_embed_content(tuned_model_id: str, request: Request):
@@ -9459,6 +9484,8 @@ async def gemini_tuned_async_batch_embed_content(tuned_model_id: str, request: R
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
+@app.post("/v1/tunedModels/tunedModels/{tuned_model_id}:transferOwnership")
+@app.post("/v1beta/tunedModels/tunedModels/{tuned_model_id}:transferOwnership")
 @app.post("/v1/tunedModels/{tuned_model_id}:transferOwnership")
 @app.post("/v1beta/tunedModels/{tuned_model_id}:transferOwnership")
 async def gemini_transfer_tuned_model_ownership(tuned_model_id: str, request: Request):
@@ -9504,6 +9531,8 @@ async def gemini_transfer_tuned_model_ownership(tuned_model_id: str, request: Re
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
+@app.get("/v1/tunedModels/tunedModels/{tuned_model_id}/permissions")
+@app.get("/v1beta/tunedModels/tunedModels/{tuned_model_id}/permissions")
 @app.get("/v1/tunedModels/{tuned_model_id}/permissions")
 @app.get("/v1beta/tunedModels/{tuned_model_id}/permissions")
 async def gemini_list_tuned_model_permissions(tuned_model_id: str, request: Request):
@@ -9513,6 +9542,8 @@ async def gemini_list_tuned_model_permissions(tuned_model_id: str, request: Requ
     return _gemini_permission_list_response(meta.get("permissions") or {}, request)
 
 
+@app.post("/v1/tunedModels/tunedModels/{tuned_model_id}/permissions")
+@app.post("/v1beta/tunedModels/tunedModels/{tuned_model_id}/permissions")
 @app.post("/v1/tunedModels/{tuned_model_id}/permissions")
 @app.post("/v1beta/tunedModels/{tuned_model_id}/permissions")
 async def gemini_create_tuned_model_permission(tuned_model_id: str, request: Request):
@@ -9526,6 +9557,8 @@ async def gemini_create_tuned_model_permission(tuned_model_id: str, request: Req
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
 
 
+@app.get("/v1/tunedModels/tunedModels/{tuned_model_id}/permissions/{permission_id:path}")
+@app.get("/v1beta/tunedModels/tunedModels/{tuned_model_id}/permissions/{permission_id:path}")
 @app.get("/v1/tunedModels/{tuned_model_id}/permissions/{permission_id:path}")
 @app.get("/v1beta/tunedModels/{tuned_model_id}/permissions/{permission_id:path}")
 async def gemini_get_tuned_model_permission(tuned_model_id: str, permission_id: str):
@@ -9538,6 +9571,8 @@ async def gemini_get_tuned_model_permission(tuned_model_id: str, permission_id: 
     return perm
 
 
+@app.patch("/v1/tunedModels/tunedModels/{tuned_model_id}/permissions/{permission_id:path}")
+@app.patch("/v1beta/tunedModels/tunedModels/{tuned_model_id}/permissions/{permission_id:path}")
 @app.patch("/v1/tunedModels/{tuned_model_id}/permissions/{permission_id:path}")
 @app.patch("/v1beta/tunedModels/{tuned_model_id}/permissions/{permission_id:path}")
 async def gemini_patch_tuned_model_permission(tuned_model_id: str, permission_id: str, request: Request, updateMask: str | None = None):
@@ -9568,6 +9603,8 @@ async def gemini_patch_tuned_model_permission(tuned_model_id: str, permission_id
     return perm
 
 
+@app.post("/v1/tunedModels/tunedModels/{tuned_model_id}/permissions/{permission_id:path}:transferOwnership")
+@app.post("/v1beta/tunedModels/tunedModels/{tuned_model_id}/permissions/{permission_id:path}:transferOwnership")
 @app.post("/v1/tunedModels/{tuned_model_id}/permissions/{permission_id:path}:transferOwnership")
 @app.post("/v1beta/tunedModels/{tuned_model_id}/permissions/{permission_id:path}:transferOwnership")
 async def gemini_transfer_tuned_model_permission(tuned_model_id: str, permission_id: str):
@@ -9588,6 +9625,8 @@ async def gemini_transfer_tuned_model_permission(tuned_model_id: str, permission
     return JSONResponse({})
 
 
+@app.delete("/v1/tunedModels/tunedModels/{tuned_model_id}/permissions/{permission_id:path}")
+@app.delete("/v1beta/tunedModels/tunedModels/{tuned_model_id}/permissions/{permission_id:path}")
 @app.delete("/v1/tunedModels/{tuned_model_id}/permissions/{permission_id:path}")
 @app.delete("/v1beta/tunedModels/{tuned_model_id}/permissions/{permission_id:path}")
 async def gemini_delete_tuned_model_permission(tuned_model_id: str, permission_id: str):

@@ -1012,6 +1012,9 @@ File search stores:
   `max_tokens_per_chunk`, and `max_overlap_tokens`.
 - File search store resources include Gemini-style document counters and
   `sizeBytes`; deleting a non-empty store requires `force=true`.
+- `fileSearchStores.list` accepts `pageSize` / `pageToken` and snake_case
+  `page_size` / `page_token`, defaulting to 10 items with Gemini's page size
+  capped at 20.
 - Deleting an indexed file search document also requires `force=true`, matching
   the Gemini REST `fileSearchStores.documents.delete` parameter.
 - `importFile` imports files previously uploaded through the local Files API and
@@ -1023,8 +1026,8 @@ File search stores:
   `chunkingConfig`. JSON uploads may provide document metadata through
   `file`, `fileMetadata`, or `file_metadata` wrappers.
 - `fileSearchStores.documents.list` accepts `pageSize` / `pageToken` and
-  snake_case `page_size` / `page_token`, with the Gemini REST page size capped
-  at 20.
+  snake_case `page_size` / `page_token`, defaulting to 10 items with the
+  Gemini REST page size capped at 20.
 - `tools.file_search` / `tools.fileSearch` performs local lexical retrieval
   against these stores and injects the best matching document snippets into the
   outgoing Gemini request context.
@@ -1055,6 +1058,9 @@ Tuned models and permissions:
   wrappers and preserve Gemini tuning metadata such as `tuningTask`,
   `hyperparameters`, `trainingData`, `validationData`, `readerProjectNumbers`,
   and `tunedModelSource`.
+- Tuned model routes accept both short IDs such as `my_tuned` and full resource
+  names embedded in the path, such as
+  `/v1beta/tunedModels/tunedModels/my_tuned:generateContent`.
 - `tunedModels.patch` honors `updateMask` / `update_mask` from either the query
   string or SDK wrapper body for mutable metadata fields such as `displayName`,
   `description`, `baseModel`, `tuningTask`, and `readerProjectNumbers`.
