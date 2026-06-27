@@ -3215,6 +3215,7 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     })
     assert listed.status_code == 200
     assert fetched.json()["displayName"] == "My tuned"
+    assert fetched.json()["supportedGenerationMethods"] == ["generateContent", "countTokens", "computeTokens"]
     assert listed_operations.status_code == 200
     assert listed_operations.json()["operations"][0]["name"] == created.json()["name"]
     assert fetched_operation.status_code == 200
@@ -3313,6 +3314,13 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert counted.json()["totalTokens"] > 0
     assert counted.json()["promptTokensDetails"][0]["modality"] == "TEXT"
     assert counted.json()["cacheTokensDetails"] == []
+
+    computed = client.post("/v1beta/tunedModels/my_tuned:computeTokens", json={
+        "contents": "hello tuned compute",
+    })
+    assert computed.status_code == 200
+    assert computed.json()["tokensInfo"][0]["role"] == "user"
+    assert computed.json()["tokensInfo"][0]["tokenIds"]
 
     deleted_perm = client.delete(f"/v1/tunedModels/my_tuned/permissions/{perm_id}")
     deleted_operation = client.delete(f"/v1/tunedModels/my_tuned/operations/{created_op_id}")

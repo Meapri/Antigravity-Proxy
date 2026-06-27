@@ -4072,6 +4072,7 @@ def _gemini_tuned_resource(meta: dict[str, Any]) -> dict[str, Any]:
         "temperature": meta.get("temperature"),
         "topP": meta.get("topP"),
         "topK": meta.get("topK"),
+        "supportedGenerationMethods": ["generateContent", "countTokens", "computeTokens"],
     }
     for key in (
         "tunedModelSource",
@@ -7534,6 +7535,20 @@ async def gemini_tuned_count_tokens(tuned_model_id: str, request: Request):
             _gemini_count_tokens_request(body if isinstance(body, dict) else {}),
             cached_tokens=cached_tokens,
         )
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+
+
+@app.post("/v1/tunedModels/{tuned_model_id}:computeTokens")
+@app.post("/v1beta/tunedModels/{tuned_model_id}:computeTokens")
+async def gemini_tuned_compute_tokens(tuned_model_id: str, request: Request):
+    try:
+        _gemini_tuned_base_model(tuned_model_id)
+        body = _gemini_normalize_request(await request.json())
+        if isinstance(body, dict):
+            body = _gemini_apply_file_search(_gemini_apply_cached_content(body))
+        return _gemini_compute_tokens_response(_gemini_count_tokens_request(body if isinstance(body, dict) else {}))
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
