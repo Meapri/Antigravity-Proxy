@@ -7682,6 +7682,9 @@ async def gemini_create_tuned_model(request: Request):
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        query_tuned_model_id = request.query_params.get("tunedModelId") or request.query_params.get("tuned_model_id")
+        if query_tuned_model_id and "tunedModelId" not in body and "tuned_model_id" not in body:
+            body = {**body, "tunedModelId": query_tuned_model_id}
         tuned = _gemini_create_tuned_model(body)
         operation = {
             "name": "operations/createTunedModel-" + uuid.uuid4().hex,

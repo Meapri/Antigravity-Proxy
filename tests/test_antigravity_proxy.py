@@ -3650,6 +3650,12 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert tuned["tuningTask"]["hyperparameters"]["epochCount"] == 2
     assert tuned["tuningTask"]["trainingData"]["examples"]["examples"][0]["output"] == "hello"
     created_op_id = created.json()["name"].split("/", 1)[1]
+    query_created = client.post("/v1beta/tunedModels?tunedModelId=query_tuned", json={
+        "tunedModel": {
+            "displayName": "Query tuned",
+            "baseModel": "models/gemini-3-flash-agent",
+        },
+    })
 
     listed = client.get("/v1/tunedModels")
     fetched = client.get("/v1/tunedModels/my_tuned")
@@ -3664,6 +3670,8 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
         }
     })
     assert listed.status_code == 200
+    assert query_created.status_code == 200
+    assert query_created.json()["response"]["name"] == "tunedModels/query_tuned"
     assert fetched.json()["displayName"] == "My tuned"
     assert fetched.json()["supportedGenerationMethods"] == [
         "generateContent",
