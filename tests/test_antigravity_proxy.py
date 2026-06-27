@@ -1275,6 +1275,10 @@ def test_gemini_predict_and_predict_long_running(tmp_path, monkeypatch):
     })
     long_running = client.post("/v1beta/models/gemini-3-flash-agent:predictLongRunning", json={
         "instances": [{"text": "later"}],
+        "parameters": {
+            "generation_config": {"max_output_tokens": "7"},
+            "safety_settings": {"harm_category": "harassment", "harm_block_threshold": "none"},
+        },
     })
     parameter_wrapped = client.post("/v1beta/models/gemini-3-flash-agent:predict", json={
         "instances": [{"parts": [{"text": "parameter wrapped"}]}],
@@ -1313,6 +1317,15 @@ def test_gemini_predict_and_predict_long_running(tmp_path, monkeypatch):
     assert long_running.status_code == 200
     assert long_running.json()["done"] is True
     assert long_running.json()["response"]["predictions"]
+    assert long_running.json()["metadata"]["deployedModelId"] == "models/gemini-3-flash-agent"
+    assert long_running.json()["metadata"]["createTime"]
+    assert long_running.json()["metadata"]["endTime"]
+    assert long_running.json()["metadata"]["request"]["contents"][0]["parts"][0]["text"] == "later"
+    assert long_running.json()["metadata"]["request"]["generationConfig"]["maxOutputTokens"] == 7
+    assert long_running.json()["metadata"]["request"]["safetySettings"] == [{
+        "category": "HARM_CATEGORY_HARASSMENT",
+        "threshold": "BLOCK_NONE",
+    }]
 
     op_id = long_running.json()["name"].split("/", 1)[1]
     model_operation = client.get(f"/v1beta/models/gemini-3-flash-agent/operations/{op_id}")

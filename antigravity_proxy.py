@@ -8046,44 +8046,50 @@ def _gemini_create_completed_embed_batch(model: dict[str, Any], body: dict[str, 
     return stored_operation, stored_batch
 
 
+async def _gemini_predict_payload(model_name: str, body: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    model = _resolve_gemini_model(model_name)
+    body = _gemini_normalize_request(body)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+    body = _gemini_apply_generate_config(body)
+    body = _gemini_apply_response_format(body)
+    body = _gemini_normalize_generate_body(body)
+    if _model_capabilities(model)["image_generation"]:
+        image = await _gemini_generate_image_payload(model_name, body)
+        prediction = {
+            "predictions": [{
+                "bytesBase64Encoded": image["base64"],
+                "mimeType": image["mimeType"],
+                "generatedFile": image["generatedFile"]["name"],
+            }],
+            "deployedModelId": _gemini_model_name(model),
+        }
+        return prediction, body
+    request_body = _gemini_predict_to_generate_body(body)
+    request_body = _gemini_apply_response_format(request_body)
+    request_body = _gemini_apply_cached_content(request_body)
+    request_body = _gemini_apply_file_search(request_body)
+    request_body = _gemini_inline_local_files(request_body)
+    data = await asyncio.to_thread(
+        _get_client().generate_raw,
+        request=request_body,
+        model=str(model["antigravity_model"]),
+    )
+    response = _gemini_finalize_generate_response(
+        _gemini_unwrap_response(data),
+        model_name=model_name,
+        request_body=request_body,
+    )
+    return {"predictions": [response], "deployedModelId": _gemini_model_name(model)}, request_body
+
+
 @app.post("/v1/models/{model_name:path}:predict")
 @app.post("/v1beta/models/{model_name:path}:predict")
 async def gemini_predict(model_name: str, request: Request):
     """Gemini/Vertex-compatible predict endpoint mapped to generateContent."""
     try:
-        model = _resolve_gemini_model(model_name)
-        body = _gemini_normalize_request(await request.json())
-        if not isinstance(body, dict):
-            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
-        body = _gemini_apply_generate_config(body)
-        body = _gemini_apply_response_format(body)
-        body = _gemini_normalize_generate_body(body)
-        if _model_capabilities(model)["image_generation"]:
-            image = await _gemini_generate_image_payload(model_name, body)
-            return {
-                "predictions": [{
-                    "bytesBase64Encoded": image["base64"],
-                    "mimeType": image["mimeType"],
-                    "generatedFile": image["generatedFile"]["name"],
-                }],
-                "deployedModelId": _gemini_model_name(model),
-            }
-        request_body = _gemini_predict_to_generate_body(body)
-        request_body = _gemini_apply_response_format(request_body)
-        request_body = _gemini_apply_cached_content(request_body)
-        request_body = _gemini_apply_file_search(request_body)
-        request_body = _gemini_inline_local_files(request_body)
-        data = await asyncio.to_thread(
-            _get_client().generate_raw,
-            request=request_body,
-            model=str(model["antigravity_model"]),
-        )
-        response = _gemini_finalize_generate_response(
-            _gemini_unwrap_response(data),
-            model_name=model_name,
-            request_body=request_body,
-        )
-        return {"predictions": [response], "deployedModelId": _gemini_model_name(model)}
+        prediction, _request_body = await _gemini_predict_payload(model_name, await request.json())
+        return prediction
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
@@ -8171,14 +8177,22 @@ async def gemini_predict_long_running(model_name: str, request: Request):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
         if _is_gemini_video_model_id(model_name):
             return _gemini_video_unimplemented_operation(model_name, body)
-        prediction = await gemini_predict(model_name, request)
-        if isinstance(prediction, JSONResponse):
-            return prediction
+        prediction, request_body = await _gemini_predict_payload(model_name, body)
+        model = _resolve_gemini_model(model_name)
+        now = _gemini_now_iso()
         operation = {
             "name": "operations/predictLongRunning-" + uuid.uuid4().hex,
             "metadata": {
                 "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.PredictLongRunningMetadata",
-                "model": _gemini_model_name(_resolve_gemini_model(model_name)),
+                "model": _gemini_model_name(model),
+                "deployedModelId": _gemini_model_name(model),
+                "createTime": now,
+                "endTime": now,
+                "request": {
+                    key: request_body[key]
+                    for key in ("contents", "generationConfig", "systemInstruction", "safetySettings", "tools", "toolConfig")
+                    if key in request_body
+                },
             },
             "done": True,
             "response": {

@@ -867,7 +867,8 @@ Embeddings and batch operations:
   `generateContent`. `parameters` may carry Gemini generation config fields or
   top-level generate fields such as `safetySettings` / `safety_settings` and
   `toolConfig` / `tool_config`; these are split and normalized before
-  forwarding.
+  forwarding. `predictLongRunning` stores a completed operation with
+  normalized request metadata, timestamps, and `deployedModelId`.
 - Legacy `generateText`, `generateMessage`, `generateAnswer`, `embedText`,
   `batchEmbedText`, `countTextTokens`, and `countMessageTokens` are accepted and
   mapped onto the newer local `generateContent`, embedding, and token-count
