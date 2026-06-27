@@ -7668,15 +7668,24 @@ async def gemini_get_file_search_document(store_id: str, document_id: str):
 
 @app.delete("/v1/fileSearchStores/{store_id}/documents/{document_id:path}")
 @app.delete("/v1beta/fileSearchStores/{store_id}/documents/{document_id:path}")
-async def gemini_delete_file_search_document(store_id: str, document_id: str):
+async def gemini_delete_file_search_document(store_id: str, document_id: str, request: Request):
     index = _gemini_load_fss_index()
     store_name = _gemini_fss_name(store_id)
     meta = index.get(store_name)
     if not meta:
         return _gemini_error_response(f"File search store '{store_id}' not found.", status_code=404, status="NOT_FOUND")
     doc_name = _gemini_document_name(store_id, document_id)
-    if doc_name not in (meta.get("documents") or {}):
+    doc = (meta.get("documents") or {}).get(doc_name)
+    if not doc:
         return _gemini_error_response(f"Document '{document_id}' not found.", status_code=404, status="NOT_FOUND")
+    force = _gemini_query_bool(request, "force", "force")
+    if any(doc.get(key) for key in ("content", "textPreview", "chunkingConfig")) and not force:
+        return _gemini_error_response(
+            "File search document contains indexed content. Set force=true to delete it.",
+            status_code=400,
+            status="FAILED_PRECONDITION",
+            field="force",
+        )
     meta["documents"].pop(doc_name, None)
     meta["updateTime"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     index[store_name] = meta

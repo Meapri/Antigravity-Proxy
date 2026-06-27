@@ -935,6 +935,8 @@ File search stores:
   `max_tokens_per_chunk`, and `max_overlap_tokens`.
 - File search store resources include Gemini-style document counters and
   `sizeBytes`; deleting a non-empty store requires `force=true`.
+- Deleting an indexed file search document also requires `force=true`, matching
+  the Gemini REST `fileSearchStores.documents.delete` parameter.
 - `importFile` imports files previously uploaded through the local Files API and
   preserves document display names, custom metadata, and document
   `chunkingConfig` when supplied. It accepts `fileMetadata` /

@@ -3559,11 +3559,15 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     assert media.content == b"source document"
 
     deleted_upload_operation = client.delete(f"/v1/fileSearchStores/{store_id}/upload/operations/{uploaded_op_id}")
-    deleted_doc = client.delete(f"/v1/{imported_doc['name']}")
+    blocked_doc_delete = client.delete(f"/v1/{imported_doc['name']}")
+    deleted_doc = client.delete(f"/v1/{imported_doc['name']}?force=true")
     blocked_store_delete = client.delete(f"/v1/{store_name}")
     forced_store_delete = client.delete(f"/v1/{store_name}?force=true")
 
     assert deleted_upload_operation.status_code == 200
+    assert blocked_doc_delete.status_code == 400
+    assert blocked_doc_delete.json()["error"]["status"] == "FAILED_PRECONDITION"
+    assert blocked_doc_delete.json()["error"]["details"][0]["fieldViolations"][0]["field"] == "force"
     assert deleted_doc.status_code == 200
     assert blocked_store_delete.status_code == 400
     assert blocked_store_delete.json()["error"]["status"] == "FAILED_PRECONDITION"
