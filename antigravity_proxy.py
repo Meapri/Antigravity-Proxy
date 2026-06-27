@@ -8481,8 +8481,9 @@ async def gemini_delete_file(file_id: str):
     index = _gemini_load_files_index()
     index.pop(meta["name"], None)
     _gemini_save_files_index(index)
-    path = Path(str(meta.get("path") or ""))
-    if path.exists():
+    raw_path = str(meta.get("path") or "").strip()
+    path = Path(raw_path) if raw_path else None
+    if path and path.is_file():
         try:
             path.unlink()
         except OSError:

@@ -8,10 +8,19 @@ import httpx
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from google import genai
+from google.auth import credentials
 from google.genai import types
 from starlette.routing import Match
 
 import antigravity_proxy as proxy
+
+
+class StaticCredentials(credentials.Credentials):
+    def refresh(self, request):
+        self.token = "static-token"
+
+    def apply(self, headers, token=None):
+        headers["authorization"] = "Bearer static-token"
 
 
 GEMINI_V1BETA_DISCOVERY_REVISION = "20260626"
@@ -2538,7 +2547,7 @@ def test_google_genai_sdk_vertex_collection_base_url(tmp_path, monkeypatch):
     assert predicted.json()["predictions"][0]["bytesBase64Encoded"]
 
 
-def test_google_genai_sdk_developer_files_upload_and_models_filter(tmp_path, monkeypatch):
+def test_google_genai_sdk_developer_files_upload_register_delete_and_models_filter(tmp_path, monkeypatch, caplog):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "files"))
     app_client = TestClient(proxy.app)
     sdk_http = httpx.Client(transport=_FastApiTransport(app_client))
@@ -2561,6 +2570,14 @@ def test_google_genai_sdk_developer_files_upload_and_models_filter(tmp_path, mon
     downloaded_by_file = sdk.files.download(file=uploaded)
     downloaded_by_name = sdk.files.download(file=uploaded.name)
     downloaded_by_download_uri = sdk.files.download(file=uploaded.download_uri)
+    registered = sdk.files.register_files(
+        auth=StaticCredentials(),
+        uris=["gs://bucket/sdk-registered.txt"],
+    )
+    registered_file = registered.files[0]
+    fetched_registered = sdk.files.get(name=registered_file.name)
+    deleted_uploaded = sdk.files.delete(name=uploaded.name)
+    deleted_registered = sdk.files.delete(name=registered_file.name)
 
     assert filtered.status_code == 200
     assert filtered.json()["models"]
@@ -2573,6 +2590,11 @@ def test_google_genai_sdk_developer_files_upload_and_models_filter(tmp_path, mon
     assert downloaded_by_file == b"sdk file upload"
     assert downloaded_by_name == b"sdk file upload"
     assert downloaded_by_download_uri == b"sdk file upload"
+    assert registered_file.source == types.FileSource.REGISTERED
+    assert fetched_registered.uri == "gs://bucket/sdk-registered.txt"
+    assert deleted_uploaded.sdk_http_response.headers["content-type"].startswith("application/json")
+    assert deleted_registered.sdk_http_response.headers["content-type"].startswith("application/json")
+    assert "Failed to remove Gemini file blob" not in caplog.text
 
 
 def test_google_genai_sdk_auth_tokens_create_and_live_access(tmp_path, monkeypatch):
@@ -6055,6 +6077,66 @@ def test_gemini_image_model_generate_content_predict_and_generate_images(tmp_pat
     assert missing_operation.status_code == 404
     assert deleted_file.status_code == 200
     assert missing_file.status_code == 404
+
+
+def test_google_genai_sdk_vertex_image_helper_methods(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR", str(tmp_path / "generated"))
+    image_calls = []
+
+    class FakeClient:
+        def generate_image(self, *, prompt, output_dir, aspect_ratio="", image_size=""):
+            image_calls.append({"prompt": prompt, "aspect_ratio": aspect_ratio, "image_size": image_size})
+            output = output_dir / f"sdk-image-{len(image_calls)}.png"
+            output.write_bytes(b"sdk-image")
+            return output
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    app_client = TestClient(proxy.app)
+    sdk_http = httpx.Client(transport=_FastApiTransport(app_client))
+    sdk = genai.Client(
+        vertexai=True,
+        project="proj",
+        location="global",
+        credentials=StaticCredentials(),
+        http_options=types.HttpOptions(
+            base_url="http://testserver/v1beta",
+            api_version=None,
+            base_url_resource_scope=types.ResourceScope.COLLECTION,
+            httpx_client=sdk_http,
+        ),
+    )
+    image = types.Image(image_bytes=b"input-image", mime_type="image/png")
+
+    generated = sdk.models.generate_images(
+        model="gemini-image-latest",
+        prompt="draw sdk image",
+        config={"number_of_images": 1, "aspect_ratio": "16:9"},
+    )
+    edited = sdk.models.edit_image(
+        model="gemini-image-latest",
+        prompt="edit sdk image",
+        reference_images=[types.RawReferenceImage(reference_image=image, reference_id=1)],
+    )
+    upscaled = sdk.models.upscale_image(
+        model="gemini-image-latest",
+        image=image,
+        upscale_factor="x2",
+    )
+    segmented = sdk.models.segment_image(
+        model="gemini-image-latest",
+        source={"image": image, "prompt": "foreground"},
+    )
+    recontextualized = sdk.models.recontext_image(
+        model="gemini-image-latest",
+        source={"person_image": image, "product_images": [image]},
+    )
+
+    assert generated.generated_images[0].image.image_bytes == b"sdk-image"
+    assert edited.generated_images[0].image.image_bytes == b"sdk-image"
+    assert upscaled.generated_images[0].image.image_bytes == b"sdk-image"
+    assert segmented.generated_masks[0].mask.image_bytes == b"sdk-image"
+    assert recontextualized.generated_images[0].image.image_bytes == b"sdk-image"
+    assert len(image_calls) == 5
 
 
 def test_admin_refresh_requires_configured_api_key(monkeypatch):

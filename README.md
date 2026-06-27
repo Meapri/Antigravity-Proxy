@@ -894,8 +894,10 @@ registration and metadata-only creation. File
 `state` and `source` values are normalized to Gemini-style enum names such as
 `ACTIVE`, `FAILED`, `UPLOADED`, and `REGISTERED` across create, list, and get
 responses. Metadata-only registered files receive a deterministic base64
-`sha256Hash` when one is not supplied. SDK-style `video_metadata.video_duration`
-is normalized to Gemini REST `videoMetadata.videoDuration`.
+`sha256Hash` when one is not supplied. Deleting registered files removes only
+their metadata, while uploaded files also remove their local media blob.
+SDK-style `video_metadata.video_duration` is normalized to Gemini REST
+`videoMetadata.videoDuration`.
 
 Then pass the returned `file.uri` in `fileData.fileUri`:
 
@@ -1169,6 +1171,10 @@ Generated files:
   delete routes are tested against files produced by image generation calls.
   Generated-file operations are stored under scoped names such as
   `generatedFiles/{generated_file}/operations/{operation}`.
+- `google-genai` Vertex image helpers that route through `:predict`, including
+  `generate_images`, `edit_image`, `upscale_image`, `segment_image`, and
+  `recontext_image`, are covered by SDK compatibility tests and map to the
+  local image generation path.
 
 Video generation:
 
@@ -1354,6 +1360,8 @@ Notes:
   `ANTIGRAVITY_GEMINI_REMOTE_FILE_MAX_BYTES` (default 20 MiB).
 - Image-capable Gemini models can be used through Interactions and return a
   Gemini candidate containing `inlineData`, plus a local `generatedFile`.
+- Vertex-style `google-genai` image helper methods are supported through the
+  same local image generation path when the SDK calls `:predict`.
 - Generated files are stored locally under `data/gemini_generated_files` by
   default; override with `ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR`.
 - File search stores are stored locally under `data/gemini_file_search_stores`;
