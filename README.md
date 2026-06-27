@@ -684,7 +684,9 @@ Generation config aliases include `responseSchema` / `response_schema`,
 `thinking_config`, `responseModalities` / `response_modalities`, and
 `enableEnhancedCivicAnswers` / `enable_enhanced_civic_answers`.
 `service_tier` / `serviceTier` and `store` are preserved as top-level
-GenerateContent request fields.
+GenerateContent request fields. Service tier aliases such as `PRIORITY`,
+`SERVICE_TIER_PRIORITY`, and `flex` are normalized to the Gemini REST enum
+values `priority`, `standard`, `flex`, or `unspecified`.
 Google provider wrappers such as `providerOptions.google` and
 `provider_options.google` are merged through the same path, with direct request
 and `config` fields taking precedence.

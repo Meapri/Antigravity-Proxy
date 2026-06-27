@@ -933,7 +933,7 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
             "enable_enhanced_civic_answers": "true",
             "tool_config": {"function_calling_config": {"mode": "none"}},
             "labels": {"source": "sdk"},
-            "service_tier": "PRIORITY",
+            "service_tier": "SERVICE_TIER_PRIORITY",
             "store": "false",
             "http_options": {"api_version": "v1"},
             "api_version": "v1",
@@ -947,7 +947,7 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
     assert "apiVersion" not in seen["request"]
     assert seen["request"]["systemInstruction"] == {"role": "system", "parts": [{"text": "answer tersely"}]}
     assert seen["request"]["labels"] == {"source": "sdk"}
-    assert seen["request"]["serviceTier"] == "PRIORITY"
+    assert seen["request"]["serviceTier"] == "priority"
     assert seen["request"]["store"] is False
     assert seen["request"]["toolConfig"]["functionCallingConfig"] == {"mode": "NONE"}
     assert seen["request"]["generationConfig"]["maxOutputTokens"] == 17
@@ -1039,7 +1039,7 @@ def test_gemini_generate_content_accepts_provider_google_options(monkeypatch):
     assert "providerOptions" not in seen["request"]
     assert "google" not in seen["request"]
     assert seen["request"]["systemInstruction"] == {"role": "system", "parts": [{"text": "from provider"}]}
-    assert seen["request"]["serviceTier"] == "FLEX"
+    assert seen["request"]["serviceTier"] == "flex"
     assert seen["request"]["toolConfig"]["functionCallingConfig"] == {"mode": "VALIDATED"}
     assert seen["request"]["generationConfig"]["maxOutputTokens"] == 18
     assert seen["request"]["generationConfig"]["responseMimeType"] == "text/plain"

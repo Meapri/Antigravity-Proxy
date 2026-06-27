@@ -619,6 +619,23 @@ def _gemini_bool_value(value: Any) -> Any:
     return value
 
 
+def _gemini_service_tier_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "unspecified",
+        "service_tier_unspecified": "unspecified",
+        "standard": "standard",
+        "service_tier_standard": "standard",
+        "flex": "flex",
+        "service_tier_flex": "flex",
+        "priority": "priority",
+        "service_tier_priority": "priority",
+    }
+    return aliases.get(normalized, value)
+
+
 def _gemini_normalize_generation_config(value: Any) -> Any:
     if not isinstance(value, dict):
         return value
@@ -1164,6 +1181,8 @@ def _gemini_normalize_generate_body(body: dict[str, Any]) -> dict[str, Any]:
         out["toolConfig"] = _gemini_normalize_tool_config(out.get("toolConfig"))
     if "store" in out:
         out["store"] = _gemini_bool_value(out.get("store"))
+    if "serviceTier" in out:
+        out["serviceTier"] = _gemini_service_tier_value(out.get("serviceTier"))
     out.pop("processingOptions", None)
     return out
 
