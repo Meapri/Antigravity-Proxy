@@ -1,0 +1,1102 @@
+#!/usr/bin/env python3
+"""Bridge Gemini native Computer Use actions to cua-driver.
+
+This is intentionally standalone and lives outside the Hermes install tree.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+from html.parser import HTMLParser
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from typing import Any
+
+
+DEFAULT_MODEL = "gemini-3.5-flash"
+DEFAULT_ENVIRONMENT = "browser"
+DEFAULT_BROWSER = "epiphany-browser"
+DEFAULT_MAX_ACTIONS = 30
+DEFAULT_HERMES_ENV = Path.home() / ".hermes" / ".env"
+DEFAULT_CONFIG = Path.home() / ".config" / "gemini-native-cua" / "config.yaml"
+DEFAULT_STATE_DIR = Path.home() / ".local" / "share" / "gemini-native-cua"
+
+
+class BridgeError(RuntimeError):
+    pass
+
+
+def eprint(*parts: Any) -> None:
+    print(*parts, file=sys.stderr)
+
+
+def load_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for raw_line in path.read_text(errors="ignore").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip("\"").strip("'")
+    return values
+
+
+def find_display() -> str | None:
+    current = os.environ.get("DISPLAY")
+    if current:
+        return current
+    x11_dir = Path("/tmp/.X11-unix")
+    if not x11_dir.exists():
+        return None
+    for socket in sorted(x11_dir.glob("X*")):
+        if socket.is_socket():
+            return f":{socket.name[1:]}"
+    return None
+
+
+def find_xauthority() -> str | None:
+    current = os.environ.get("XAUTHORITY")
+    if current and Path(current).exists():
+        return current
+    runtime_dir = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
+    candidates = sorted(runtime_dir.glob(".mutter-Xwaylandauth.*"))
+    candidates += sorted(runtime_dir.glob("*Xauthority*"))
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def json_compact(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def truncate(value: str, limit: int = 4000) -> str:
+    return value if len(value) <= limit else value[:limit] + "...[truncated]"
+
+
+class CuaExecutor:
+    def __init__(self, log_dir: Path, browser: str = DEFAULT_BROWSER) -> None:
+        self.log_dir = log_dir
+        self.browser = browser
+        self.env = os.environ.copy()
+        display = find_display()
+        if display:
+            self.env["DISPLAY"] = display
+        xauthority = find_xauthority()
+        if xauthority:
+            self.env["XAUTHORITY"] = xauthority
+        self.env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+        self.env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{os.getuid()}/bus")
+        self.binary = self._discover_binary()
+        self.browser_pid: int | None = None
+        self.browser_window_id: int | None = None
+        self.screen_size: tuple[float, float] | None = None
+
+    def _discover_binary(self) -> str:
+        binary = "cua-driver"
+        try:
+            result = subprocess.run(
+                [binary, "manifest", "--pretty"],
+                text=True,
+                capture_output=True,
+                check=True,
+                env=self.env,
+                timeout=20,
+            )
+            data = json.loads(result.stdout)
+            return str(data.get("binary_path") or binary)
+        except Exception:
+            return binary
+
+    def call(self, tool: str, args: dict[str, Any] | None = None, *, screenshot_out: Path | None = None) -> Any:
+        cmd = [self.binary, "call", tool, json_compact(args or {})]
+        if screenshot_out is not None:
+            cmd.extend(["--screenshot-out-file", str(screenshot_out)])
+        result = subprocess.run(
+            cmd,
+            text=True,
+            capture_output=True,
+            env=self.env,
+            timeout=45,
+        )
+        if result.returncode != 0:
+            raise BridgeError(f"cua-driver {tool} failed: {truncate(result.stderr or result.stdout, 1200)}")
+        stdout = result.stdout.strip()
+        if not stdout:
+            return {}
+        try:
+            return json.loads(stdout)
+        except json.JSONDecodeError:
+            return {"text": stdout}
+        return {}
+
+    def call_no_capture(self, tool: str, args: dict[str, Any] | None = None) -> Any:
+        try:
+            return self.call(tool, args)
+        except subprocess.TimeoutExpired as exc:
+            raise BridgeError(f"cua-driver {tool} timed out after {exc.timeout}s") from exc
+
+    def best_effort_capture(self) -> dict[str, Any]:
+        try:
+            return self.capture()
+        except Exception as exc:
+            return {"capture_error": str(exc)}
+
+    def send_key_no_capture(self, key: str) -> None:
+        pid, window_id = self.target()
+        target_args: dict[str, Any] = {"pid": pid}
+        if window_id:
+            target_args["window_id"] = window_id
+        if "+" in key:
+            keys = [part.strip().lower() for part in key.split("+") if part.strip()]
+            self.call("hotkey", {**target_args, "keys": keys})
+        else:
+            self.call("press_key", {**target_args, "key": key})
+
+    def type_text_no_capture(self, text: str) -> None:
+        safety_check_text(text)
+        pid, window_id = self.target()
+        if not window_id:
+            target_args: dict[str, Any] = {"pid": pid}
+            self.call("type_text", {**target_args, "text": text})
+            return
+        result = subprocess.run(
+            ["xdotool", "windowactivate", str(window_id), "type", "--clearmodifiers", "--delay", "1", text],
+            text=True,
+            capture_output=True,
+            env=self.env,
+            timeout=20,
+        )
+        if result.returncode != 0:
+            raise BridgeError(f"xdotool type fallback failed: {truncate(result.stderr or result.stdout, 800)}")
+
+    def doctor(self) -> tuple[bool, str]:
+        try:
+            result = subprocess.run(
+                [self.binary, "doctor", "--json"],
+                text=True,
+                capture_output=True,
+                env=self.env,
+                timeout=30,
+            )
+        except Exception as exc:
+            return False, f"cua-driver doctor failed to run: {exc}"
+        ok = result.returncode == 0
+        return ok, result.stdout.strip() or result.stderr.strip()
+
+    def get_screen_size(self) -> tuple[float, float]:
+        if self.screen_size:
+            return self.screen_size
+        try:
+            data = self.call("get_screen_size", {})
+            width = data.get("width") or data.get("screen_width") or data.get("w")
+            height = data.get("height") or data.get("screen_height") or data.get("h")
+            if not width or not height:
+                nested = data.get("structuredContent") or data.get("content") or {}
+                if isinstance(nested, dict):
+                    width = width or nested.get("width") or nested.get("screen_width")
+                    height = height or nested.get("height") or nested.get("screen_height")
+            if width and height:
+                self.screen_size = (float(width), float(height))
+                return self.screen_size
+        except BridgeError:
+            pass
+        window = self.active_window()
+        if window:
+            self.screen_size = (float(window.get("width") or 1000), float(window.get("height") or 1000))
+            return self.screen_size
+        raise BridgeError("could not read screen size or active window bounds from cua-driver")
+        return self.screen_size
+
+    def normalized_xy(self, args: dict[str, Any]) -> tuple[float, float]:
+        x = args.get("x")
+        y = args.get("y")
+        if x is None or y is None:
+            coordinate = args.get("coordinate") or args.get("coordinates")
+            if isinstance(coordinate, list) and len(coordinate) >= 2:
+                x, y = coordinate[0], coordinate[1]
+        if x is None or y is None:
+            raise BridgeError(f"action missing coordinates: {args}")
+        x_f = float(x)
+        y_f = float(y)
+        if 0 <= x_f <= 1000 and 0 <= y_f <= 1000:
+            width, height = self.get_screen_size()
+            return round(x_f / 1000 * width), round(y_f / 1000 * height)
+        return x_f, y_f
+
+    def list_windows(self) -> list[dict[str, Any]]:
+        data = self.call("list_windows", {"on_screen_only": True})
+        windows = data.get("windows") if isinstance(data, dict) else None
+        return windows if isinstance(windows, list) else []
+
+    def active_window(self) -> dict[str, Any] | None:
+        pid, window_id = self.browser_pid, self.browser_window_id
+        if window_id:
+            for window in self.list_windows():
+                wid = window.get("window_id") or window.get("id") or window.get("xid")
+                if int(wid or 0) == int(window_id):
+                    return window
+        windows = [
+            w for w in self.list_windows()
+            if str(w.get("title") or "").lower() not in {"gnome shell", "mutter guard window", "mutter-x11-frames"}
+            and (w.get("width") or 0) > 10
+            and (w.get("height") or 0) > 10
+        ]
+        return windows[0] if windows else None
+
+    def locate_browser(self) -> tuple[int | None, int | None]:
+        preferred = self.browser.lower()
+        windows = self.list_windows()
+        matches: list[dict[str, Any]] = []
+        for window in windows:
+            haystack = " ".join(
+                str(window.get(k) or "")
+                for k in ("app_name", "name", "title", "class", "process_name", "owner_name")
+            ).lower()
+            if preferred in haystack or "firefox" in haystack or "chrome" in haystack or "chromium" in haystack:
+                matches.append(window)
+            elif preferred in {"epiphany", "epiphany-browser"} and (
+                "blank page" in haystack or "web" in haystack or (window.get("pid") and (window.get("width") or 0) > 300)
+            ):
+                matches.append(window)
+        if not matches:
+            return None, None
+        first = matches[0]
+        pid = first.get("pid") or first.get("owner_pid")
+        window_id = first.get("window_id") or first.get("id") or first.get("xid")
+        return (int(pid) if pid is not None else 0, int(window_id) if window_id else None)
+
+    def ensure_browser(self) -> dict[str, Any]:
+        pid, window_id = self.locate_browser()
+        if pid is None and self.browser in {"epiphany", "epiphany-browser"}:
+            env = self.env.copy()
+            env.update({"GDK_BACKEND": "x11"})
+            subprocess.Popen(
+                ["epiphany-browser", "about:blank"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=env,
+            )
+            time.sleep(3.0)
+            pid, window_id = self.locate_browser()
+        if pid is None:
+            self.call("launch_app", {"name": self.browser})
+            time.sleep(2.0)
+            pid, window_id = self.locate_browser()
+        if pid is None and self.browser == "firefox":
+            profile = Path("/tmp/gemini-native-cua-firefox")
+            profile.mkdir(parents=True, exist_ok=True)
+            env = self.env.copy()
+            env.update({"MOZ_ENABLE_WAYLAND": "0", "GDK_BACKEND": "x11"})
+            subprocess.Popen(
+                ["firefox", "--new-instance", "--profile", str(profile), "--new-window", "about:blank"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=env,
+            )
+            time.sleep(3.0)
+            pid, window_id = self.locate_browser()
+        self.browser_pid = pid
+        self.browser_window_id = window_id
+        return {"pid": pid, "window_id": window_id, "browser": self.browser}
+
+    def target(self) -> tuple[int, int | None]:
+        if self.browser_pid is None:
+            self.ensure_browser()
+        if self.browser_pid is None:
+            raise BridgeError("could not locate a browser window after launch")
+        return self.browser_pid, self.browser_window_id
+
+    def capture(self) -> dict[str, Any]:
+        pid, window_id = self.target()
+        window = self.active_window()
+        if not window_id:
+            tree = self.call("get_accessibility_tree", {})
+            return {"summary": truncate(json.dumps(tree, ensure_ascii=False), 6000)}
+        screenshot_path = self.log_dir / f"screenshot-{int(time.time() * 1000)}.jpg"
+        summary: dict[str, Any] = {"pid": pid, "window_id": window_id, "window": window}
+        if window:
+            try:
+                self.call(
+                    "zoom",
+                    {
+                        "window_id": window_id,
+                        "x1": 0,
+                        "y1": 0,
+                        "x2": window.get("width") or 100,
+                        "y2": window.get("height") or 100,
+                    },
+                    screenshot_out=screenshot_path,
+                )
+            except BridgeError as exc:
+                summary["zoom_error"] = str(exc)
+        try:
+            state = self.call(
+                "get_window_state",
+                {"pid": pid, "window_id": window_id, "capture_mode": "som", "max_elements": 200},
+            )
+        except BridgeError:
+            state = self.call("get_accessibility_tree", {})
+        if isinstance(state, dict) and state.get("screenshot_png_b64"):
+            png_path = self.log_dir / f"screenshot-{int(time.time() * 1000)}.png"
+            try:
+                png_path.write_bytes(base64.b64decode(str(state["screenshot_png_b64"])))
+                screenshot_path = png_path
+            except Exception as exc:
+                summary["embedded_screenshot_error"] = str(exc)
+        if isinstance(state, dict):
+            state = dict(state)
+            state.pop("screenshot_png_b64", None)
+        summary["state"] = state
+        result: dict[str, Any] = {
+            "pid": pid,
+            "window_id": window_id,
+            "summary": truncate(json.dumps(summary, ensure_ascii=False), 6000),
+        }
+        if screenshot_path.exists() and screenshot_path.stat().st_size > 0:
+            result["screenshot_path"] = str(screenshot_path)
+            result["screenshot_mime"] = "image/png" if screenshot_path.suffix.lower() == ".png" else "image/jpeg"
+        return result
+
+    def execute(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        if name == "open_web_browser":
+            result = self.ensure_browser()
+            result["capture"] = self.best_effort_capture()
+            return result
+        if name in {"wait"}:
+            time.sleep(float(args.get("seconds") or args.get("duration") or 1.0))
+            return {"capture": self.capture()}
+
+        pid, window_id = self.target()
+        target_args: dict[str, Any] = {"pid": pid}
+        if window_id:
+            target_args["window_id"] = window_id
+
+        if name in {"click", "double_click"}:
+            tool = "double_click" if name == "double_click" else "click"
+            element_index = args.get("element_index", args.get("element"))
+            if element_index is not None:
+                self.call(tool, {**target_args, "element_index": int(element_index)})
+                return {"element_index": int(element_index), "capture": self.capture()}
+            x, y = self.normalized_xy(args)
+            self.call(tool, {**target_args, "x": x, "y": y})
+            return {"x": x, "y": y, "capture": self.capture()}
+        if name in {"type", "type_text"}:
+            text = str(args.get("text") or "")
+            safety_check_text(text)
+            self.call("type_text", {**target_args, "text": text})
+            return {"typed_chars": len(text), "capture": self.capture()}
+        if name == "scroll":
+            direction = str(args.get("direction") or "down").lower()
+            amount = int(args.get("amount") or 3)
+            self.call("scroll", {**target_args, "direction": direction, "amount": max(1, min(amount, 50))})
+            return {"direction": direction, "amount": amount, "capture": self.capture()}
+        if name in {"key", "press_key"}:
+            key = str(args.get("key") or args.get("keys") or "")
+            if "+" in key:
+                keys = [part.strip().lower() for part in key.split("+") if part.strip()]
+                self.call("hotkey", {**target_args, "keys": keys})
+            else:
+                self.call("press_key", {**target_args, "key": key})
+            return {"key": key, "capture": self.capture()}
+        if name == "drag":
+            from_xy = args.get("from") or args.get("from_coordinate") or args.get("start")
+            to_xy = args.get("to") or args.get("to_coordinate") or args.get("end")
+            if not (isinstance(from_xy, list) and isinstance(to_xy, list) and len(from_xy) >= 2 and len(to_xy) >= 2):
+                raise BridgeError(f"drag action missing coordinates: {args}")
+            x1, y1 = self.normalized_xy({"coordinate": from_xy})
+            x2, y2 = self.normalized_xy({"coordinate": to_xy})
+            self.call("drag", {**target_args, "from_x": x1, "from_y": y1, "to_x": x2, "to_y": y2})
+            return {"from": [x1, y1], "to": [x2, y2], "capture": self.capture()}
+
+        raise BridgeError(f"unsupported native computer-use action: {name}")
+
+
+SECRET_PATTERNS = [
+    re.compile(r"sk-[A-Za-z0-9_-]{16,}"),
+    re.compile(r"(?i)(api[_-]?key|password|passwd|token|secret)\s*[:=]"),
+    re.compile(r"\b\d{6}\b"),
+]
+DANGEROUS_TYPED_PATTERNS = [
+    re.compile(r"(?i)\b(confirm|pay|purchase|transfer|send crypto)\b"),
+    re.compile(r"(?i)\b(sudo\s+rm|rm\s+-rf|mkfs|shutdown|reboot|logout|lock\s+screen)\b"),
+    re.compile(r"curl\s+.*\|\s*(bash|sh)"),
+]
+
+
+def infer_navigation_text(prompt: str) -> str | None:
+    text = prompt.strip()
+    url_match = re.search(r"(?i)\bhttps?://[^\s\"']+", text)
+    if url_match:
+        return url_match.group(0).rstrip(".,)")
+    domain_match = re.search(
+        r"(?i)\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|ai|app|co|kr|jp|edu|gov)(?:/[^\s\"']*)?",
+        text,
+    )
+    if domain_match:
+        value = domain_match.group(0).rstrip(".,)")
+        return value if value.startswith(("http://", "https://")) else f"https://{value}"
+    search_patterns = [
+        r"(?i)\bsearch\s+(?:for\s+)?(.+)$",
+        r"(?i)\bgoogle\s+(.+)$",
+        r"검색(?:해줘|해|)\s*[:：]?\s*(.+)$",
+        r"찾아(?:줘|봐|)\s*[:：]?\s*(.+)$",
+    ]
+    for pattern in search_patterns:
+        match = re.search(pattern, text)
+        if match:
+            query = match.group(1).strip().strip("\"'")
+            return query or None
+    return None
+
+
+def remaining_task_after_navigation(prompt: str, navigation_text: str | None) -> str:
+    if not navigation_text:
+        return prompt.strip()
+    remaining = prompt.strip()
+    patterns = [
+        r"(?i)\bopen\s+" + re.escape(navigation_text),
+        r"(?i)\bgo\s+to\s+" + re.escape(navigation_text),
+        r"(?i)\bnavigate\s+to\s+" + re.escape(navigation_text),
+        re.escape(navigation_text),
+    ]
+    for pattern in patterns:
+        remaining = re.sub(pattern, "", remaining, count=1).strip()
+    remaining = re.sub(r"(?i)^\s*(and|then|,|\.|\s)+", "", remaining).strip()
+    remaining = re.sub(r"\s+", " ", remaining)
+    if not remaining:
+        return "The requested navigation is complete. Inspect the current page and stop when the task is satisfied."
+    return (
+        "Navigation is already complete. Do not focus the address bar unless the task explicitly asks for a new URL. "
+        f"Finish this remaining task on the current page: {remaining}"
+    )
+
+
+def normalize_match_text(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def extract_requested_link_text(prompt: str) -> str | None:
+    prompt = re.sub(r"(?i)^navigation is already complete\..*?current page:\s*", "", prompt).strip()
+    patterns = [
+        r"(?i)\b(?:open|click|follow|select)\s+(?:the\s+)?(.+?)\s+link\b",
+        r"(?i)\b(?:open|click|follow|select)\s+link\s+(?:called|named|labeled)\s+['\"]?(.+?)['\"]?$",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, prompt)
+        if match:
+            value = match.group(1).strip().strip("\"'")
+            return value or None
+    return None
+
+
+class LinkExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._href: str | None = None
+        self._chunks: list[str] = []
+        self.links: list[dict[str, str]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "a":
+            return
+        attrs_dict = {key.lower(): value for key, value in attrs if key}
+        href = attrs_dict.get("href")
+        if href:
+            self._href = href
+            self._chunks = []
+
+    def handle_data(self, data: str) -> None:
+        if self._href:
+            self._chunks.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() != "a" or not self._href:
+            return
+        text = re.sub(r"\s+", " ", "".join(self._chunks)).strip()
+        if text:
+            self.links.append({"text": text, "href": self._href})
+        self._href = None
+        self._chunks = []
+
+
+def fetch_page_links(url: str) -> list[dict[str, str]]:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return []
+    req = urllib.request.Request(url, headers={"User-Agent": "gemini-native-cua/0.1"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            content_type = response.headers.get("content-type", "")
+            if "html" not in content_type.lower():
+                return []
+            body = response.read(1_000_000).decode("utf-8", "replace")
+    except Exception:
+        return []
+    parser = LinkExtractor()
+    parser.feed(body)
+    links: list[dict[str, str]] = []
+    for link in parser.links:
+        href = urllib.parse.urljoin(url, link["href"])
+        if urllib.parse.urlparse(href).scheme in {"http", "https"}:
+            links.append({"text": link["text"], "href": href})
+    return links
+
+
+def choose_link(links: list[dict[str, str]], requested_text: str) -> dict[str, str] | None:
+    wanted = normalize_match_text(requested_text)
+    if not wanted:
+        return None
+    wanted_tokens = set(wanted.split())
+    best: tuple[int, dict[str, str]] | None = None
+    for link in links:
+        label = normalize_match_text(link.get("text") or "")
+        if not label:
+            continue
+        label_tokens = set(label.split())
+        score = 0
+        if label == wanted:
+            score = 100
+        elif wanted in label or label in wanted:
+            score = 80
+        else:
+            overlap = len(wanted_tokens & label_tokens)
+            if overlap:
+                score = overlap * 10
+        if score and (best is None or score > best[0]):
+            best = (score, link)
+    return best[1] if best else None
+
+
+def navigate_to_url(executor: CuaExecutor, url: str) -> dict[str, Any]:
+    safety_check_text(url)
+    executor.send_key_no_capture("ctrl+l")
+    executor.type_text_no_capture(url)
+    executor.send_key_no_capture("return")
+    time.sleep(2.0)
+    return {"url": url, "capture": {"summary": url, "capture_skipped": "navigation path avoids flaky AT-SPI capture"}}
+
+
+def try_dom_link_fallback(prompt: str, current_url: str | None, executor: CuaExecutor) -> dict[str, Any] | None:
+    requested_text = extract_requested_link_text(prompt)
+    if not requested_text or not current_url:
+        return None
+    links = fetch_page_links(current_url)
+    link = choose_link(links, requested_text)
+    if not link:
+        return {
+            "step": 1,
+            "decision": {
+                "action": "done",
+                "reason": f"no matching link found in fetched page HTML for {requested_text!r}",
+            },
+            "dom_links_seen": len(links),
+        }
+    execution = navigate_to_url(executor, link["href"])
+    return {
+        "step": 1,
+        "decision": {
+            "action": "navigate_link",
+            "text": link["text"],
+            "href": link["href"],
+            "reason": "used DOM link fallback because browser accessibility did not expose page content",
+        },
+        "execution": execution,
+    }
+
+
+def safety_check_text(text: str) -> None:
+    for pattern in SECRET_PATTERNS + DANGEROUS_TYPED_PATTERNS:
+        if pattern.search(text):
+            raise BridgeError("blocked by safety policy: unsafe text input")
+
+
+class InteractionClient:
+    def __init__(self, base_url: str, api_key: str, model: str) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.model = model
+
+    def post(self, payload: dict[str, Any]) -> dict[str, Any]:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["x-goog-api-key"] = self.api_key
+        req = urllib.request.Request(
+            self.base_url + "/interactions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as response:
+                return json.loads(response.read().decode("utf-8", "replace"))
+        except urllib.error.HTTPError as error:
+            body = error.read().decode("utf-8", "replace")
+            raise BridgeError(f"interaction HTTP {error.code}: {truncate(body, 2000)}") from error
+
+    def create(self, prompt: str, environment: str) -> dict[str, Any]:
+        return self.post(
+            {
+                "model": self.model,
+                "input": prompt,
+                "tools": [{"type": "computer_use", "environment": environment}],
+            }
+        )
+
+    def generate_text(self, prompt: str, *, max_output_tokens: int = 1024) -> str:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["x-goog-api-key"] = self.api_key
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "maxOutputTokens": max_output_tokens,
+                "temperature": 0,
+                "responseMimeType": "application/json",
+            },
+        }
+        req = urllib.request.Request(
+            f"{self.base_url}/models/{self.model}:generateContent",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as response:
+                data = json.loads(response.read().decode("utf-8", "replace"))
+        except urllib.error.HTTPError as error:
+            body = error.read().decode("utf-8", "replace")
+            raise BridgeError(f"generateContent HTTP {error.code}: {truncate(body, 2000)}") from error
+        pieces: list[str] = []
+        for candidate in data.get("candidates") or []:
+            content = candidate.get("content") if isinstance(candidate, dict) else None
+            if not isinstance(content, dict):
+                continue
+            for part in content.get("parts") or []:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    pieces.append(part["text"])
+        return "\n".join(pieces).strip()
+
+    def continue_with_results(
+        self,
+        previous_interaction_id: str,
+        history: list[dict[str, Any]],
+        results: list[dict[str, Any]],
+        environment: str,
+    ) -> dict[str, Any]:
+        parts: list[dict[str, Any]] = []
+        for result in results:
+            parts.append(
+                {
+                    "functionResponse": {
+                        "id": result["id"],
+                        "name": result["name"],
+                        "response": result["response"],
+                    }
+                }
+            )
+            screenshot_path = result.get("screenshot_path")
+            if screenshot_path:
+                path = Path(str(screenshot_path))
+                if path.exists():
+                    parts.append(
+                        {
+                            "inlineData": {
+                                "mimeType": str(result.get("screenshot_mime") or "image/jpeg"),
+                                "data": base64.b64encode(path.read_bytes()).decode("ascii"),
+                            }
+                        }
+                    )
+        contents = list(history) + [{"role": "user", "parts": parts}]
+        return self.post(
+            {
+                "model": self.model,
+                "previousInteractionId": previous_interaction_id,
+                "contents": contents,
+                "tools": [{"type": "computer_use", "environment": environment}],
+            }
+        )
+
+
+def extract_tool_calls(interaction: dict[str, Any]) -> list[dict[str, Any]]:
+    required = interaction.get("requiredAction") or interaction.get("required_action") or {}
+    calls = required.get("toolCalls") or required.get("tool_calls") or []
+    out: list[dict[str, Any]] = []
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        out.append(
+            {
+                "id": str(call.get("id") or call.get("tool_call_id") or call.get("call_id") or ""),
+                "name": str(call.get("name") or ""),
+                "args": call.get("args") if isinstance(call.get("args"), dict) else {},
+            }
+        )
+    return [call for call in out if call["id"] and call["name"]]
+
+
+def build_call_result(call: dict[str, Any], executor: CuaExecutor, dry_run: bool) -> dict[str, Any]:
+    name = call["name"]
+    args = call.get("args") or {}
+    if dry_run:
+        response = {"ok": True, "dry_run": True, "action": name, "args": args}
+        return {"id": call["id"], "name": name, "response": response}
+    try:
+        execution = executor.execute(name, args)
+        capture = execution.get("capture") if isinstance(execution, dict) else None
+        screenshot_path = capture.get("screenshot_path") if isinstance(capture, dict) else None
+        screenshot_mime = capture.get("screenshot_mime") if isinstance(capture, dict) else None
+        response = {"ok": True, "action": name, "result": execution}
+        return {
+            "id": call["id"],
+            "name": name,
+            "response": response,
+            "screenshot_path": screenshot_path,
+            "screenshot_mime": screenshot_mime,
+        }
+    except Exception as exc:
+        return {"id": call["id"], "name": name, "response": {"ok": False, "error": str(exc)}}
+
+
+def compact_capture_for_planner(capture: dict[str, Any]) -> str:
+    summary = capture.get("summary")
+    if not isinstance(summary, str):
+        return ""
+    try:
+        data = json.loads(summary)
+    except Exception:
+        return truncate(summary, 6000)
+    state = data.get("state") if isinstance(data, dict) else {}
+    elements = state.get("elements") if isinstance(state, dict) else []
+    lines: list[str] = []
+    if isinstance(data.get("window"), dict):
+        window = data["window"]
+        lines.append(f"window title={window.get('title')!r} size={window.get('width')}x{window.get('height')}")
+    if isinstance(elements, list):
+        for element in elements[:120]:
+            if not isinstance(element, dict):
+                continue
+            label = str(element.get("label") or "").strip()
+            role = str(element.get("role") or "").strip()
+            idx = element.get("element_index")
+            frame = element.get("frame")
+            if label or role:
+                lines.append(f"[{idx}] {role} {label!r} frame={frame}")
+    if not lines:
+        lines.append(truncate(summary, 4000))
+    return truncate("\n".join(lines), 10000)
+
+
+def parse_planner_json(text: str) -> dict[str, Any]:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    match = re.search(r"\{.*\}", cleaned, flags=re.S)
+    if match:
+        cleaned = match.group(0)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        action_match = re.search(r'"action"\s*:\s*"([^"]+)"', cleaned)
+        reason_match = re.search(r'"reason"\s*:\s*"([^"]*)', cleaned)
+        if action_match:
+            return {
+                "action": "done",
+                "reason": (
+                    "planner returned malformed JSON after choosing "
+                    f"{action_match.group(1)!r}: {reason_match.group(1) if reason_match else truncate(cleaned, 160)}"
+                ),
+            }
+        raise BridgeError(f"planner returned malformed JSON: {truncate(text, 500)}") from exc
+    if not isinstance(data, dict):
+        raise BridgeError(f"planner returned non-object JSON: {text}")
+    return data
+
+
+def planner_prompt(user_prompt: str, capture: dict[str, Any]) -> str:
+    return (
+        "You are driving a browser through a constrained automation bridge.\n"
+        "Return ONLY one JSON object. No markdown.\n"
+        "Allowed actions:\n"
+        '{"action":"done","reason":"..."}\n'
+        '{"action":"click","element":NUMBER,"reason":"..."}\n'
+        '{"action":"type_text","text":"...","reason":"..."}\n'
+        '{"action":"key","key":"ctrl+l|return|escape|ctrl+f","reason":"..."}\n'
+        '{"action":"scroll","direction":"down|up","amount":3,"reason":"..."}\n'
+        "Prefer element indices for clicks. Do not type secrets or payment data.\n\n"
+        "If page content is not present in the browser state, use scroll or done with a clear reason. "
+        "Do not repeatedly use ctrl+l to re-enter an already loaded address.\n\n"
+        f"User task: {user_prompt}\n\n"
+        "Current browser state:\n"
+        f"{compact_capture_for_planner(capture)}\n"
+    )
+
+
+def run_planner_steps(
+    prompt: str,
+    client: InteractionClient,
+    executor: CuaExecutor,
+    steps: int,
+    *,
+    current_url: str | None = None,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    previous_actions: list[str] = []
+    for step_num in range(1, max(0, steps) + 1):
+        if step_num == 1:
+            dom_result = try_dom_link_fallback(prompt, current_url, executor)
+            if dom_result:
+                results.append(dom_result)
+                break
+        capture = executor.capture()
+        step_prompt = prompt
+        if previous_actions:
+            step_prompt += "\n\nPrevious bridge actions in this planner pass: " + ", ".join(previous_actions[-5:])
+        decision_text = client.generate_text(planner_prompt(step_prompt, capture), max_output_tokens=512)
+        decision = parse_planner_json(decision_text)
+        action = str(decision.get("action") or "").strip()
+        if not action:
+            raise BridgeError(f"planner decision missing action: {decision_text}")
+        result: dict[str, Any] = {"step": step_num, "decision": decision}
+        if action == "done":
+            results.append(result)
+            break
+        if action == "click":
+            element = decision.get("element", decision.get("element_index"))
+            if element is None:
+                raise BridgeError(f"planner click missing element: {decision}")
+            result["execution"] = executor.execute("click", {"element_index": int(element)})
+        elif action in {"type", "type_text"}:
+            text = str(decision.get("text") or "")
+            result["execution"] = executor.execute("type_text", {"text": text})
+        elif action in {"key", "press_key"}:
+            key = str(decision.get("key") or "")
+            if key.lower() == "ctrl+l" and previous_actions and previous_actions[-1] == "key:ctrl+l":
+                result["decision"] = {
+                    "action": "done",
+                    "reason": "planner attempted to focus the address bar repeatedly after navigation",
+                }
+                results.append(result)
+                break
+            result["execution"] = executor.execute("key", {"key": key})
+            previous_actions.append(f"key:{key.lower()}")
+        elif action == "scroll":
+            result["execution"] = executor.execute(
+                "scroll",
+                {
+                    "direction": str(decision.get("direction") or "down"),
+                    "amount": int(decision.get("amount") or 3),
+                },
+            )
+            previous_actions.append("scroll")
+        else:
+            raise BridgeError(f"planner returned unsupported action: {decision}")
+        if action == "click":
+            previous_actions.append(f"click:{decision.get('element', decision.get('element_index'))}")
+        elif action in {"type", "type_text"}:
+            previous_actions.append("type_text")
+        results.append(result)
+        time.sleep(0.8)
+    return results
+
+
+def run_navigation_followup(prompt: str, executor: CuaExecutor, *, dry_run: bool) -> dict[str, Any] | None:
+    navigation_text = infer_navigation_text(prompt)
+    if not navigation_text:
+        return None
+    safety_check_text(navigation_text)
+    if dry_run:
+        return {"ok": True, "dry_run": True, "navigation_text": navigation_text}
+    executor.send_key_no_capture("ctrl+l")
+    executor.type_text_no_capture(navigation_text)
+    executor.send_key_no_capture("return")
+    time.sleep(2.0)
+    capture = {"summary": navigation_text, "capture_skipped": "navigation path avoids flaky AT-SPI capture"}
+    summary = str(capture.get("summary") or "") if isinstance(capture, dict) else ""
+    verification_terms = [navigation_text]
+    if navigation_text.startswith("https://"):
+        verification_terms.append(navigation_text.removeprefix("https://"))
+    elif navigation_text.startswith("http://"):
+        verification_terms.append(navigation_text.removeprefix("http://"))
+    verified = any(term and term in summary for term in verification_terms)
+    return {
+        "ok": True,
+        "navigation_text": navigation_text,
+        "verified": verified,
+        "capture": capture,
+    }
+
+
+def resolve_config(args: argparse.Namespace) -> dict[str, Any]:
+    env = load_env_file(DEFAULT_HERMES_ENV)
+    base_url = args.base_url or env.get("GEMINI_BASE_URL")
+    api_key = args.api_key or env.get("GOOGLE_API_KEY") or ""
+    if not base_url:
+        raise BridgeError("missing base URL; set GEMINI_BASE_URL or pass --base-url")
+    return {
+        "base_url": base_url,
+        "api_key": api_key,
+        "model": args.model or DEFAULT_MODEL,
+        "environment": args.environment or DEFAULT_ENVIRONMENT,
+        "browser": args.browser or DEFAULT_BROWSER,
+        "max_actions": args.max_actions or DEFAULT_MAX_ACTIONS,
+        "log_dir": Path(args.log_dir).expanduser() if args.log_dir else DEFAULT_STATE_DIR / "logs",
+    }
+
+
+def command_doctor(args: argparse.Namespace) -> int:
+    config = resolve_config(args)
+    log_dir = config["log_dir"]
+    log_dir.mkdir(parents=True, exist_ok=True)
+    client = InteractionClient(config["base_url"], config["api_key"], config["model"])
+    executor = CuaExecutor(log_dir, config["browser"])
+    print("base_url:", config["base_url"])
+    print("model:", config["model"])
+    print("display:", executor.env.get("DISPLAY") or "(not set)")
+    ok, report = executor.doctor()
+    print("cua_driver:", "PASS" if ok else "FAIL")
+    print(truncate(report, 1200))
+    try:
+        interaction = client.create("Return one harmless computer use action only.", config["environment"])
+        calls = extract_tool_calls(interaction)
+        print("native_interactions:", "PASS" if calls else f"WARN status={interaction.get('status')}")
+        if calls:
+            print("first_action:", calls[0]["name"])
+    except Exception as exc:
+        print("native_interactions: FAIL", exc)
+        return 1
+    try:
+        pid, window_id = executor.locate_browser()
+        if pid is None:
+            print(f"browser_target: WARN no visible X11/Xwayland window matching {config['browser']!r}")
+        else:
+            print(f"browser_target: PASS pid={pid} window_id={window_id}")
+    except Exception as exc:
+        print("browser_target: WARN", exc)
+    return 0 if ok else 1
+
+
+def command_probe(args: argparse.Namespace) -> int:
+    config = resolve_config(args)
+    client = InteractionClient(config["base_url"], config["api_key"], config["model"])
+    interaction = client.create(args.prompt, config["environment"])
+    print(json.dumps({
+        "id": interaction.get("id"),
+        "model": interaction.get("model"),
+        "status": interaction.get("status"),
+        "calls": extract_tool_calls(interaction),
+    }, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_run(args: argparse.Namespace) -> int:
+    config = resolve_config(args)
+    log_dir = config["log_dir"]
+    log_dir.mkdir(parents=True, exist_ok=True)
+    client = InteractionClient(config["base_url"], config["api_key"], config["model"])
+    executor = CuaExecutor(log_dir, config["browser"])
+    interaction = client.create(args.prompt, config["environment"])
+    action_count = 0
+    while True:
+        status = interaction.get("status")
+        if status == "completed":
+            followup = run_navigation_followup(args.prompt, executor, dry_run=args.dry_run)
+            planner_prompt_text = args.prompt
+            planner_current_url = None
+            if followup:
+                navigation_text = str(followup.get("navigation_text") or "")
+                if navigation_text.startswith(("http://", "https://")):
+                    planner_current_url = navigation_text
+                planner_prompt_text = remaining_task_after_navigation(args.prompt, str(followup.get("navigation_text") or ""))
+                if args.dry_run:
+                    print(json.dumps({"followup": followup}, ensure_ascii=False, indent=2))
+                else:
+                    verdict = "verified" if followup.get("verified") else "not verified"
+                    print(f"Follow-up navigation completed: {followup['navigation_text']} ({verdict})")
+            if args.planner_steps and not args.dry_run:
+                planner_results = run_planner_steps(
+                    planner_prompt_text,
+                    client,
+                    executor,
+                    args.planner_steps,
+                    current_url=planner_current_url,
+                )
+                for item in planner_results:
+                    print(f"Planner step {item['step']}: {json_compact(item['decision'])}")
+            text = interaction.get("outputText") or interaction.get("output_text") or ""
+            print(text)
+            return 0
+        calls = extract_tool_calls(interaction)
+        if not calls:
+            print(json.dumps(interaction, ensure_ascii=False, indent=2)[:4000])
+            raise BridgeError(f"interaction did not complete and has no tool calls; status={status}")
+        results = []
+        for call in calls:
+            action_count += 1
+            if action_count > config["max_actions"]:
+                raise BridgeError(f"stopped after max-actions={config['max_actions']}")
+            eprint(f"[{action_count}] {call['name']} {json_compact(call.get('args') or {})}")
+            results.append(build_call_result(call, executor, args.dry_run))
+        if args.dry_run:
+            print(json.dumps({"dry_run_results": results}, ensure_ascii=False, indent=2))
+            return 0
+        previous_interaction_id = str(interaction.get("id") or "")
+        if not previous_interaction_id:
+            raise BridgeError("interaction response missing id; cannot continue")
+        history = interaction.get("history")
+        if not isinstance(history, list):
+            raise BridgeError("interaction response missing history; cannot continue")
+        interaction = client.continue_with_results(previous_interaction_id, history, results, config["environment"])
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Bridge Gemini native Computer Use to cua-driver.")
+    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--base-url")
+    parser.add_argument("--api-key")
+    parser.add_argument("--environment", default=DEFAULT_ENVIRONMENT)
+    parser.add_argument("--browser", default=DEFAULT_BROWSER)
+    parser.add_argument("--max-actions", type=int, default=DEFAULT_MAX_ACTIONS)
+    parser.add_argument("--log-dir")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    doctor = sub.add_parser("doctor")
+    doctor.set_defaults(func=command_doctor)
+
+    probe = sub.add_parser("probe")
+    probe.add_argument("prompt", nargs="?", default="Open a blank browser page, then stop.")
+    probe.set_defaults(func=command_probe)
+
+    run = sub.add_parser("run")
+    run.add_argument("prompt")
+    run.add_argument("--dry-run", action="store_true")
+    run.add_argument("--planner-steps", type=int, default=0)
+    run.set_defaults(func=command_run)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        return int(args.func(args) or 0)
+    except BridgeError as exc:
+        eprint("error:", exc)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

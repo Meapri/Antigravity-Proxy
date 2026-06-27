@@ -1,0 +1,12 @@
+[Unit]
+Description=Gemini Native Computer Use Compatibility Proxy
+After=network-online.target antigravity-proxy.service
+Wants=antigravity-proxy.service
+
+[Service]
+ExecStart=/usr/bin/python3 %h/.local/lib/gemini-native-cua/gemini_native_cua_proxy.py --host 0.0.0.0 --port 8766 --upstream http://127.0.0.1:8765
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
