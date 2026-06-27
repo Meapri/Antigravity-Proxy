@@ -1559,7 +1559,7 @@ def test_gemini_generate_content_normalizes_safety_and_tool_config_shortcuts(mon
             "thinking_config": {
                 "thinking_budget": "128",
                 "include_thoughts": "true",
-                "thinking_level": "HIGH",
+                "thinking_level": "thinking level high",
             },
         },
         "tool_config": {

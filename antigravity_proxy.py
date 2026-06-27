@@ -798,6 +798,25 @@ def _gemini_function_response_scheduling_value(value: Any) -> Any:
     return aliases.get(normalized, value)
 
 
+def _gemini_thinking_level_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "THINKING_LEVEL_UNSPECIFIED",
+        "thinking_level_unspecified": "THINKING_LEVEL_UNSPECIFIED",
+        "minimal": "MINIMAL",
+        "low": "LOW",
+        "medium": "MEDIUM",
+        "high": "HIGH",
+        "thinking_level_minimal": "MINIMAL",
+        "thinking_level_low": "LOW",
+        "thinking_level_medium": "MEDIUM",
+        "thinking_level_high": "HIGH",
+    }
+    return aliases.get(normalized, value)
+
+
 def _gemini_normalize_generation_config(value: Any) -> Any:
     if not isinstance(value, dict):
         return value
@@ -830,6 +849,8 @@ def _gemini_normalize_generation_config(value: Any) -> Any:
             thinking["thinkingBudget"] = _gemini_int_value(thinking["thinkingBudget"])
         if "includeThoughts" in thinking:
             thinking["includeThoughts"] = _gemini_bool_value(thinking["includeThoughts"])
+        if "thinkingLevel" in thinking:
+            thinking["thinkingLevel"] = _gemini_thinking_level_value(thinking["thinkingLevel"])
         out["thinkingConfig"] = thinking
     if isinstance(out.get("translationConfig"), dict):
         translation = _gemini_normalize_request(out["translationConfig"])
