@@ -5596,9 +5596,9 @@ def _gemini_fss_document_body(body: dict[str, Any]) -> dict[str, Any]:
 
 def _gemini_fss_resource(meta: dict[str, Any]) -> dict[str, Any]:
     documents = list((meta.get("documents") or {}).values())
-    active_count = sum(1 for doc in documents if str(doc.get("state") or "ACTIVE").upper() == "ACTIVE")
-    pending_count = sum(1 for doc in documents if str(doc.get("state") or "").upper() in {"PENDING", "PROCESSING"})
-    failed_count = sum(1 for doc in documents if str(doc.get("state") or "").upper() == "FAILED")
+    active_count = sum(1 for doc in documents if _gemini_fss_document_state(doc.get("state")) == "STATE_ACTIVE")
+    pending_count = sum(1 for doc in documents if _gemini_fss_document_state(doc.get("state")) == "STATE_PENDING")
+    failed_count = sum(1 for doc in documents if _gemini_fss_document_state(doc.get("state")) == "STATE_FAILED")
     total_size = 0
     for doc in documents:
         try:
@@ -5622,8 +5622,22 @@ def _gemini_fss_resource(meta: dict[str, Any]) -> dict[str, Any]:
     return resource
 
 
+def _gemini_fss_document_state(value: Any) -> str:
+    state = str(value or "STATE_ACTIVE").strip().upper()
+    aliases = {
+        "ACTIVE": "STATE_ACTIVE",
+        "PENDING": "STATE_PENDING",
+        "PROCESSING": "STATE_PENDING",
+        "FAILED": "STATE_FAILED",
+    }
+    return aliases.get(state, state)
+
+
 def _gemini_document_resource(doc: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in doc.items() if k not in {"content"} and v is not None}
+    resource = {k: v for k, v in doc.items() if k not in {"content"} and v is not None}
+    if str(resource.get("name") or "").startswith("fileSearchStores/") or "state" in resource:
+        resource["state"] = _gemini_fss_document_state(resource.get("state"))
+    return resource
 
 
 def _gemini_create_fss(body: dict[str, Any]) -> dict[str, Any]:
@@ -5673,7 +5687,7 @@ def _gemini_store_document(
         "mimeType": (mime_type or "application/octet-stream").split(";", 1)[0],
         "createTime": now,
         "updateTime": now,
-        "state": "ACTIVE",
+        "state": "STATE_ACTIVE",
         "sizeBytes": str(len(content)),
         "sha256Hash": hashlib.sha256(content).hexdigest(),
         "content": base64.b64encode(content).decode("ascii"),
@@ -10288,7 +10302,7 @@ async def gemini_compute_tokens(model_name: str, request: Request, project: str 
 async def gemini_embed_content(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Gemini-compatible embedContent endpoint with deterministic local vectors."""
     try:
-        _resolve_gemini_model(model_name)
+        _resolve_gemini_embedding_model(model_name)
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
@@ -10310,7 +10324,7 @@ async def gemini_embed_content(model_name: str, request: Request, project: str |
 async def gemini_batch_embed_contents(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Gemini-compatible batchEmbedContents endpoint with deterministic local vectors."""
     try:
-        _resolve_gemini_model(model_name)
+        _resolve_gemini_embedding_model(model_name)
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")

@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import io
+import warnings
 
 import httpx
 from fastapi import HTTPException
@@ -2713,6 +2714,28 @@ def test_google_genai_sdk_developer_embeddings_batch_with_standard_model(tmp_pat
     assert deleted.sdk_http_response.headers["content-type"].startswith("application/json")
 
 
+def test_google_genai_sdk_models_embed_content_with_standard_embedding_models():
+    app_client = TestClient(proxy.app)
+    sdk_http = httpx.Client(transport=_FastApiTransport(app_client))
+    sdk = genai.Client(
+        api_key="test-key",
+        http_options=types.HttpOptions(
+            base_url="http://testserver/v1beta",
+            api_version="",
+            httpx_client=sdk_http,
+        ),
+    )
+
+    for model_name in ("text-embedding-004", "embedding-001", "gemini-embedding-001"):
+        response = sdk.models.embed_content(
+            model=model_name,
+            contents="sdk embedding alias",
+        )
+
+        assert response.embeddings
+        assert len(response.embeddings[0].values) > 0
+
+
 def test_google_genai_sdk_vertex_batch_prediction_jobs(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
     app_client = TestClient(proxy.app)
@@ -2778,9 +2801,22 @@ def test_google_genai_sdk_file_search_store_resumable_upload(tmp_path, monkeypat
     assert operation.done is True
     assert operation.response.parent == store.name
     assert operation.response.document_name.startswith(f"{store.name}/documents/")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        fetched_doc = sdk.file_search_stores.documents.get(name=operation.response.document_name)
+        listed_docs = list(sdk.file_search_stores.documents.list(parent=store.name, config={"page_size": 10}))
     docs = app_client.get(f"/v1beta/{store.name}/documents")
     assert docs.status_code == 200
+    assert docs.json()["documents"][0]["state"] == "STATE_ACTIVE"
     assert docs.json()["documents"][0]["displayName"] == "sdk-fss.txt"
+    assert fetched_doc.state == types.DocumentState.STATE_ACTIVE
+    assert {item.name for item in listed_docs} == {operation.response.document_name}
+    assert not [item for item in caught if "DocumentState" in str(item.message)]
+    assert sdk.file_search_stores.documents.delete(
+        name=operation.response.document_name,
+        config={"force": True},
+    ) is None
+    assert app_client.get(f"/v1beta/{operation.response.document_name}").status_code == 404
 
 
 def test_google_genai_sdk_file_search_store_import_file_response(tmp_path, monkeypatch):
@@ -5300,6 +5336,7 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     assert imported.status_code == 200
     imported_doc = imported.json()["response"]["document"]
     assert imported_doc["displayName"] == "source import"
+    assert imported_doc["state"] == "STATE_ACTIVE"
     assert imported_doc["customMetadata"][0]["stringValue"] == "files-api"
     assert imported_doc["chunkingConfig"] == {"whiteSpaceConfig": {}}
 
@@ -5377,6 +5414,7 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     )
     assert listed.status_code == 200
     assert len(listed.json()["documents"]) == 4
+    assert {item["state"] for item in listed.json()["documents"]} == {"STATE_ACTIVE"}
     assert listed_snake_page.status_code == 200
     assert len(listed_snake_page.json()["documents"]) == 1
     assert listed_snake_page.json()["nextPageToken"] == "2"

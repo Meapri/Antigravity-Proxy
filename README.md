@@ -971,6 +971,11 @@ Embeddings and batch operations:
   bodies such as `{"request": {...}}`,
   `{"embedContentRequest": {...}}`, and `providerOptions.google` /
   `provider_options.google` embedding config.
+- Standard Gemini embedding model names such as `text-embedding-004`,
+  `embedding-001`, and `gemini-embedding-001` are accepted on
+  `embedContent` / `batchEmbedContents`; this covers `google-genai`
+  `client.models.embed_content()`, which calls `:batchEmbedContents` in
+  Developer API mode.
 - `asyncBatchEmbedContent` stores the deterministic batch embedding result as
   an immediately completed local operation and batch resource. The create
   response exposes the reusable `batches/*` resource as top-level `name` for
@@ -1067,6 +1072,9 @@ File search stores:
 - `fileSearchStores.documents.list` accepts `pageSize` / `pageToken` and
   snake_case `page_size` / `page_token`, defaulting to 10 items with the
   Gemini REST page size capped at 20.
+- `google-genai` `file_search_stores.documents.get/list/delete` is supported.
+  Document resources use the Gemini `DocumentState` enum values such as
+  `STATE_ACTIVE`; older locally stored `ACTIVE` values are normalized on read.
 - `tools.file_search` / `tools.fileSearch` performs local lexical retrieval
   against these stores and injects the best matching document snippets into the
   outgoing Gemini request context.
@@ -1241,6 +1249,9 @@ Notes:
 - `file_search_stores.upload_to_file_search_store()` from `google-genai` is
   supported with the resumable upload start/finalize flow, including collection
   base URL aliases such as `/v1beta/upload/v1beta/fileSearchStores/...`.
+- `file_search_stores.documents.get/list/delete()` from `google-genai` is
+  covered by SDK tests, including `delete(..., config={"force": True})` for
+  indexed local documents.
 - Local `corpora` document and chunk creation follows create semantics:
   duplicate caller-supplied document or chunk IDs return Gemini-style
   `ALREADY_EXISTS` instead of silently overwriting. Permission patch operations
