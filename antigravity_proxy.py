@@ -2256,12 +2256,14 @@ def _gemini_operation_scope_value(operation: dict[str, Any], key: str) -> str:
     response = operation.get("response") if isinstance(operation.get("response"), dict) else {}
     value = metadata.get(key) or response.get(key)
     if value is None and key == "generatedFile":
-        value = metadata.get("generated_file") or response.get("name")
+        value = metadata.get("generated_file") or metadata.get("generatedFileName") or response.get("name")
+    if value is None and key == "corpus":
+        value = metadata.get("corpusName") or metadata.get("corpora") or response.get("corpus")
     return str(value or "")
 
 
 def _gemini_operation_scope_matches(operation: dict[str, Any], scope_key: str, scope_name: str | None = None) -> bool:
-    if scope_key == "generatedFile":
+    if scope_key == "generatedFile" and scope_name is None:
         return bool(_gemini_operation_scope_value(operation, "generatedFile"))
     target = scope_name or ""
     value = _gemini_operation_scope_value(operation, scope_key)
@@ -6621,6 +6623,16 @@ async def gemini_get_generated_file_operation(operation_id: str):
     return operation
 
 
+@app.get("/v1/generatedFiles/{generated_file_id:path}/operations/{operation_id:path}")
+@app.get("/v1beta/generatedFiles/{generated_file_id:path}/operations/{operation_id:path}")
+async def gemini_get_generated_file_scoped_operation(generated_file_id: str, operation_id: str):
+    generated_file_name = _gemini_generated_file_name(generated_file_id)
+    operation = _gemini_get_scoped_operation("generatedFile", generated_file_name, operation_id)
+    if not operation:
+        return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    return operation
+
+
 @app.post("/v1/generatedFiles/operations/{operation_id:path}:wait")
 @app.post("/v1beta/generatedFiles/operations/{operation_id:path}:wait")
 async def gemini_wait_generated_file_operation(operation_id: str):
@@ -6802,6 +6814,15 @@ async def gemini_get_corpus(corpus_id: str):
     if not meta:
         return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
     return _gemini_corpus_resource(meta)
+
+
+@app.get("/v1/corpora/{corpus_id:path}/operations/{operation_id:path}")
+@app.get("/v1beta/corpora/{corpus_id:path}/operations/{operation_id:path}")
+async def gemini_get_corpus_operation(corpus_id: str, operation_id: str):
+    operation = _gemini_get_scoped_operation("corpus", _gemini_corpus_name(corpus_id), operation_id)
+    if not operation:
+        return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    return operation
 
 
 @app.patch("/v1/corpora/{corpus_id}")

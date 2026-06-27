@@ -471,6 +471,7 @@ Implemented Gemini-compatible routes:
 - `DELETE /v1/generatedFiles/{generated_file}`
 - `GET /v1/generatedFiles/operations`
 - `GET /v1/generatedFiles/operations/{operation}`
+- `GET /v1/generatedFiles/{generated_file}/operations/{operation}`
 - `POST /v1/generatedFiles/operations/{operation}:wait`
 - `POST /v1/generatedFiles/operations/{operation}:cancel`
 - `DELETE /v1/generatedFiles/operations/{operation}`
@@ -480,6 +481,7 @@ Implemented Gemini-compatible routes:
 - `DELETE /v1beta/generatedFiles/{generated_file}`
 - `GET /v1beta/generatedFiles/operations`
 - `GET /v1beta/generatedFiles/operations/{operation}`
+- `GET /v1beta/generatedFiles/{generated_file}/operations/{operation}`
 - `POST /v1beta/generatedFiles/operations/{operation}:wait`
 - `POST /v1beta/generatedFiles/operations/{operation}:cancel`
 - `DELETE /v1beta/generatedFiles/operations/{operation}`
@@ -496,6 +498,7 @@ Implemented Gemini-compatible routes:
 - `POST /v1/corpora`
 - `GET /v1/corpora`
 - `GET /v1/corpora/{corpus}`
+- `GET /v1/corpora/{corpus}/operations/{operation}`
 - `PATCH /v1/corpora/{corpus}`
 - `POST /v1/corpora/{corpus}:query`
 - `DELETE /v1/corpora/{corpus}`
@@ -521,6 +524,7 @@ Implemented Gemini-compatible routes:
 - `POST /v1beta/corpora`
 - `GET /v1beta/corpora`
 - `GET /v1beta/corpora/{corpus}`
+- `GET /v1beta/corpora/{corpus}/operations/{operation}`
 - `PATCH /v1beta/corpora/{corpus}`
 - `POST /v1beta/corpora/{corpus}:query`
 - `DELETE /v1beta/corpora/{corpus}`

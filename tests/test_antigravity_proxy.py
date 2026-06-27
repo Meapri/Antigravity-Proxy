@@ -3175,6 +3175,7 @@ def test_gemini_cached_contents_v1_aliases(tmp_path, monkeypatch):
 
 def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_CORPORA_DIR", str(tmp_path / "corpora"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
     client = TestClient(proxy.app)
 
     created = client.post("/v1/corpora", json={"displayName": "Knowledge"})
@@ -3194,6 +3195,15 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     assert fetched_corpus.json()["displayName"] == "Knowledge"
     assert patched_corpus.status_code == 200
     assert patched_corpus.json()["displayName"] == "Knowledge updated"
+    proxy._gemini_store_operation({
+        "name": "operations/corpus-op",
+        "metadata": {"corpus": corpus_name},
+        "done": True,
+        "response": {"corpus": corpus_name},
+    })
+    corpus_operation = client.get(f"/v1beta/corpora/{corpus_id}/operations/corpus-op")
+    assert corpus_operation.status_code == 200
+    assert corpus_operation.json()["metadata"]["corpus"] == corpus_name
 
     document = client.post(f"/v1/corpora/{corpus_id}/documents", json={
         "displayName": "Launch notes",
@@ -3851,6 +3861,7 @@ def test_openai_image_generation_registers_gemini_generated_file(tmp_path, monke
     v1_operations = client.get("/v1/generatedFiles/operations")
     operation_id = operations.json()["operations"][0]["name"].rsplit("/", 1)[-1]
     v1_operation = client.get(f"/v1/generatedFiles/operations/{operation_id}")
+    nested_operation = client.get(f"/v1beta/{generated_name}/operations/{operation_id}")
     v1_waited = client.post(f"/v1/generatedFiles/operations/{operation_id}:wait")
     v1_cancelled = client.post(f"/v1/generatedFiles/operations/{operation_id}:cancel")
     v1_fetched = client.get(f"/v1/{generated_name}")
@@ -3879,6 +3890,8 @@ def test_openai_image_generation_registers_gemini_generated_file(tmp_path, monke
     assert v1_operations.json()["operations"][0]["metadata"]["generatedFile"] == generated_name
     assert v1_operation.status_code == 200
     assert v1_operation.json()["metadata"]["generatedFile"] == generated_name
+    assert nested_operation.status_code == 200
+    assert nested_operation.json()["metadata"]["generatedFile"] == generated_name
     assert v1_waited.status_code == 200
     assert v1_waited.json()["name"] == v1_operation.json()["name"]
     assert v1_cancelled.status_code == 200
