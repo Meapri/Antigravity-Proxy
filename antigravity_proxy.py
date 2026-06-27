@@ -4392,6 +4392,8 @@ def _gemini_register_files_from_uris(body: dict[str, Any]) -> list[dict[str, Any
 
 def _gemini_get_file_meta(file_name: str) -> dict[str, Any] | None:
     key = file_name.strip().strip("/")
+    while key.endswith(":download"):
+        key = key[: -len(":download")]
     for prefix in ("v1beta/", "v1/"):
         if key.startswith(prefix):
             key = key[len(prefix):]

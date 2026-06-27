@@ -2401,6 +2401,9 @@ def test_google_genai_sdk_developer_files_upload_and_models_filter(tmp_path, mon
         file=upload_source,
         config={"mime_type": "text/plain", "display_name": "sdk-upload.txt"},
     )
+    downloaded_by_file = sdk.files.download(file=uploaded)
+    downloaded_by_name = sdk.files.download(file=uploaded.name)
+    downloaded_by_download_uri = sdk.files.download(file=uploaded.download_uri)
 
     assert filtered.status_code == 200
     assert filtered.json()["models"]
@@ -2410,6 +2413,9 @@ def test_google_genai_sdk_developer_files_upload_and_models_filter(tmp_path, mon
     assert uploaded.name.startswith("files/")
     assert uploaded.display_name == "sdk-upload.txt"
     assert uploaded.mime_type == "text/plain"
+    assert downloaded_by_file == b"sdk file upload"
+    assert downloaded_by_name == b"sdk file upload"
+    assert downloaded_by_download_uri == b"sdk file upload"
 
 
 def test_google_genai_sdk_vertex_batch_prediction_jobs(tmp_path, monkeypatch):
