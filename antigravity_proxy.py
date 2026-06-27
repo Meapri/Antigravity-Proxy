@@ -1307,6 +1307,34 @@ def _gemini_normalize_safety_settings(value: Any) -> list[dict[str, Any]]:
     return settings
 
 
+def _gemini_harm_probability_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    key = value.strip().upper().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "UNSPECIFIED": "HARM_PROBABILITY_UNSPECIFIED",
+        "HARM_PROBABILITY_UNSPECIFIED": "HARM_PROBABILITY_UNSPECIFIED",
+        "NEGLIGIBLE": "NEGLIGIBLE",
+        "LOW": "LOW",
+        "MEDIUM": "MEDIUM",
+        "HIGH": "HIGH",
+    }
+    return aliases.get(key, value)
+
+
+def _gemini_normalize_safety_rating(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    out = _gemini_normalize_response_object(value)
+    if "category" in out:
+        out["category"] = _gemini_enum_alias(out["category"], _GEMINI_HARM_CATEGORY_ALIASES)
+    if "probability" in out:
+        out["probability"] = _gemini_harm_probability_value(out["probability"])
+    if "blocked" in out:
+        out["blocked"] = _gemini_bool_value(out["blocked"])
+    return out
+
+
 def _gemini_normalize_tool_config(value: Any) -> Any:
     if not isinstance(value, dict):
         return value
@@ -1849,6 +1877,8 @@ def _gemini_normalize_candidate(candidate: dict[str, Any], index: int) -> dict[s
     for key in ("safetyRatings", "citationMetadata", "groundingMetadata", "groundingAttributions", "urlContextMetadata", "logprobsResult"):
         if key in out:
             out[key] = _gemini_normalize_response_object(out[key])
+    if isinstance(out.get("safetyRatings"), list):
+        out["safetyRatings"] = [_gemini_normalize_safety_rating(item) for item in out["safetyRatings"]]
     return out
 
 
@@ -1933,6 +1963,11 @@ def _gemini_finalize_generate_response(response: dict[str, Any], *, model_name: 
     out.setdefault("responseId", "resp_" + uuid.uuid4().hex)
     if isinstance(out.get("promptFeedback"), dict):
         out["promptFeedback"] = _gemini_normalize_response_object(out["promptFeedback"])
+        if isinstance(out["promptFeedback"].get("safetyRatings"), list):
+            out["promptFeedback"]["safetyRatings"] = [
+                _gemini_normalize_safety_rating(item)
+                for item in out["promptFeedback"]["safetyRatings"]
+            ]
     if isinstance(out.get("automaticFunctionCallingHistory"), list):
         out["automaticFunctionCallingHistory"] = _gemini_normalize_contents(out["automaticFunctionCallingHistory"])
     candidates = out.get("candidates")

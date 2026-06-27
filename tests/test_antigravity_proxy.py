@@ -765,12 +765,12 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
                     "prompt_feedback": {
                         "block_reason": "SAFETY",
                         "block_reason_message": "blocked by policy",
-                        "safety_ratings": [{"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "probability": "MEDIUM"}],
+                        "safety_ratings": [{"category": "dangerous", "probability": "medium", "blocked": "true"}],
                     },
                     "candidates": [{
                         "content": {"parts": "hello"},
                         "finish_reason": "max tokens",
-                        "safety_ratings": [{"category": "HARM_CATEGORY_HARASSMENT", "probability": "LOW"}],
+                        "safety_ratings": [{"category": "harassment", "probability": "low", "blocked": "false"}],
                         "citation_metadata": {
                             "citation_sources": [{"start_index": 0, "end_index": 5, "uri": "https://example.test"}],
                         },
@@ -838,12 +838,16 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
     assert body["responseId"] == "upstream-response-id"
     assert body["promptFeedback"]["blockReason"] == "SAFETY"
     assert body["promptFeedback"]["blockReasonMessage"] == "blocked by policy"
+    assert body["promptFeedback"]["safetyRatings"][0]["category"] == "HARM_CATEGORY_DANGEROUS_CONTENT"
     assert body["promptFeedback"]["safetyRatings"][0]["probability"] == "MEDIUM"
+    assert body["promptFeedback"]["safetyRatings"][0]["blocked"] is True
     assert "prompt_feedback" not in body
     assert body["candidates"][0]["content"] == {"role": "model", "parts": [{"text": "hello"}]}
     assert body["candidates"][0]["finishReason"] == "MAX_TOKENS"
     assert "finish_reason" not in body["candidates"][0]
+    assert body["candidates"][0]["safetyRatings"][0]["category"] == "HARM_CATEGORY_HARASSMENT"
     assert body["candidates"][0]["safetyRatings"][0]["probability"] == "LOW"
+    assert body["candidates"][0]["safetyRatings"][0]["blocked"] is False
     assert body["candidates"][0]["groundingMetadata"]["searchEntryPoint"]["renderedContent"] == "x"
     assert body["candidates"][0]["groundingMetadata"]["searchEntryPoint"]["sdkBlob"] == "blob"
     assert body["candidates"][0]["groundingMetadata"]["webSearchQueries"] == ["atlas"]
