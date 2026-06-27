@@ -518,6 +518,10 @@ def test_gemini_model_aliases_resolve_for_public_style_names(monkeypatch):
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
     })
     image = client.get("/v1beta/models/gemini-image-latest")
+    flash_preview = client.get("/v1beta/models/gemini-3-flash-preview")
+    flash_menu = client.get("/v1beta/models/gemini-3.5-flash")
+    pro_preview = client.get("/v1beta/models/gemini-3.1-pro-preview")
+    lite_latest = client.get("/v1beta/models/gemini-flash-lite-latest")
 
     assert fetched.status_code == 200
     assert fetched.json()["name"] == "models/gemini-3-flash-agent"
@@ -525,6 +529,14 @@ def test_gemini_model_aliases_resolve_for_public_style_names(monkeypatch):
     assert seen["model"] == "gemini-3-flash-agent"
     assert image.status_code == 200
     assert image.json()["name"] == "models/gemini-3.1-flash-image"
+    assert flash_preview.status_code == 200
+    assert flash_preview.json()["name"] == "models/gemini-3-flash-agent"
+    assert flash_menu.status_code == 200
+    assert flash_menu.json()["name"] == "models/gemini-3-flash-agent"
+    assert pro_preview.status_code == 200
+    assert pro_preview.json()["name"] == "models/gemini-pro-agent"
+    assert lite_latest.status_code == 200
+    assert lite_latest.json()["name"] == "models/gemini-3.1-flash-lite"
 
 
 def test_gemini_auth_accepts_google_api_key_styles(monkeypatch):
