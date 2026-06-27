@@ -1024,6 +1024,13 @@ def test_gemini_generate_content_normalizes_tools_unions(monkeypatch):
     assert single_tool.status_code == 200
     assert seen["request"]["tools"] == [{"google_search": {}}]
 
+    legacy_search = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "hi",
+        "tools": [{"googleSearchRetrieval": {"dynamic_retrieval_config": {"mode": "MODE_DYNAMIC"}}}],
+    })
+    assert legacy_search.status_code == 200
+    assert seen["request"]["tools"] == [{"google_search": {"dynamic_retrieval_config": {"mode": "MODE_DYNAMIC"}}}]
+
     function_declarations = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
         "contents": "hi",
         "function_declarations": {
@@ -1141,6 +1148,10 @@ def test_gemini_generate_content_rejects_unsupported_builtin_tools():
         "contents": [{"role": "user", "parts": [{"text": "run code"}]}],
         "tools": [{"code_execution": {}}],
     })
+    url_context_snake = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": [{"role": "user", "parts": [{"text": "read url"}]}],
+        "tools": [{"url_context": {}}],
+    })
 
     assert url_context.status_code == 501
     assert url_context.json()["error"]["status"] == "UNIMPLEMENTED"
@@ -1153,6 +1164,8 @@ def test_gemini_generate_content_rejects_unsupported_builtin_tools():
     assert code_execution.status_code == 501
     assert code_execution.json()["error"]["status"] == "UNIMPLEMENTED"
     assert "code_execution" in code_execution.json()["error"]["message"]
+    assert url_context_snake.status_code == 501
+    assert "url_context" in url_context_snake.json()["error"]["message"]
 
     single_url_context = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
         "contents": "read url",

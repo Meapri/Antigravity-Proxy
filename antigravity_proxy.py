@@ -1053,6 +1053,7 @@ def _gemini_normalize_tools_value(value: Any) -> list[dict[str, Any]]:
     for item in items:
         if not isinstance(item, dict):
             continue
+        item = _gemini_normalize_request(item)
         if "functionDeclarations" in item:
             decls = item.get("functionDeclarations")
             if isinstance(decls, dict):
@@ -1066,7 +1067,13 @@ def _gemini_normalize_tools_value(value: Any) -> list[dict[str, Any]]:
                 ]
             tools.append(item)
             continue
-        if any(key in item for key in ("google_search", "codeExecution", "url_context", "file_search", "fileSearchRetrieval")):
+        if "googleSearchRetrieval" in item and "googleSearch" not in item and "google_search" not in item:
+            item = dict(item)
+            item["googleSearch"] = item.pop("googleSearchRetrieval")
+        if "googleSearch" in item:
+            item = dict(item)
+            item["google_search"] = item.pop("googleSearch")
+        if any(key in item for key in ("google_search", "codeExecution", "urlContext", "file_search", "fileSearchRetrieval")):
             tools.append(item)
             continue
         if item.get("name") or item.get("function") or item.get("declaration"):
