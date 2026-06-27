@@ -946,6 +946,20 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
                 "target_language_code": "ko",
                 "echo_target_language": "false",
             },
+            "speech_config": {
+                "language_code": "ko-KR",
+                "voice_config": {
+                    "prebuilt_voice_config": {"voice_name": "Kore"},
+                },
+                "multi_speaker_voice_config": {
+                    "speaker_voice_configs": [{
+                        "speaker": "narrator",
+                        "voice_config": {
+                            "prebuilt_voice_config": {"voice_name": "Puck"},
+                        },
+                    }],
+                },
+            },
             "response_mime_type": "application/json",
             "response_schema": {
                 "type": "object",
@@ -993,6 +1007,20 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
     assert seen["request"]["generationConfig"]["translationConfig"] == {
         "targetLanguageCode": "ko",
         "echoTargetLanguage": False,
+    }
+    assert seen["request"]["generationConfig"]["speechConfig"] == {
+        "languageCode": "ko-KR",
+        "voiceConfig": {
+            "prebuiltVoiceConfig": {"voiceName": "Kore"},
+        },
+        "multiSpeakerVoiceConfig": {
+            "speakerVoiceConfigs": [{
+                "speaker": "narrator",
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {"voiceName": "Puck"},
+                },
+            }],
+        },
     }
     assert seen["request"]["generationConfig"]["responseMimeType"] == "application/json"
     schema = seen["request"]["generationConfig"]["responseSchema"]
