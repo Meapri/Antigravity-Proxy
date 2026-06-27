@@ -634,6 +634,9 @@ def test_gemini_async_batch_embed_and_batch_update(tmp_path, monkeypatch):
     operation = created.json()
     assert operation["done"] is True
     assert operation["response"]["embeddings"][0]["values"]
+    assert operation["metadata"]["batchResource"]["displayName"] == "embed job"
+    assert operation["metadata"]["state"] == "BATCH_STATE_SUCCEEDED"
+    assert operation["metadata"]["operation"] == operation["name"]
     assert wrapped_created.status_code == 200
     wrapped_operation = wrapped_created.json()
     assert wrapped_operation["metadata"]["batchResource"]["displayName"] == "wrapped embed job"
@@ -644,6 +647,10 @@ def test_gemini_async_batch_embed_and_batch_update(tmp_path, monkeypatch):
     batch_name = operation["metadata"]["batch"]
     updated = client.patch(f"/v1beta/{batch_name}:updateEmbedContentBatch", json={"displayName": "renamed"})
     fetched = client.get(f"/v1beta/{batch_name}")
+    filtered_operations = client.get(
+        "/v1beta/operations",
+        params={"filter": 'metadata.state="BATCH_STATE_SUCCEEDED" AND metadata.display_name="embed job"'},
+    )
 
     assert updated.status_code == 200
     assert updated.json()["name"] == batch_name
@@ -652,6 +659,8 @@ def test_gemini_async_batch_embed_and_batch_update(tmp_path, monkeypatch):
     assert fetched.json()["metadata"]["operation"] == operation["name"]
     assert fetched.json()["metadata"]["batchResource"]["displayName"] == "renamed"
     assert fetched.json()["metadata"]["batchStats"]["requestCount"] == "2"
+    assert filtered_operations.status_code == 200
+    assert operation["name"] in {item["name"] for item in filtered_operations.json()["operations"]}
 
 
 def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
@@ -1701,6 +1710,9 @@ def test_gemini_batches_create_get_cancel_delete(tmp_path, monkeypatch):
     assert fetched.json()["name"] == batch_operation["name"]
     assert operation.status_code == 200
     assert operation.json()["metadata"]["batch"] == batch_operation["name"]
+    assert operation.json()["metadata"]["batchResource"]["name"] == batch_operation["name"]
+    assert operation.json()["metadata"]["state"] == "BATCH_STATE_SUCCEEDED"
+    assert operation.json()["metadata"]["operation"] == batch_resource["operation"]
     assert cancelled.status_code == 200
     assert deleted.status_code == 200
     assert missing.status_code == 404
