@@ -1126,6 +1126,22 @@ def test_gemini_generate_content_normalizes_tools_unions(monkeypatch):
         }]
     }]
 
+    single_function_declaration = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "hi",
+        "function_declaration": {
+            "name": "single_lookup",
+            "parameters_json_schema": {"type": "object"},
+        },
+    })
+
+    assert single_function_declaration.status_code == 200
+    assert seen["request"]["tools"] == [{
+        "functionDeclarations": [{
+            "name": "single_lookup",
+            "parameters": {"type": "object", "properties": {}},
+        }]
+    }]
+
     schema_aliases = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
         "contents": "hi",
         "tools": {
@@ -1150,6 +1166,19 @@ def test_gemini_generate_content_normalizes_tools_unions(monkeypatch):
     assert declaration["response"]["properties"]["answer"]["type"] == "string"
     assert "parametersJsonSchema" not in declaration
     assert "responseJsonSchema" not in declaration
+
+    single_tool_declaration = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "hi",
+        "tools": {"function_declaration": {"name": "tool_lookup", "description": "Lookup"}},
+    })
+
+    assert single_tool_declaration.status_code == 200
+    assert seen["request"]["tools"] == [{
+        "functionDeclarations": [{
+            "name": "tool_lookup",
+            "description": "Lookup",
+        }]
+    }]
 
 
 def test_gemini_generate_content_normalizes_safety_and_tool_config_shortcuts(monkeypatch):

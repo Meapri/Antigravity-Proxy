@@ -479,6 +479,8 @@ _GEMINI_KEY_ALIASES = {
     "signing_secrets": "signingSecrets",
     "new_signing_secret": "newSigningSecret",
     "function_declarations": "functionDeclarations",
+    "function_declaration": "functionDeclaration",
+    "functionDeclaration": "functionDeclaration",
     "function_calling_config": "functionCallingConfig",
     "allowed_function_names": "allowedFunctionNames",
     "code_execution": "codeExecution",
@@ -1151,6 +1153,9 @@ def _gemini_normalize_tools_value(value: Any) -> list[dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         item = _gemini_normalize_request(item)
+        if "functionDeclaration" in item and "functionDeclarations" not in item:
+            item = dict(item)
+            item["functionDeclarations"] = item.pop("functionDeclaration")
         if "functionDeclarations" in item:
             decls = item.get("functionDeclarations")
             if isinstance(decls, dict):
@@ -1194,6 +1199,8 @@ def _gemini_normalize_tools_value(value: Any) -> list[dict[str, Any]]:
 def _gemini_normalize_generate_body(body: dict[str, Any]) -> dict[str, Any]:
     out = dict(body)
     function_declarations = out.pop("functionDeclarations", None)
+    if function_declarations is None:
+        function_declarations = out.pop("functionDeclaration", None)
     if function_declarations is not None:
         existing = _gemini_normalize_tools_value(out.get("tools"))
         if isinstance(function_declarations, dict):

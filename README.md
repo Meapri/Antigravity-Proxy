@@ -663,8 +663,10 @@ legacy `googleSearchRetrieval` are forwarded as `google_search`, and local
 hosted tools. `toolConfig.functionCallingConfig.mode` and
 `allowedFunctionNames` are normalized from common SDK spellings.
 `tools` may be a single object or a list, and top-level
-`functionDeclarations` / `function_declarations` are wrapped into Gemini tool
-objects before forwarding. Function declaration schema aliases such as
+`functionDeclarations` / `function_declarations` and singular
+`functionDeclaration` / `function_declaration` are wrapped into Gemini tool
+objects before forwarding. Singular function declarations are also accepted
+inside `tools`. Function declaration schema aliases such as
 `parametersJsonSchema` / `parameters_json_schema` and `responseJsonSchema` /
 `response_json_schema` are normalized to Gemini `parameters` and `response`.
 `safetySettings` may be supplied as a single object, and shortcut
