@@ -864,7 +864,10 @@ Embeddings and batch operations:
   requests and return prediction/operation-shaped compatibility responses.
   Vertex-style `instances` requests preserve the same SDK `config`,
   `providerOptions.google`, and `processingOptions` compatibility path used by
-  `generateContent`.
+  `generateContent`. `parameters` may carry Gemini generation config fields or
+  top-level generate fields such as `safetySettings` / `safety_settings` and
+  `toolConfig` / `tool_config`; these are split and normalized before
+  forwarding.
 - Legacy `generateText`, `generateMessage`, `generateAnswer`, `embedText`,
   `batchEmbedText`, `countTextTokens`, and `countMessageTokens` are accepted and
   mapped onto the newer local `generateContent`, embedding, and token-count

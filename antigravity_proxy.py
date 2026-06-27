@@ -1871,11 +1871,26 @@ def _gemini_predict_to_generate_body(body: dict[str, Any]) -> dict[str, Any]:
     request_body = {"contents": contents}
     parameters = body.get("parameters")
     if isinstance(parameters, dict):
-        request_body["generationConfig"] = parameters.get("generationConfig") or parameters.get("generation_config") or parameters
+        params = _gemini_apply_generate_config(_gemini_normalize_request(parameters))
+        params = _gemini_apply_response_format(params)
+        nested_gen = params.pop("generationConfig", None)
+        if isinstance(nested_gen, dict):
+            request_body["generationConfig"] = _gemini_normalize_generation_config(nested_gen)
+        for key in _GEMINI_GENERATE_CONFIG_TOP_LEVEL_KEYS:
+            if key in params and key not in request_body:
+                request_body[key] = params.pop(key)
+        remaining_gen = {
+            key: value
+            for key, value in params.items()
+            if key in _GEMINI_GENERATION_CONFIG_KEYS and value is not None
+        }
+        if remaining_gen:
+            existing_gen = request_body.get("generationConfig") if isinstance(request_body.get("generationConfig"), dict) else {}
+            request_body["generationConfig"] = _gemini_normalize_generation_config({**existing_gen, **remaining_gen})
     for key in _GEMINI_GENERATE_CONFIG_TOP_LEVEL_KEYS | {"generationConfig"}:
         if key in body and key not in request_body:
             request_body[key] = body[key]
-    return request_body
+    return _gemini_normalize_generate_body(request_body)
 
 
 def _gemini_legacy_prompt_text(body: dict[str, Any]) -> str:

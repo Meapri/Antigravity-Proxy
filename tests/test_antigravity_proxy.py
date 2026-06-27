@@ -1276,6 +1276,24 @@ def test_gemini_predict_and_predict_long_running(tmp_path, monkeypatch):
     long_running = client.post("/v1beta/models/gemini-3-flash-agent:predictLongRunning", json={
         "instances": [{"text": "later"}],
     })
+    parameter_wrapped = client.post("/v1beta/models/gemini-3-flash-agent:predict", json={
+        "instances": [{"parts": [{"text": "parameter wrapped"}]}],
+        "parameters": {
+            "generation_config": {
+                "max_output_tokens": "12",
+                "response_mime_type": "application/json",
+            },
+            "safety_settings": {
+                "harm_category": "dangerous",
+                "harm_block_threshold": "only_high",
+            },
+            "tool_config": {"mode": "none"},
+            "response_schema": {
+                "type": "object",
+                "properties": {"answer": {"type": "string", "min_length": 1}},
+            },
+        },
+    })
 
     assert predicted.status_code == 200
     assert predicted.json()["predictions"][0]["candidates"][0]["content"]["parts"][0]["text"] == "predict me"
@@ -1283,6 +1301,15 @@ def test_gemini_predict_and_predict_long_running(tmp_path, monkeypatch):
     assert seen[0]["generationConfig"]["maxOutputTokens"] == 10
     assert seen[0]["toolConfig"]["functionCallingConfig"] == {"mode": "NONE"}
     assert "processingOptions" not in seen[0]
+    assert parameter_wrapped.status_code == 200
+    assert seen[2]["generationConfig"]["maxOutputTokens"] == 12
+    assert seen[2]["generationConfig"]["responseMimeType"] == "application/json"
+    assert seen[2]["generationConfig"]["responseSchema"]["properties"]["answer"]["minLength"] == 1
+    assert seen[2]["safetySettings"] == [{
+        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+        "threshold": "BLOCK_ONLY_HIGH",
+    }]
+    assert seen[2]["toolConfig"] == {"functionCallingConfig": {"mode": "NONE"}}
     assert long_running.status_code == 200
     assert long_running.json()["done"] is True
     assert long_running.json()["response"]["predictions"]
