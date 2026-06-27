@@ -836,7 +836,10 @@ curl "http://127.0.0.1:8765/upload/v1beta/files?uploadType=media&displayName=not
 The upload endpoint also supports Gemini resumable upload starts through
 `uploadType=resumable` or `X-Goog-Upload-Protocol: resumable`, followed by
 `X-Goog-Upload-Command: query`, `upload`, and `upload, finalize` with
-`X-Goog-Upload-Offset`. Upload metadata accepts both official `file` objects
+`X-Goog-Upload-Offset`. Finalized uploads return
+`X-Goog-Upload-Status: final`, and SDK-prefixed upload paths such as
+`/v1beta/upload/v1beta/files` are accepted as aliases for
+`/upload/v1beta/files`. Upload metadata accepts both official `file` objects
 and SDK-style `config` wrappers such as `{"config": {"mimeType": "text/plain"}}`.
 Uploaded local files include a Gemini-style `expirationTime` 48 hours after
 creation; metadata-only registered external files preserve an explicit
@@ -944,7 +947,9 @@ Embeddings and batch operations:
   stores immediately completed `operations/*` and `batches/*` results with
   Gemini `BATCH_STATE_*` status values and `stats` counters. Inline batch
   items may be plain request objects or SDK/REST wrapper items such as
-  `{"request": {...}}` / `{"generateContentRequest": {...}}`.
+  `{"request": {...}}` / `{"generateContentRequest": {...}}`. Python SDK inline
+  source wrappers such as `batch.inputConfig.requests.requests[]` are also
+  accepted.
 - `batches.create` accepts inline `requests` plus `model` and returns a
   completed Gemini operation named `batches/*`; the local batch resource is
   preserved under `metadata.batchResource`. It also accepts common SDK wrapper bodies

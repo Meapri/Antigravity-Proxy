@@ -2553,6 +2553,20 @@ def test_gemini_batch_wrapped_request_bodies(tmp_path, monkeypatch):
             },
         }]
     })
+    generated_sdk_wrapped = client.post("/v1beta/models/gemini-3-flash-agent:batchGenerateContent", json={
+        "batch": {
+            "displayName": "sdk inline batch",
+            "inputConfig": {
+                "requests": {
+                    "requests": [{
+                        "request": {
+                            "contents": [{"role": "user", "parts": [{"text": "sdk inline"}]}],
+                        },
+                    }]
+                }
+            },
+        }
+    })
     embedded = client.post("/v1beta/batches", json={
         "embedContentBatch": {
             "model": "models/gemini-3-flash-agent",
@@ -2613,6 +2627,9 @@ def test_gemini_batch_wrapped_request_bodies(tmp_path, monkeypatch):
     assert generated.json()["response"]["responses"][0]["candidates"][0]["content"]["parts"][0]["text"] == "method"
     assert generated_request_wrapped.status_code == 200
     assert generated_request_wrapped.json()["response"]["responses"][0]["candidates"][0]["content"]["parts"][0]["text"] == "request wrapped"
+    assert generated_sdk_wrapped.status_code == 200
+    assert generated_sdk_wrapped.json()["metadata"]["batchResource"]["displayName"] == "sdk inline batch"
+    assert generated_sdk_wrapped.json()["response"]["responses"][0]["candidates"][0]["content"]["parts"][0]["text"] == "sdk inline"
     assert embedded.status_code == 200
     assert embedded.json()["metadata"]["batchResource"]["displayName"] == "wrapped embed"
     assert embedded.json()["metadata"]["state"] == "BATCH_STATE_SUCCEEDED"
@@ -3772,6 +3789,8 @@ def test_gemini_resumable_file_upload(tmp_path, monkeypatch):
     )
 
     assert finished.status_code == 200
+    assert finished.headers["x-goog-upload-status"] == "final"
+    assert finished.headers["x-goog-upload-size-received"] == str(len(b"resumable body"))
     file_resource = finished.json()["file"]
     assert file_resource["displayName"] == "resumable.txt"
     assert file_resource["mimeType"] == "text/plain"
@@ -3797,6 +3816,7 @@ def test_gemini_resumable_file_upload(tmp_path, monkeypatch):
         headers={"X-Goog-Upload-Command": "upload, finalize"},
     )
     assert config_finished.status_code == 200
+    assert config_finished.headers["x-goog-upload-status"] == "final"
     assert config_finished.json()["file"]["displayName"] == "sdk-config.txt"
     assert config_finished.json()["file"]["mimeType"] == "text/markdown"
 
@@ -3817,8 +3837,29 @@ def test_gemini_resumable_file_upload(tmp_path, monkeypatch):
         headers={"X-Goog-Upload-Command": "upload, finalize"},
     )
     assert query_finished.status_code == 200
+    assert query_finished.headers["x-goog-upload-status"] == "final"
     assert query_finished.json()["file"]["displayName"] == "query-resumable.txt"
     assert query_finished.json()["file"]["mimeType"] == "text/plain"
+
+    sdk_prefixed_started = client.post(
+        "/v1beta/upload/v1beta/files",
+        json={"file": {"displayName": "sdk-prefixed.txt", "mimeType": "text/plain"}},
+        headers={
+            "X-Goog-Upload-Protocol": "resumable",
+            "X-Goog-Upload-Command": "start",
+        },
+    )
+    assert sdk_prefixed_started.status_code == 200
+    sdk_session_path = "/" + sdk_prefixed_started.headers["x-goog-upload-url"].split("/", 3)[3]
+
+    sdk_prefixed_finished = client.post(
+        sdk_session_path.replace("/upload/v1beta/files/", "/v1beta/upload/v1beta/files/"),
+        content=b"sdk prefixed",
+        headers={"X-Goog-Upload-Command": "upload, finalize"},
+    )
+    assert sdk_prefixed_finished.status_code == 200
+    assert sdk_prefixed_finished.headers["x-goog-upload-status"] == "final"
+    assert sdk_prefixed_finished.json()["file"]["displayName"] == "sdk-prefixed.txt"
 
 
 def test_gemini_resumable_file_upload_query_offset_and_finalize(tmp_path, monkeypatch):

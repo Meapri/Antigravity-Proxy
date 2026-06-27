@@ -3255,6 +3255,24 @@ def _gemini_batch_body(body: Any) -> Any:
     return body
 
 
+def _gemini_batch_requests(body: dict[str, Any]) -> list[Any] | None:
+    requests = body.get("requests")
+    if isinstance(requests, list):
+        return requests
+    input_config = body.get("inputConfig") if isinstance(body.get("inputConfig"), dict) else {}
+    nested = input_config.get("requests")
+    if isinstance(nested, list):
+        return nested
+    if isinstance(nested, dict) and isinstance(nested.get("requests"), list):
+        return nested["requests"]
+    inline = input_config.get("inlinedRequests")
+    if isinstance(inline, list):
+        return inline
+    if isinstance(inline, dict) and isinstance(inline.get("requests"), list):
+        return inline["requests"]
+    return None
+
+
 def _gemini_batch_stats(request_count: int, *, successful: int | None = None, failed: int = 0, pending: int = 0) -> dict[str, str]:
     success_count = request_count - failed - pending if successful is None else successful
     return {
@@ -4591,7 +4609,13 @@ async def _gemini_resumable_upload_command(session_id: str, request: Request) ->
         )
         sessions.pop(session_id, None)
         _gemini_save_upload_sessions(sessions)
-        return {"file": file_resource}
+        return JSONResponse(
+            {"file": file_resource},
+            headers={
+                "X-Goog-Upload-Status": "final",
+                "X-Goog-Upload-Size-Received": str(len(combined)),
+            },
+        )
 
     _gemini_save_upload_sessions(sessions)
     return JSONResponse(
@@ -7872,12 +7896,14 @@ async def _gemini_upload_file_response(request: Request, upload_version: str) ->
 
 @app.post("/v1/files")
 @app.post("/upload/v1/files")
+@app.post("/v1/upload/v1/files")
 async def gemini_upload_file_v1(request: Request):
     return await _gemini_upload_file_response(request, upload_version="v1")
 
 
 @app.post("/v1beta/files")
 @app.post("/upload/v1beta/files")
+@app.post("/v1beta/upload/v1beta/files")
 async def gemini_upload_file(request: Request):
     return await _gemini_upload_file_response(request, upload_version="v1beta")
 
@@ -7998,6 +8024,10 @@ async def gemini_delete_generated_file(generated_file_id: str):
 @app.post("/upload/v1beta/files/{session_id}")
 @app.put("/upload/v1/files/{session_id}")
 @app.put("/upload/v1beta/files/{session_id}")
+@app.post("/v1/upload/v1/files/{session_id}")
+@app.post("/v1beta/upload/v1beta/files/{session_id}")
+@app.put("/v1/upload/v1/files/{session_id}")
+@app.put("/v1beta/upload/v1beta/files/{session_id}")
 async def gemini_resumable_upload(session_id: str, request: Request):
     try:
         return await _gemini_resumable_upload_command(session_id, request)
@@ -10147,9 +10177,10 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
     model = _resolve_gemini_model(model_name)
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
-    requests = body.get("requests")
+    requests = _gemini_batch_requests(body)
     if not isinstance(requests, list):
         raise HTTPException(status_code=400, detail="batchGenerateContent requires a requests array.")
+    body["requests"] = requests
 
     responses: list[dict[str, Any]] = []
     for item in requests:
