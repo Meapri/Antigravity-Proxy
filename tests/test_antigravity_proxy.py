@@ -3305,6 +3305,15 @@ def test_gemini_cached_contents_merge_into_generate_request(tmp_path, monkeypatc
     assert wrapped_created.json()["usageMetadata"]["promptTokensDetails"][0]["modality"] == "TEXT"
     assert wrapped_created.json()["expireTime"]
 
+    expire_created = client.post("/v1beta/cachedContents", json={
+        "model": "models/gemini-3-flash-agent",
+        "contents": "expire alias cache",
+        "expire_time": "2099-02-01T00:00:00Z",
+    })
+    assert expire_created.status_code == 200
+    assert expire_created.json()["expireTime"] == "2099-02-01T00:00:00Z"
+    assert "ttl" not in expire_created.json()
+
     paged = client.get("/v1beta/cachedContents?pageSize=1")
     next_page = client.get(f"/v1beta/cachedContents?pageSize=1&pageToken={paged.json()['nextPageToken']}")
     coerced = client.get("/v1beta/cachedContents?pageSize=1001")
@@ -3331,7 +3340,7 @@ def test_gemini_cached_contents_merge_into_generate_request(tmp_path, monkeypatc
     assert patched_body_mask.json()["ttl"] == "150s"
 
     patched_expire = client.patch(f"/v1beta/{cache_name}?updateMask=expireTime", json={
-        "expireTime": "2099-01-01T00:00:00Z"
+        "expire_time": "2099-01-01T00:00:00Z"
     })
     assert patched_expire.status_code == 200
     assert patched_expire.json()["expireTime"] == "2099-01-01T00:00:00Z"
@@ -3915,7 +3924,7 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
         },
         "tunedModel": {
             "displayName": "My tuned",
-            "baseModel": "models/gemini-3-flash-agent",
+            "base_model": "models/gemini-3-flash-agent",
             "tuning_task": {
                 "hyperparameters": {"epochCount": 2, "batchSize": 4},
                 "training_data": {"examples": {"examples": [{"textInput": "hi", "output": "hello"}]}},
@@ -3925,6 +3934,7 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert created.status_code == 200
     tuned = created.json()["response"]
     assert tuned["name"] == "tunedModels/my_tuned"
+    assert tuned["baseModel"] == "models/gemini-3-flash-agent"
     assert tuned["temperature"] == 0.4
     assert tuned["topK"] == 32
     assert tuned["readerProjectNumbers"] == ["123"]
