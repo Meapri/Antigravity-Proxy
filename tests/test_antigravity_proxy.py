@@ -567,6 +567,13 @@ def test_gemini_embeddings_accept_latest_config_and_contents_forms():
             }
         },
     })
+    embedding_configured = client.post("/v1beta/models/gemini-3-flash-agent:embedContent", json={
+        "content": {"parts": [{"text": "embedding config alias"}]},
+        "embedding_config": {
+            "output_dimensionality": "13",
+            "task_type": "semantic similarity",
+        },
+    })
     embed_content_wrapped = client.post("/v1beta/models/gemini-3-flash-agent:batchEmbedContents", json={
         "requests": [{
             "embed_content_request": {
@@ -580,6 +587,10 @@ def test_gemini_embeddings_accept_latest_config_and_contents_forms():
             },
         }]
     })
+    batch_embedding_configured = client.post("/v1beta/models/gemini-3-flash-agent:batchEmbedContents", json={
+        "embedding_config": {"output_dimensionality": "6"},
+        "requests": [{"content": {"parts": [{"text": "shared embedding config"}]}}],
+    })
 
     assert configured.status_code == 200
     assert len(configured.json()["embeddings"]) == 2
@@ -591,8 +602,12 @@ def test_gemini_embeddings_accept_latest_config_and_contents_forms():
     assert len(wrapped.json()["embeddings"][0]["values"]) == 11
     assert request_wrapped.status_code == 200
     assert len(request_wrapped.json()["embedding"]["values"]) == 9
+    assert embedding_configured.status_code == 200
+    assert len(embedding_configured.json()["embedding"]["values"]) == 13
     assert embed_content_wrapped.status_code == 200
     assert len(embed_content_wrapped.json()["embeddings"][0]["values"]) == 7
+    assert batch_embedding_configured.status_code == 200
+    assert len(batch_embedding_configured.json()["embeddings"][0]["values"]) == 6
 
 
 def test_gemini_legacy_embed_text_methods():

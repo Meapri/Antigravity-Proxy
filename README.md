@@ -834,8 +834,9 @@ Embeddings and batch operations:
 
 - `embedContent` and `batchEmbedContents` return deterministic local embedding
   vectors for Gemini SDK compatibility. They accept current SDK-style
-  `config` / `embedContentConfig`, string or list `contents`, and the legacy
-  top-level `outputDimensionality`, `taskType`, and `title` fields. They are
+  `config` / `embedContentConfig` / `embedding_config`, string or list
+  `contents`, and the legacy top-level `outputDimensionality`, `taskType`, and
+  `title` fields. They are
   normalized from either camelCase or snake_case, including string numeric
   `outputDimensionality`, common `taskType` spellings such as
   `retrieval document`, and boolean config fields such as `autoTruncate`,

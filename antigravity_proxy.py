@@ -433,6 +433,8 @@ _GEMINI_KEY_ALIASES = {
     "sample_count": "sampleCount",
     "speech_config": "speechConfig",
     "routing_config": "routingConfig",
+    "embedding_config": "embedContentConfig",
+    "embeddingConfig": "embedContentConfig",
     "embed_content_config": "embedContentConfig",
     "embedContentConfig": "embedContentConfig",
     "output_dimensionality": "outputDimensionality",
