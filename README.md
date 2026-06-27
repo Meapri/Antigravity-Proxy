@@ -743,7 +743,10 @@ SDK transport-only options such as `httpOptions`, `requestOptions`,
 mapped into Gemini-compatible JSON output controls.
 `generationConfig.responseFormat` / `generation_config.response_format` is
 handled through the same path, including nested `jsonSchema` / `json_schema`
-objects and Gemini's `_responseJsonSchema` alias.
+objects and Gemini's `_responseJsonSchema` alias. Official
+`responseFormat.text`, `.image`, and `.audio` configs are preserved, with
+snake_case fields such as `mime_type`, `image_size`, `sample_rate`, and
+`bit_rate` normalized to Gemini REST casing.
 Common schema aliases such as `property_ordering`, `any_of`, `min_items`, and
 `min_length` are normalized to Gemini/OpenAPI-style camelCase fields.
 Generate responses are normalized with Gemini-style `modelVersion`,

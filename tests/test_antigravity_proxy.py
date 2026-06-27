@@ -1130,6 +1130,51 @@ def test_gemini_generation_config_accepts_nested_response_format(monkeypatch):
     assert gen["responseSchema"]["properties"]["answer"]["minLength"] == 1
     assert gen["responseJsonSchema"]["properties"]["score"]["minimum"] == 0
 
+    official_response_format = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "hi",
+        "generation_config": {
+            "response_format": {
+                "text": {
+                    "mime_type": "text/plain",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"answer": {"type": "string", "min_length": 1}},
+                    },
+                },
+                "image": {
+                    "mime_type": "image/png",
+                    "aspect_ratio": "16:9",
+                    "image_size": "1K",
+                    "delivery": "inline",
+                },
+                "audio": {
+                    "mime_type": "audio/wav",
+                    "sample_rate": "24000",
+                    "bit_rate": "128000",
+                    "delivery": "stream",
+                },
+            },
+        },
+    })
+
+    assert official_response_format.status_code == 200
+    official_gen = seen["request"]["generationConfig"]
+    assert official_gen["responseMimeType"] == "text/plain"
+    assert official_gen["responseSchema"]["properties"]["answer"]["minLength"] == 1
+    assert official_gen["responseFormat"]["text"]["schema"]["properties"]["answer"]["minLength"] == 1
+    assert official_gen["responseFormat"]["image"] == {
+        "mimeType": "image/png",
+        "aspectRatio": "16:9",
+        "imageSize": "1K",
+        "delivery": "inline",
+    }
+    assert official_gen["responseFormat"]["audio"] == {
+        "mimeType": "audio/wav",
+        "sampleRate": 24000,
+        "bitRate": 128000,
+        "delivery": "stream",
+    }
+
 
 def test_gemini_generate_content_accepts_provider_google_options(monkeypatch):
     seen = {}

@@ -390,6 +390,8 @@ _GEMINI_KEY_ALIASES = {
     "_responseJsonSchema": "responseJsonSchema",
     "response_format": "responseFormat",
     "responseFormat": "responseFormat",
+    "sample_rate": "sampleRate",
+    "bit_rate": "bitRate",
     "enable_enhanced_civic_answers": "enableEnhancedCivicAnswers",
     "generate_content_request": "generateContentRequest",
     "generateContentRequest": "generateContentRequest",
@@ -729,6 +731,14 @@ def _gemini_normalize_generation_config(value: Any) -> Any:
 
 def _gemini_apply_response_format_to_generation_config(gen: dict[str, Any], fmt: Any) -> None:
     if isinstance(fmt, dict):
+        normalized_format = _gemini_normalize_response_format_config(fmt)
+        if normalized_format:
+            gen["responseFormat"] = normalized_format
+            text_format = normalized_format.get("text") if isinstance(normalized_format.get("text"), dict) else {}
+            if text_format.get("mimeType"):
+                gen["responseMimeType"] = text_format["mimeType"]
+            if isinstance(text_format.get("schema"), dict):
+                gen["responseSchema"] = _sanitize_schema(dict(text_format["schema"]))
         nested_json_schema = fmt.get("jsonSchema") if isinstance(fmt.get("jsonSchema"), dict) else None
         fmt_type = str(fmt.get("type") or "").strip().lower()
         mime = (
@@ -764,6 +774,28 @@ def _gemini_apply_response_format_to_generation_config(gen: dict[str, Any], fmt:
             gen["responseMimeType"] = fmt.strip()
         elif fmt_type in {"json", "json_object", "json_schema"}:
             gen["responseMimeType"] = "application/json"
+
+
+def _gemini_normalize_response_format_config(value: dict[str, Any]) -> dict[str, Any]:
+    normalized = _gemini_normalize_request(value)
+    out: dict[str, Any] = {}
+    text_format = normalized.get("text")
+    if isinstance(text_format, dict):
+        text = dict(text_format)
+        if isinstance(text.get("schema"), dict):
+            text["schema"] = _sanitize_schema(dict(text["schema"]))
+        out["text"] = text
+    image_format = normalized.get("image")
+    if isinstance(image_format, dict):
+        out["image"] = dict(image_format)
+    audio_format = normalized.get("audio")
+    if isinstance(audio_format, dict):
+        audio = dict(audio_format)
+        for key in ("sampleRate", "bitRate"):
+            if key in audio:
+                audio[key] = _gemini_int_value(audio[key])
+        out["audio"] = audio
+    return out
 
 
 def _gemini_normalize_embedding_config(value: Any) -> dict[str, Any]:
