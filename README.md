@@ -602,6 +602,8 @@ Implemented Gemini-compatible routes:
 - `POST /v1/tunedModels/{tuned_model}:streamGenerateContent`
 - `POST /v1/tunedModels/{tuned_model}:countTokens`
 - `POST /v1/tunedModels/{tuned_model}:computeTokens`
+- `POST /v1/tunedModels/{tuned_model}:embedContent`
+- `POST /v1/tunedModels/{tuned_model}:batchEmbedContents`
 - `GET /v1/tunedModels/{tuned_model}/permissions`
 - `POST /v1/tunedModels/{tuned_model}/permissions`
 - `GET /v1/tunedModels/{tuned_model}/permissions/{permission}`
@@ -622,6 +624,8 @@ Implemented Gemini-compatible routes:
 - `POST /v1beta/tunedModels/{tuned_model}:streamGenerateContent`
 - `POST /v1beta/tunedModels/{tuned_model}:countTokens`
 - `POST /v1beta/tunedModels/{tuned_model}:computeTokens`
+- `POST /v1beta/tunedModels/{tuned_model}:embedContent`
+- `POST /v1beta/tunedModels/{tuned_model}:batchEmbedContents`
 - `GET /v1beta/tunedModels/{tuned_model}/permissions`
 - `POST /v1beta/tunedModels/{tuned_model}/permissions`
 - `GET /v1beta/tunedModels/{tuned_model}/permissions/{permission}`
@@ -909,8 +913,9 @@ Tuned models and permissions:
   string or SDK wrapper body for mutable metadata fields such as `displayName`,
   `description`, `baseModel`, `tuningTask`, and `readerProjectNumbers`.
 - `tunedModels/{id}:generateContent`, `:streamGenerateContent`,
-  `:countTokens`, and `:computeTokens` forward to or reuse the configured
-  `baseModel` compatibility path.
+  `:countTokens`, `:computeTokens`, `:embedContent`, and
+  `:batchEmbedContents` forward to or reuse the configured `baseModel`
+  compatibility path.
 - `permissions` are stored locally for Gemini SDK compatibility; corpus and
   tuned-model permission create/patch accept `permission` wrappers plus
   snake_case aliases such as `email_address` and `grantee_type`, normalizing

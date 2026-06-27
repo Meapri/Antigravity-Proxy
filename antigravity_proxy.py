@@ -1989,12 +1989,17 @@ def _gemini_batch_embedding_from_request(body: dict[str, Any]) -> dict[str, Any]
     if not isinstance(requests, list):
         raise HTTPException(status_code=400, detail="batchEmbedContents requires a requests array.")
     embeddings: list[dict[str, Any]] = []
+    shared_config = _gemini_embedding_config(body)
     for item in requests:
         if not isinstance(item, dict):
             raise HTTPException(status_code=400, detail="batchEmbedContents request items must be objects.")
-        embedded = _gemini_embedding_from_request(
-            _gemini_normalize_request(_gemini_batch_request_item(item, "request", "embedContentRequest"))
-        )
+        normalized_item = _gemini_normalize_request(_gemini_batch_request_item(item, "request", "embedContentRequest"))
+        if shared_config and isinstance(normalized_item, dict):
+            item_config = _gemini_embedding_config(normalized_item)
+            merged_config = dict(shared_config)
+            merged_config.update(item_config)
+            normalized_item["config"] = merged_config
+        embedded = _gemini_embedding_from_request(normalized_item)
         embeddings.extend(embedded.get("embeddings") or [embedded["embedding"]])
     return {"embeddings": embeddings}
 
@@ -4094,7 +4099,14 @@ def _gemini_tuned_resource(meta: dict[str, Any]) -> dict[str, Any]:
         "temperature": meta.get("temperature"),
         "topP": meta.get("topP"),
         "topK": meta.get("topK"),
-        "supportedGenerationMethods": ["generateContent", "streamGenerateContent", "countTokens", "computeTokens"],
+        "supportedGenerationMethods": [
+            "generateContent",
+            "streamGenerateContent",
+            "countTokens",
+            "computeTokens",
+            "embedContent",
+            "batchEmbedContents",
+        ],
     }
     for key in (
         "tunedModelSource",
@@ -7599,6 +7611,40 @@ async def gemini_tuned_compute_tokens(tuned_model_id: str, request: Request):
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+
+
+@app.post("/v1/tunedModels/{tuned_model_id}:embedContent")
+@app.post("/v1beta/tunedModels/{tuned_model_id}:embedContent")
+async def gemini_tuned_embed_content(tuned_model_id: str, request: Request):
+    try:
+        _gemini_tuned_base_model(tuned_model_id)
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        return _gemini_embedding_from_request(body)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini tuned model embedContent failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.post("/v1/tunedModels/{tuned_model_id}:batchEmbedContents")
+@app.post("/v1beta/tunedModels/{tuned_model_id}:batchEmbedContents")
+async def gemini_tuned_batch_embed_contents(tuned_model_id: str, request: Request):
+    try:
+        _gemini_tuned_base_model(tuned_model_id)
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        return _gemini_batch_embedding_from_request(body)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini tuned model batchEmbedContents failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
 @app.get("/v1/tunedModels/{tuned_model_id}/permissions")

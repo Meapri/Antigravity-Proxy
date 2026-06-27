@@ -3226,7 +3226,14 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     })
     assert listed.status_code == 200
     assert fetched.json()["displayName"] == "My tuned"
-    assert fetched.json()["supportedGenerationMethods"] == ["generateContent", "streamGenerateContent", "countTokens", "computeTokens"]
+    assert fetched.json()["supportedGenerationMethods"] == [
+        "generateContent",
+        "streamGenerateContent",
+        "countTokens",
+        "computeTokens",
+        "embedContent",
+        "batchEmbedContents",
+    ]
     assert listed_operations.status_code == 200
     assert listed_operations.json()["operations"][0]["name"] == created.json()["name"]
     assert fetched_operation.status_code == 200
@@ -3340,6 +3347,23 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert computed.status_code == 200
     assert computed.json()["tokensInfo"][0]["role"] == "user"
     assert computed.json()["tokensInfo"][0]["tokenIds"]
+
+    embedded = client.post("/v1/tunedModels/my_tuned:embedContent", json={
+        "content": {"parts": [{"text": "embed tuned"}]},
+        "config": {"output_dimensionality": 8},
+    })
+    batch_embedded = client.post("/v1beta/tunedModels/my_tuned:batchEmbedContents", json={
+        "requests": [
+            {"content": {"parts": [{"text": "first tuned"}]}},
+            {"content": {"parts": [{"text": "second tuned"}]}},
+        ],
+        "config": {"output_dimensionality": 6},
+    })
+    assert embedded.status_code == 200
+    assert len(embedded.json()["embedding"]["values"]) == 8
+    assert batch_embedded.status_code == 200
+    assert len(batch_embedded.json()["embeddings"]) == 2
+    assert len(batch_embedded.json()["embeddings"][0]["values"]) == 6
 
     deleted_perm = client.delete(f"/v1/tunedModels/my_tuned/permissions/{perm_id}")
     deleted_operation = client.delete(f"/v1/tunedModels/my_tuned/operations/{created_op_id}")
