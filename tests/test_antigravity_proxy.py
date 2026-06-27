@@ -767,7 +767,27 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
                         "content": {"parts": "hello"},
                         "finish_reason": "MAX_TOKENS",
                         "safety_ratings": [{"category": "HARM_CATEGORY_HARASSMENT", "probability": "LOW"}],
-                        "grounding_metadata": {"search_entry_point": {"rendered_content": "x"}},
+                        "citation_metadata": {
+                            "citation_sources": [{"start_index": 0, "end_index": 5, "uri": "https://example.test"}],
+                        },
+                        "grounding_metadata": {
+                            "search_entry_point": {"rendered_content": "x", "sdk_blob": "blob"},
+                            "web_search_queries": ["atlas"],
+                            "image_search_queries": ["atlas image"],
+                            "google_maps_widget_context_token": "maps-token",
+                            "retrieval_metadata": {"google_search_dynamic_retrieval_score": 0.42},
+                        },
+                        "url_context_metadata": {
+                            "url_metadata": [{
+                                "retrieved_url": "https://example.test",
+                                "url_retrieval_status": "URL_RETRIEVAL_STATUS_SUCCESS",
+                            }],
+                        },
+                        "logprobs_result": {
+                            "log_probability_sum": -1.5,
+                            "top_candidates": [{"candidates": [{"token": "hello", "log_probability": -0.1}]}],
+                            "chosen_candidates": [{"token": "hello", "log_probability": -0.1}],
+                        },
                         "avg_logprobs": -0.2,
                     }],
                     "usage_metadata": {
@@ -801,6 +821,17 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
     assert "finish_reason" not in body["candidates"][0]
     assert body["candidates"][0]["safetyRatings"][0]["probability"] == "LOW"
     assert body["candidates"][0]["groundingMetadata"]["searchEntryPoint"]["renderedContent"] == "x"
+    assert body["candidates"][0]["groundingMetadata"]["searchEntryPoint"]["sdkBlob"] == "blob"
+    assert body["candidates"][0]["groundingMetadata"]["webSearchQueries"] == ["atlas"]
+    assert body["candidates"][0]["groundingMetadata"]["imageSearchQueries"] == ["atlas image"]
+    assert body["candidates"][0]["groundingMetadata"]["googleMapsWidgetContextToken"] == "maps-token"
+    assert body["candidates"][0]["groundingMetadata"]["retrievalMetadata"]["googleSearchDynamicRetrievalScore"] == 0.42
+    assert body["candidates"][0]["citationMetadata"]["citationSources"][0]["startIndex"] == 0
+    assert body["candidates"][0]["citationMetadata"]["citationSources"][0]["endIndex"] == 5
+    assert body["candidates"][0]["urlContextMetadata"]["urlMetadata"][0]["retrievedUrl"] == "https://example.test"
+    assert body["candidates"][0]["urlContextMetadata"]["urlMetadata"][0]["urlRetrievalStatus"] == "URL_RETRIEVAL_STATUS_SUCCESS"
+    assert body["candidates"][0]["logprobsResult"]["logProbabilitySum"] == -1.5
+    assert body["candidates"][0]["logprobsResult"]["topCandidates"][0]["candidates"][0]["logProbability"] == -0.1
     assert body["candidates"][0]["avgLogprobs"] == -0.2
     assert body["usageMetadata"]["promptTokenCount"] == 4
     assert body["usageMetadata"]["candidatesTokenCount"] == 2

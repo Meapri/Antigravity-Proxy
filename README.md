@@ -744,6 +744,9 @@ Content parts preserve SDK-style aliases such as `function_call`,
 `thought_signature` as canonical Gemini REST fields. Latest Part fields such
 as `tool_call`, `tool_response`, `tool_type`, `part_metadata`, and
 `function_response.will_continue` are also normalized.
+Generated responses canonicalize common SDK/upstream snake_case metadata aliases
+for `promptFeedback`, `citationMetadata`, `groundingMetadata`,
+`urlContextMetadata`, `logprobsResult`, and `modelStatus`.
 String `stopSequences` and `responseModalities` values are normalized to the
 Gemini REST list form. Numeric and boolean generation config values such as
 `maxOutputTokens`, `temperature`, `topK`, and `responseLogprobs` are coerced

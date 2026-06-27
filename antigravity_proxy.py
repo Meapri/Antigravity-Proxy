@@ -1724,6 +1724,7 @@ def _gemini_normalize_candidate(candidate: dict[str, Any], index: int) -> dict[s
         "safety_ratings": "safetyRatings",
         "citation_metadata": "citationMetadata",
         "grounding_metadata": "groundingMetadata",
+        "url_context_metadata": "urlContextMetadata",
         "avg_logprobs": "avgLogprobs",
         "logprobs_result": "logprobsResult",
         "token_count": "tokenCount",
@@ -1746,7 +1747,7 @@ def _gemini_normalize_candidate(candidate: dict[str, Any], index: int) -> dict[s
         else:
             content["parts"] = [_gemini_content_part(part) for part in parts]
         out["content"] = content
-    for key in ("safetyRatings", "citationMetadata", "groundingMetadata", "logprobsResult"):
+    for key in ("safetyRatings", "citationMetadata", "groundingMetadata", "urlContextMetadata", "logprobsResult"):
         if key in out:
             out[key] = _gemini_normalize_response_object(out[key])
     return out
@@ -1766,11 +1767,29 @@ def _gemini_normalize_response_object(value: Any) -> Any:
         "url_context_metadata": "urlContextMetadata",
         "search_entry_point": "searchEntryPoint",
         "rendered_content": "renderedContent",
+        "sdk_blob": "sdkBlob",
         "grounding_chunks": "groundingChunks",
         "grounding_supports": "groundingSupports",
         "web_search_queries": "webSearchQueries",
+        "image_search_queries": "imageSearchQueries",
+        "google_maps_widget_context_token": "googleMapsWidgetContextToken",
         "retrieval_metadata": "retrievalMetadata",
         "google_search_dynamic_retrieval_score": "googleSearchDynamicRetrievalScore",
+        "citation_sources": "citationSources",
+        "start_index": "startIndex",
+        "end_index": "endIndex",
+        "url_metadata": "urlMetadata",
+        "retrieved_url": "retrievedUrl",
+        "url_retrieval_status": "urlRetrievalStatus",
+        "log_probability_sum": "logProbabilitySum",
+        "log_probability": "logProbability",
+        "top_candidates": "topCandidates",
+        "chosen_candidates": "chosenCandidates",
+        "block_reason": "blockReason",
+        "block_reason_message": "blockReasonMessage",
+        "model_status": "modelStatus",
+        "model_stage": "modelStage",
+        "retirement_time": "retirementTime",
         "token_count": "tokenCount",
     }
     out: dict[str, Any] = {}
