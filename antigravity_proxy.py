@@ -5934,6 +5934,8 @@ def _websocket_api_key_valid(websocket: WebSocket) -> bool:
 
 
 def _is_gemini_http_path(path: str) -> bool:
+    if path.startswith(("/generativelanguage.googleapis.com/v1beta/", "/generativelanguage.googleapis.com/v1/")):
+        return True
     if path.startswith(("/v1beta/", "/upload/v1beta/", "/upload/v1/")):
         return True
     if not path.startswith("/v1/"):
@@ -5956,6 +5958,14 @@ def _is_gemini_http_path(path: str) -> bool:
 
 
 def _gemini_stable_alias_path(path: str) -> str:
+    for prefix, target in (
+        ("/generativelanguage.googleapis.com/v1beta", "/v1beta"),
+        ("/generativelanguage.googleapis.com/v1", "/v1"),
+    ):
+        if path == prefix:
+            return target
+        if path.startswith(prefix + "/"):
+            return target + path[len(prefix):]
     if path.startswith("/upload/v1/files") or path.startswith("/upload/v1/fileSearchStores"):
         return path
     if path.startswith("/upload/v1/"):

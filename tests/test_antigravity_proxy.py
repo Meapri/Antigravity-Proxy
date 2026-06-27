@@ -554,6 +554,43 @@ def test_gemini_auth_accepts_google_api_key_styles(monkeypatch):
     assert rejected.json()["error"]["details"][0]["@type"] == "type.googleapis.com/google.rpc.ErrorInfo"
 
 
+def test_gemini_google_host_prefixed_gateway_paths(monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_PROXY_API_KEY", "secret")
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            seen["model"] = model
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "prefixed ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    listed = client.get(
+        "/generativelanguage.googleapis.com/v1beta/models",
+        headers={"x-goog-api-key": "secret"},
+    )
+    fetched = client.get(
+        "/generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-agent",
+        headers={"x-goog-api-key": "secret"},
+    )
+    generated = client.post(
+        "/generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-agent:generateContent",
+        headers={"x-goog-api-key": "secret"},
+        json={"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
+    )
+
+    assert listed.status_code == 200
+    assert "models" in listed.json()
+    assert fetched.status_code == 200
+    assert fetched.json()["name"] == "models/gemini-3-flash-agent"
+    assert generated.status_code == 200
+    assert generated.json()["candidates"][0]["content"]["parts"][0]["text"] == "prefixed ok"
+    assert seen["model"] == "gemini-3-flash-agent"
+    assert seen["request"]["contents"][0]["parts"][0]["text"] == "hi"
+
+
 def test_gemini_unmatched_routes_use_gemini_error_shape():
     client = TestClient(proxy.app)
 

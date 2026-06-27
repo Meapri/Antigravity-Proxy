@@ -323,7 +323,7 @@ print(response.output_text)
 ## Gemini API Compatibility
 
 The proxy also exposes a Gemini REST-compatible surface for clients that can
-use a custom Gemini base URL, such as a Hermes Gemini provider:
+use a custom Gemini base URL:
 
 ```text
 http://127.0.0.1:8765/v1beta
@@ -333,6 +333,22 @@ Remote Tailscale example:
 
 ```text
 http://your-host.ts.net:8765/v1beta
+```
+
+Some clients, including Hermes Desktop's Gemini provider, only enable their
+native Gemini transport when the configured Base URL contains
+`generativelanguage.googleapis.com`. For those clients, use the update-safe
+gateway prefix below. The proxy strips that prefix internally and serves the
+same `/v1beta` Gemini REST surface:
+
+```text
+http://127.0.0.1:8765/generativelanguage.googleapis.com/v1beta
+```
+
+Remote Tailscale Hermes example:
+
+```text
+http://your-host.ts.net:8765/generativelanguage.googleapis.com/v1beta
 ```
 
 Gemini stable-version aliases are also accepted for Gemini-specific routes,
@@ -1223,7 +1239,7 @@ providers:
 
 If `ANTIGRAVITY_PROXY_API_KEY` is set, use that value as `api_key`.
 
-For a Hermes Gemini provider with a custom Base URL field, use:
+For a generic Gemini-compatible client with a custom Base URL field, use:
 
 ```text
 http://127.0.0.1:8765/v1beta
@@ -1235,16 +1251,30 @@ or your remote proxy host:
 http://your-host.ts.net:8765/v1beta
 ```
 
+For Hermes Desktop's Gemini provider, use the host-prefixed proxy URL below.
+Hermes uses the `generativelanguage.googleapis.com` substring to select its
+native Gemini transport; the proxy strips the prefix before routing:
+
+```text
+http://127.0.0.1:8765/generativelanguage.googleapis.com/v1beta
+```
+
+Remote Tailscale Hermes example:
+
+```text
+http://your-host.ts.net:8765/generativelanguage.googleapis.com/v1beta
+```
+
 If Hermes shows the default Gemini Base URL
-`https://generativelanguage.googleapis.com/v1beta`, replace that value with the
-proxy URL. Do not leave the Google-hosted URL there unless you want Hermes to
-call Google's Gemini API directly.
+`https://generativelanguage.googleapis.com/v1beta`, replace that whole value
+with the prefixed proxy URL above. Do not leave the Google-hosted URL there
+unless you want Hermes to call Google's Gemini API directly.
 
 | Hermes field | Value |
 | --- | --- |
 | Provider type | Gemini |
-| Base URL | `http://127.0.0.1:8765/v1beta` |
-| Tailscale Base URL | `http://<tailscale-host>.ts.net:8765/v1beta` |
+| Base URL | `http://127.0.0.1:8765/generativelanguage.googleapis.com/v1beta` |
+| Tailscale Base URL | `http://<tailscale-host>.ts.net:8765/generativelanguage.googleapis.com/v1beta` |
 | API key | `ANTIGRAVITY_PROXY_API_KEY`, or any placeholder if proxy auth is disabled |
 | Model | `gemini-3-flash-agent` |
 
