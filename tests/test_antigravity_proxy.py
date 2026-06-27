@@ -3053,6 +3053,7 @@ def test_google_genai_sdk_file_search_store_import_file_response(tmp_path, monke
 
 def test_google_genai_sdk_vertex_tuning_jobs(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_TUNING_JOBS_DIR", str(tmp_path / "tuning_jobs"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_TUNED_MODELS_DIR", str(tmp_path / "tuned_models"))
     app_client = TestClient(proxy.app)
     sdk_http = httpx.Client(transport=_FastApiTransport(app_client))
     sdk = genai.Client(
@@ -3076,6 +3077,12 @@ def test_google_genai_sdk_vertex_tuning_jobs(tmp_path, monkeypatch):
     fetched = sdk.tunings.get(name=job.name)
     listed = list(sdk.tunings.list(config={"page_size": 10}))
     cancelled = sdk.tunings.cancel(name=job.name)
+    tuned_model = sdk.models.get(model=job.tuned_model.model)
+    updated_tuned_model = sdk.models.update(
+        model=job.tuned_model.model,
+        config={"display_name": "Updated vertex tuned model"},
+    )
+    deleted_tuned_model = sdk.models.delete(model=job.tuned_model.model)
 
     assert job.name.startswith("projects/local-project/locations/global/tuningJobs/")
     assert job.state == types.JobState.JOB_STATE_SUCCEEDED
@@ -3087,6 +3094,12 @@ def test_google_genai_sdk_vertex_tuning_jobs(tmp_path, monkeypatch):
     assert fetched.name == job.name
     assert {item.name for item in listed} == {job.name}
     assert cancelled.sdk_http_response.headers["content-type"].startswith("application/json")
+    assert tuned_model.name == job.tuned_model.model
+    assert tuned_model.display_name == "sdk tuning job"
+    assert updated_tuned_model.name == job.tuned_model.model
+    assert updated_tuned_model.display_name == "Updated vertex tuned model"
+    assert deleted_tuned_model.sdk_http_response.headers["content-type"].startswith("application/json")
+    assert app_client.get(f"/v1beta/{job.tuned_model.model}").status_code == 404
 
 
 def test_google_genai_sdk_models_update_delete_tuned_model(tmp_path, monkeypatch):

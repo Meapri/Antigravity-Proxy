@@ -6360,6 +6360,8 @@ def _gemini_tuned_name(name: str) -> str:
         if key.startswith(prefix):
             key = key[len(prefix):]
             break
+    if re.fullmatch(r"projects/[^/]+/locations/[^/]+/models/.+", key):
+        return key
     if key.startswith("tunedModels/"):
         return key
     return "tunedModels/" + key
@@ -10098,6 +10100,40 @@ async def gemini_delete_tuned_model(tuned_model_id: str):
     return JSONResponse({})
 
 
+def _gemini_vertex_tuned_model_name(project: str, location: str, model_id: str) -> str:
+    return f"projects/{project}/locations/{location}/models/{model_id.strip('/')}"
+
+
+@app.get("/v1/projects/{project}/locations/{location}/models/{model_id:path}")
+@app.get("/v1beta/projects/{project}/locations/{location}/models/{model_id:path}")
+async def gemini_get_vertex_tuned_model(project: str, location: str, model_id: str):
+    name = _gemini_vertex_tuned_model_name(project, location, model_id)
+    meta = _gemini_get_tuned_meta(name)
+    if not meta:
+        return _gemini_error_response(f"Model '{name}' not found.", status_code=404, status="NOT_FOUND")
+    return _gemini_tuned_resource(meta)
+
+
+@app.patch("/v1/projects/{project}/locations/{location}/models/{model_id:path}")
+@app.patch("/v1beta/projects/{project}/locations/{location}/models/{model_id:path}")
+async def gemini_patch_vertex_tuned_model(
+    project: str,
+    location: str,
+    model_id: str,
+    request: Request,
+    updateMask: str | None = None,
+):
+    name = _gemini_vertex_tuned_model_name(project, location, model_id)
+    return await gemini_patch_tuned_model(name, request, updateMask=updateMask)
+
+
+@app.delete("/v1/projects/{project}/locations/{location}/models/{model_id:path}")
+@app.delete("/v1beta/projects/{project}/locations/{location}/models/{model_id:path}")
+async def gemini_delete_vertex_tuned_model(project: str, location: str, model_id: str):
+    name = _gemini_vertex_tuned_model_name(project, location, model_id)
+    return await gemini_delete_tuned_model(name)
+
+
 @app.post("/v1/tunedModels/tunedModels/{tuned_model_id}:cancel")
 @app.post("/v1beta/tunedModels/tunedModels/{tuned_model_id}:cancel")
 @app.post("/v1/tunedModels/{tuned_model_id}:cancel")
@@ -11533,6 +11569,26 @@ def _gemini_create_vertex_tuning_job_resource(
     ):
         if key in body and body[key] is not None:
             job[key] = body[key]
+    tuned_index = _gemini_load_tuned_index()
+    tuned_index.setdefault(tuned_model_name, {
+        "name": tuned_model_name,
+        "displayName": job["tunedModelDisplayName"],
+        "description": job.get("description") or "",
+        "baseModel": _gemini_model_name(model),
+        "state": "ACTIVE",
+        "createTime": now,
+        "updateTime": now,
+        "tuningTask": {
+            "startTime": now,
+            "completeTime": now,
+            "snapshots": [],
+        },
+        "trainingData": body.get("supervisedTuningSpec", {}).get("trainingDatasetUri")
+        if isinstance(body.get("supervisedTuningSpec"), dict)
+        else None,
+        "permissions": {},
+    })
+    _gemini_save_tuned_index(tuned_index)
     return _gemini_store_tuning_job(job)
 
 

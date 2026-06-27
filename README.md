@@ -1113,6 +1113,10 @@ Tuned models and permissions:
 - Tuned model routes accept both short IDs such as `my_tuned` and full resource
   names embedded in the path, such as
   `/v1beta/tunedModels/tunedModels/my_tuned:generateContent`.
+- Vertex `tuningJobs.create` also registers the returned
+  `projects/{project}/locations/{location}/models/{model}` resource locally, so
+  `google-genai` can call `models.get`, `models.update`, and `models.delete`
+  on `job.tuned_model.model`.
 - `tunedModels.patch` honors `updateMask` / `update_mask` from either the query
   string or SDK wrapper body for mutable metadata fields such as `displayName`,
   `description`, `baseModel`, `tuningTask`, and `readerProjectNumbers`.
