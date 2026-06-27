@@ -1313,6 +1313,7 @@ def test_gemini_generate_content_normalizes_safety_and_tool_config_shortcuts(mon
         "tool_config": {
             "mode": "any",
             "allowed_function_names": "lookup",
+            "include_server_side_tool_invocations": "true",
         },
     })
 
@@ -1325,7 +1326,8 @@ def test_gemini_generate_content_normalizes_safety_and_tool_config_shortcuts(mon
         "functionCallingConfig": {
             "mode": "ANY",
             "allowedFunctionNames": ["lookup"],
-        }
+        },
+        "includeServerSideToolInvocations": True,
     }
 
     shortcut = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={

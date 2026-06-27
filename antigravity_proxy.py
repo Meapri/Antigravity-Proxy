@@ -379,6 +379,7 @@ _GEMINI_KEY_ALIASES = {
     "generation_config": "generationConfig",
     "safety_settings": "safetySettings",
     "tool_config": "toolConfig",
+    "include_server_side_tool_invocations": "includeServerSideToolInvocations",
     "cached_content": "cachedContent",
     "processing_options": "processingOptions",
     "processingOptions": "processingOptions",
@@ -1128,13 +1129,15 @@ def _gemini_normalize_safety_settings(value: Any) -> list[dict[str, Any]]:
 def _gemini_normalize_tool_config(value: Any) -> Any:
     if not isinstance(value, dict):
         return value
-    out = dict(value)
+    out = _gemini_normalize_request(value)
     if "functionCallingConfig" not in out:
         fc_keys = {"mode", "allowedFunctionNames"}
         if any(key in out for key in fc_keys):
             out = {"functionCallingConfig": {key: out.pop(key) for key in list(out.keys()) if key in fc_keys}, **out}
     if isinstance(out.get("functionCallingConfig"), dict):
         out["functionCallingConfig"] = _gemini_normalize_function_calling_config(out["functionCallingConfig"])
+    if "includeServerSideToolInvocations" in out:
+        out["includeServerSideToolInvocations"] = _gemini_bool_value(out["includeServerSideToolInvocations"])
     return out
 
 

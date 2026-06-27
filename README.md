@@ -681,6 +681,8 @@ hosted tools. `toolConfig.functionCallingConfig.mode` and
 calling mode aliases such as `required`, `forced`, and `force` are treated as
 Gemini `ANY`, and OpenAI-style `tool_choice` / `toolChoice` on Gemini requests
 is folded into `toolConfig.functionCallingConfig` for custom function tools.
+`toolConfig.includeServerSideToolInvocations` and the SDK snake_case alias are
+accepted and coerced to a boolean.
 `tools` may be a single object or a list, and top-level
 `functionDeclarations` / `function_declarations` and singular
 `functionDeclaration` / `function_declaration` are wrapped into Gemini tool
