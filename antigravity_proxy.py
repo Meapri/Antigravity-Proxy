@@ -2658,6 +2658,11 @@ def _gemini_content_item_to_part(item: Any) -> dict[str, Any] | None:
     item_type = str(normalized.get("type") or "").strip()
     if item_type in {"text", "input_text", "output_text"} and normalized.get("text") is not None:
         return {"text": str(normalized["text"])}
+    if item_type == "function_result":
+        name = normalized.get("name") or normalized.get("functionName") or normalized.get("function_name")
+        result = normalized.get("result", normalized.get("output", normalized.get("response")))
+        if name:
+            return {"functionResponse": {"name": str(name), "response": result if isinstance(result, dict) else {"result": result}}}
     inline_part = _gemini_inline_data_part(normalized)
     if inline_part:
         return inline_part
@@ -2769,6 +2774,87 @@ def _gemini_interaction_contents(body: dict[str, Any]) -> list[dict[str, Any]]:
     if not contents:
         raise HTTPException(status_code=400, detail="Interaction input did not contain any supported content.")
     return contents
+
+
+def _gemini_function_name_for_call(previous: dict[str, Any] | None, call_id: str) -> str | None:
+    if not call_id or not isinstance(previous, dict):
+        return None
+    for step in previous.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        if step.get("type") != "function_call":
+            continue
+        if str(step.get("id") or step.get("call_id") or "") == call_id:
+            name = step.get("name")
+            return str(name) if name else None
+    for action_key in ("requiredAction", "required_action"):
+        action = previous.get(action_key)
+        if not isinstance(action, dict):
+            continue
+        calls = action.get("toolCalls") or action.get("tool_calls") or []
+        for call in calls:
+            if isinstance(call, dict) and str(call.get("id") or call.get("call_id") or "") == call_id:
+                name = call.get("name")
+                return str(name) if name else None
+    return None
+
+
+def _gemini_interaction_function_result_content(item: dict[str, Any], previous: dict[str, Any] | None) -> dict[str, Any] | None:
+    normalized = _gemini_normalize_request(item)
+    if str(normalized.get("type") or "").strip() != "function_result":
+        return None
+    call_id = str(normalized.get("callId") or normalized.get("call_id") or normalized.get("id") or "")
+    name = (
+        normalized.get("name")
+        or normalized.get("functionName")
+        or normalized.get("function_name")
+        or _gemini_function_name_for_call(previous, call_id)
+        or call_id
+    )
+    result = normalized.get("result", normalized.get("output", normalized.get("response")))
+    response = result if isinstance(result, dict) else {"result": result}
+    step = {
+        "type": "function_result",
+        "call_id": call_id,
+        "name": str(name),
+        "result": result,
+    }
+    if "isError" in normalized:
+        step["is_error"] = _gemini_bool_value(normalized.get("isError"))
+    content = {"role": "user", "parts": [{"functionResponse": {"name": str(name), "response": response}}]}
+    content["_interactionStep"] = step
+    return content
+
+
+def _gemini_interaction_contents_with_previous(body: dict[str, Any], previous: dict[str, Any] | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    source = body.get("contents")
+    if source is None:
+        source = body.get("messages")
+    if source is None:
+        source = body.get("input")
+    if isinstance(source, dict):
+        source = [source]
+    if isinstance(source, str) or source is None:
+        return _gemini_interaction_contents(body), []
+    if not isinstance(source, list):
+        return _gemini_interaction_contents(body), []
+    contents: list[dict[str, Any]] = []
+    result_steps: list[dict[str, Any]] = []
+    for item in source:
+        if isinstance(item, dict):
+            function_result = _gemini_interaction_function_result_content(item, previous)
+            if function_result is not None:
+                step = function_result.pop("_interactionStep", None)
+                if isinstance(step, dict):
+                    result_steps.append(step)
+                contents.append(function_result)
+                continue
+        content = _gemini_message_to_content(item)
+        if content is not None:
+            contents.append(content)
+    if not contents:
+        raise HTTPException(status_code=400, detail="Interaction input did not contain any supported content.")
+    return contents, result_steps
 
 
 def _gemini_interaction_body(body: Any) -> dict[str, Any]:
@@ -4685,21 +4771,48 @@ def _gemini_registered_file_hash(file_meta: dict[str, Any], uri: str) -> str:
     return base64.b64encode(hashlib.sha256(seed).digest()).decode("ascii")
 
 
-def _gemini_store_file(data: bytes, *, mime_type: str | None = None, display_name: str | None = None) -> dict[str, Any]:
+def _gemini_uploaded_file_id(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().strip("/")
+    for prefix in ("v1beta/", "v1/"):
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+            break
+    if text.startswith("files/"):
+        text = text.split("/", 1)[1]
+    if not text:
+        return None
+    if "/" in text or "\\" in text or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", text):
+        raise HTTPException(status_code=400, detail="File name must be a files/{id} resource with a safe id.")
+    return text
+
+
+def _gemini_store_file(
+    data: bytes,
+    *,
+    mime_type: str | None = None,
+    display_name: str | None = None,
+    name: str | None = None,
+) -> dict[str, Any]:
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
     root = _gemini_files_root()
     root.mkdir(parents=True, exist_ok=True)
-    file_id = "file_" + uuid.uuid4().hex
+    file_id = _gemini_uploaded_file_id(name) or ("file_" + uuid.uuid4().hex)
     inferred = mimetypes.guess_type(display_name or "")[0] if display_name else None
     mime = (mime_type or inferred or "application/octet-stream").split(";", 1)[0].strip()
     blob_path = root / f"{file_id}.bin"
+    resource_name = f"files/{file_id}"
+    index = _gemini_load_files_index()
+    if resource_name in index:
+        raise HTTPException(status_code=409, detail=f"File '{resource_name}' already exists.")
     blob_path.write_bytes(data)
     digest = base64.b64encode(hashlib.sha256(data).digest()).decode("ascii")
     now = int(time.time())
     iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
     meta = {
-        "name": f"files/{file_id}",
+        "name": resource_name,
         "displayName": display_name or file_id,
         "mimeType": mime,
         "sizeBytes": len(data),
@@ -4715,7 +4828,6 @@ def _gemini_store_file(data: bytes, *, mime_type: str | None = None, display_nam
         "source": "UPLOADED",
         "path": str(blob_path),
     }
-    index = _gemini_load_files_index()
     index[meta["name"]] = meta
     _gemini_save_files_index(index)
     return _gemini_file_resource(meta)
@@ -4942,7 +5054,12 @@ async def _gemini_upload_file_from_request(request: Request) -> dict[str, Any]:
     if file_meta:
         display_name = file_meta.get("displayName") or file_meta.get("display_name") or display_name
         mime_type = file_meta.get("mimeType") or file_meta.get("mime_type") or mime_type
-    return _gemini_store_file(media, mime_type=mime_type or content_type, display_name=display_name)
+    return _gemini_store_file(
+        media,
+        mime_type=mime_type or content_type,
+        display_name=display_name,
+        name=file_meta.get("name") if isinstance(file_meta, dict) else None,
+    )
 
 
 def _is_gemini_metadata_file_create(request: Request) -> bool:
@@ -4980,6 +5097,7 @@ async def _gemini_start_resumable_upload(request: Request, upload_version: str |
     session_id = "upload_" + uuid.uuid4().hex
     sessions = _gemini_load_upload_sessions()
     sessions[session_id] = {
+        "name": file_meta.get("name"),
         "displayName": file_meta.get("displayName") or file_meta.get("display_name") or request.query_params.get("displayName"),
         "mimeType": (
             request.headers.get("x-goog-upload-header-content-type")
@@ -5060,6 +5178,7 @@ async def _gemini_finish_resumable_upload(session_id: str, request: Request) -> 
         data,
         mime_type=session.get("mimeType") or request.headers.get("content-type"),
         display_name=session.get("displayName"),
+        name=session.get("name"),
     )
     sessions.pop(session_id, None)
     _gemini_save_upload_sessions(sessions)
@@ -5114,6 +5233,7 @@ async def _gemini_resumable_upload_command(session_id: str, request: Request) ->
             combined,
             mime_type=session.get("mimeType") or request.headers.get("content-type"),
             display_name=session.get("displayName"),
+            name=session.get("name"),
         )
         sessions.pop(session_id, None)
         _gemini_save_upload_sessions(sessions)
@@ -12046,6 +12166,49 @@ def _gemini_interaction_model_output_step(text: str, response: dict[str, Any] | 
     }
 
 
+def _gemini_interaction_function_call_steps(response: dict[str, Any]) -> list[dict[str, Any]]:
+    steps: list[dict[str, Any]] = []
+    candidates = response.get("candidates") if isinstance(response, dict) else None
+    if not isinstance(candidates, list):
+        return steps
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        content = candidate.get("content")
+        if not isinstance(content, dict):
+            continue
+        parts = content.get("parts")
+        if not isinstance(parts, list):
+            continue
+        for part in parts:
+            if not isinstance(part, dict) or not isinstance(part.get("functionCall"), dict):
+                continue
+            function_call = dict(part["functionCall"])
+            name = str(function_call.get("name") or "function")
+            args = function_call.get("args")
+            if args is None:
+                args = function_call.get("arguments") or {}
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args) if args.strip() else {}
+                except json.JSONDecodeError:
+                    args = {"value": args}
+            if not isinstance(args, dict):
+                args = {"value": args}
+            call_id = str(function_call.get("id") or function_call.get("callId") or ("call_" + uuid.uuid4().hex))
+            function_call.setdefault("id", call_id)
+            function_call["args"] = args
+            part["functionCall"] = function_call
+            steps.append({
+                "type": "function_call",
+                "id": call_id,
+                "name": name,
+                "arguments": args,
+                "functionCall": function_call,
+            })
+    return steps
+
+
 def _gemini_interaction_text_from_contents(contents: list[dict[str, Any]]) -> str:
     texts: list[str] = []
     for content in contents:
@@ -12162,15 +12325,17 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
     body = _gemini_merge_agent_into_interaction(body)
     model_name = body.get("model") or body.get("modelName") or body.get("model_name") or "models/gemini-3-flash-agent"
     model = _resolve_gemini_model(str(model_name))
-    contents = _gemini_interaction_contents(body)
 
     history: list[dict[str, Any]] = []
+    previous_interaction: dict[str, Any] | None = None
     previous_id = body.get("previousInteractionId") or body.get("previous_interaction_id")
     if previous_id:
-        previous = _gemini_get_interaction(str(previous_id))
-        if previous is None:
+        previous_interaction = _gemini_get_interaction(str(previous_id))
+        if previous_interaction is None:
             raise HTTPException(status_code=404, detail=f"Interaction '{previous_id}' not found.")
-        history = list(previous.get("history") or [])
+        history = list(previous_interaction.get("history") or [])
+
+    contents, function_result_steps = _gemini_interaction_contents_with_previous(body, previous_interaction)
 
     request_body: dict[str, Any] = {"contents": history + contents}
     for key in (
@@ -12334,6 +12499,46 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
         model_content = candidates[0]["content"]
     new_history = request_body["contents"] + ([model_content] if model_content else [])
     usage = _gemini_interaction_usage(response.get("usageMetadata") or response.get("usage_metadata") or {})
+    function_call_steps = _gemini_interaction_function_call_steps(response)
+    if function_call_steps:
+        interaction = {
+            "name": interaction_name,
+            "id": interaction_name.rsplit("/", 1)[-1],
+            "model": _gemini_model_name(model),
+            "agent": body.get("agent"),
+            "status": "requires_action",
+            "created": now,
+            "updated": now,
+            "createTime": now,
+            "updateTime": now,
+            "previousInteractionId": previous_id or None,
+            "input": body.get("input", body.get("messages", body.get("contents"))),
+            "request": request_body,
+            "output": response,
+            "outputText": "",
+            "history": new_history,
+            "steps": function_result_steps + function_call_steps,
+            "usage": usage,
+            "usageMetadata": response.get("usageMetadata") or response.get("usage_metadata") or usage,
+            "requiredAction": {
+                "type": "submit_function_result",
+                "toolCalls": [
+                    {"id": step["id"], "name": step["name"], "arguments": step["arguments"]}
+                    for step in function_call_steps
+                ],
+            },
+            "required_action": {
+                "type": "submit_function_result",
+                "tool_calls": [
+                    {"id": step["id"], "name": step["name"], "arguments": step["arguments"]}
+                    for step in function_call_steps
+                ],
+            },
+        }
+        if body.get("store", True) is not False:
+            _gemini_store_interaction(interaction)
+            await _gemini_emit_webhook_event("interaction.requires_action", interaction)
+        return _gemini_interaction_resource(interaction)
     interaction = {
         "name": interaction_name,
         "id": interaction_name.rsplit("/", 1)[-1],
@@ -12349,7 +12554,7 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
         "output": response,
         "outputText": text,
         "history": new_history,
-        "steps": [_gemini_interaction_model_output_step(text, response)],
+        "steps": function_result_steps + [_gemini_interaction_model_output_step(text, response)],
         "usage": usage,
         "usageMetadata": response.get("usageMetadata") or response.get("usage_metadata") or usage,
     }
@@ -12359,6 +12564,28 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
     return _gemini_interaction_resource(interaction)
 
 
+def _gemini_interaction_stream_response(interaction: dict[str, Any]) -> StreamingResponse:
+    async def _gen():
+        created = dict(interaction)
+        created.pop("outputText", None)
+        yield f"data: {json.dumps({'event_type': 'interaction.created', 'event_id': 'event_0', 'interaction': created}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'event_type': 'step.start', 'event_id': 'event_1', 'index': 0, 'step': {'type': 'model_output'}}, ensure_ascii=False)}\n\n"
+        if interaction.get("outputText"):
+            delta = {"type": "text", "text": interaction["outputText"]}
+            yield f"data: {json.dumps({'event_type': 'step.delta', 'event_id': 'event_2', 'index': 0, 'delta': delta}, ensure_ascii=False)}\n\n"
+        for step in interaction.get("steps") or []:
+            if isinstance(step, dict):
+                yield f"data: {json.dumps({'event_type': 'step.delta', 'event_id': 'event_3', 'index': 0, 'delta': step}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'event_type': 'step.stop', 'event_id': 'event_4', 'index': 0}, ensure_ascii=False)}\n\n"
+        generated_file = interaction.get("generatedFile")
+        if generated_file:
+            yield f"data: {json.dumps({'event_type': 'step.delta', 'event_id': 'event_5', 'index': 1, 'delta': {'type': 'generated_file', 'generated_file': generated_file}}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'event_type': 'interaction.completed', 'event_id': 'event_6', 'interaction': interaction}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
 @app.post("/v1/interactions")
 @app.post("/v1beta/interactions")
 async def gemini_create_interaction(request: Request):
@@ -12366,25 +12593,7 @@ async def gemini_create_interaction(request: Request):
         body = _gemini_interaction_body(await request.json())
         interaction = await _gemini_create_interaction(body)
         if isinstance(body, dict) and body.get("stream"):
-            async def _gen():
-                created = dict(interaction)
-                created.pop("outputText", None)
-                yield f"data: {json.dumps({'event_type': 'interaction.create', 'event_id': 'event_0', 'interaction': created}, ensure_ascii=False)}\n\n"
-                yield f"data: {json.dumps({'event_type': 'step.start', 'event_id': 'event_1', 'index': 0, 'step': {'type': 'model_output'}}, ensure_ascii=False)}\n\n"
-                if interaction.get("outputText"):
-                    delta = {"type": "text", "text": interaction["outputText"]}
-                    yield f"data: {json.dumps({'event_type': 'step.delta', 'event_id': 'event_2', 'index': 0, 'delta': delta}, ensure_ascii=False)}\n\n"
-                for step in interaction.get("steps") or []:
-                    if isinstance(step, dict):
-                        yield f"data: {json.dumps({'event_type': 'step.delta', 'event_id': 'event_3', 'index': 0, 'delta': step}, ensure_ascii=False)}\n\n"
-                yield f"data: {json.dumps({'event_type': 'step.stop', 'event_id': 'event_4', 'index': 0}, ensure_ascii=False)}\n\n"
-                generated_file = interaction.get("generatedFile")
-                if generated_file:
-                    yield f"data: {json.dumps({'event_type': 'step.delta', 'event_id': 'event_5', 'index': 1, 'delta': {'type': 'generated_file', 'generated_file': generated_file}}, ensure_ascii=False)}\n\n"
-                yield f"data: {json.dumps({'event_type': 'interaction.completed', 'event_id': 'event_6', 'interaction': interaction}, ensure_ascii=False)}\n\n"
-                yield "data: [DONE]\n\n"
-
-            return StreamingResponse(_gen(), media_type="text/event-stream")
+            return _gemini_interaction_stream_response(interaction)
         return interaction
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
@@ -12424,10 +12633,12 @@ async def gemini_list_interactions(request: Request):
 
 @app.get("/v1/interactions/{interaction_id:path}")
 @app.get("/v1beta/interactions/{interaction_id:path}")
-async def gemini_get_interaction(interaction_id: str):
+async def gemini_get_interaction(interaction_id: str, request: Request):
     interaction = _gemini_get_interaction(interaction_id)
     if not interaction:
         return _gemini_error_response(f"Interaction '{interaction_id}' not found.", status_code=404, status="NOT_FOUND")
+    if _gemini_query_bool(request, "stream", "stream", default=False):
+        return _gemini_interaction_stream_response(interaction)
     return interaction
 
 
@@ -13299,7 +13510,7 @@ async def create_image(req: ImageGenerationRequest):
     """Generate an image via Antigravity (Gemini native image output).
 
     Returns OpenAI-compatible b64_json response that the chatbot adapter
-    saves to a temp file and sends to KakaoTalk.
+    saves to a temp file and returns it to downstream clients.
     """
     import base64
     import tempfile

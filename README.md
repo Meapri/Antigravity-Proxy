@@ -870,7 +870,8 @@ The upload endpoint also supports Gemini resumable upload starts through
 `/upload/v1beta/files`; this path is covered by a real `google-genai`
 `files.upload()` compatibility test. Upload metadata accepts both official
 `file` objects and SDK-style `config` wrappers such as
-`{"config": {"mimeType": "text/plain"}}`.
+`{"config": {"mimeType": "text/plain"}}`; `config.name` / `file.name` is
+preserved for uploaded files when supplied as a safe `files/{id}` resource.
 Uploaded local files include a Gemini-style `expirationTime` 48 hours after
 creation; metadata-only registered external files preserve an explicit
 `expirationTime` only when supplied.
@@ -1251,7 +1252,9 @@ Notes:
   `object/data/next_page_token` aliases while retaining their original
   resource-specific list fields.
 - Interactions streaming uses Gemini's `event_type` SSE discriminator with
-  `step.start`, `step.delta`, `step.stop`, and `interaction.completed` events.
+  `interaction.created`, `step.start`, `step.delta`, `step.stop`, and
+  `interaction.completed` events. Stored interactions can also be replayed as
+  SSE through `interactions.get(..., stream=True)` in `google-genai`.
 - Repeated slashes in Gemini SDK paths are normalized before routing, so
   collection-base clients that produce paths such as `/v1beta//interactions`
   are accepted without a redirect.
@@ -1343,8 +1346,11 @@ Notes:
 - Interaction responses include SDK-recognized `steps` with `model_output`
   content blocks. The proxy avoids non-standard step types in stored create
   responses so `google-genai` can parse the interaction without `UnknownStep`
-  fallbacks. Streaming emits `interaction.step.completed` events for step-aware
+  fallbacks. Streaming emits Gemini Interactions SSE events for step-aware
   clients.
+- Custom function calls returned by the model become `function_call` steps with
+  `status: requires_action`; follow-up `function_result` inputs are converted
+  back to Gemini `functionResponse` parts using the prior call id.
 - Interactions with `tools: [{"type":"computer_use","environment":"browser"}]`
   return `status: "requires_action"` with a Computer Use `functionCall` instead
   of forwarding the hosted tool to the Antigravity upstream.

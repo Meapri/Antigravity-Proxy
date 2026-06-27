@@ -2562,12 +2562,17 @@ def test_google_genai_sdk_developer_files_upload_register_delete_and_models_filt
         ),
     )
     upload_source = io.BytesIO(b"sdk file upload")
+    named_upload_source = io.BytesIO(b"sdk named file upload")
 
     filtered = app_client.get('/v1beta/models?filter=displayName:"3.5 Flash"')
     unmatched = app_client.get('/v1beta/models?filter=name:"not-a-model"')
     uploaded = sdk.files.upload(
         file=upload_source,
         config={"mime_type": "text/plain", "display_name": "sdk-upload.txt"},
+    )
+    named_uploaded = sdk.files.upload(
+        file=named_upload_source,
+        config={"name": "files/sdk-explicit-name", "mime_type": "text/plain", "display_name": "sdk-named.txt"},
     )
     downloaded_by_file = sdk.files.download(file=uploaded)
     downloaded_by_name = sdk.files.download(file=uploaded.name)
@@ -2589,6 +2594,8 @@ def test_google_genai_sdk_developer_files_upload_register_delete_and_models_filt
     assert uploaded.name.startswith("files/")
     assert uploaded.display_name == "sdk-upload.txt"
     assert uploaded.mime_type == "text/plain"
+    assert named_uploaded.name == "files/sdk-explicit-name"
+    assert named_uploaded.display_name == "sdk-named.txt"
     assert downloaded_by_file == b"sdk file upload"
     assert downloaded_by_name == b"sdk file upload"
     assert downloaded_by_download_uri == b"sdk file upload"
@@ -3732,7 +3739,7 @@ def test_gemini_interactions_create_previous_store_and_stream(tmp_path, monkeypa
         body = streamed.read().decode()
 
     assert streamed.status_code == 200
-    assert '"event_type": "interaction.create"' in body
+    assert '"event_type": "interaction.created"' in body
     assert '"event_type": "step.start"' in body
     assert '"event_type": "step.delta"' in body
     assert '"event_type": "step.stop"' in body
@@ -3768,6 +3775,7 @@ def test_google_genai_sdk_interactions_create_get_delete_with_double_slash_path(
 
     interaction = sdk.interactions.create(model="gemini-3-flash-agent", input="hello")
     fetched = sdk.interactions.get(interaction.id)
+    streamed_events = list(sdk.interactions.get(interaction.id, stream=True))
     deleted = sdk.interactions.delete(interaction.id)
 
     assert interaction.id.startswith("int_")
@@ -3777,6 +3785,15 @@ def test_google_genai_sdk_interactions_create_get_delete_with_double_slash_path(
     assert [step.type for step in interaction.steps] == ["model_output"]
     assert interaction.steps[0].content[0].text == "sdk interaction ok"
     assert fetched.id == interaction.id
+    assert [event.event_type for event in streamed_events] == [
+        "interaction.created",
+        "step.start",
+        "step.delta",
+        "step.delta",
+        "step.stop",
+        "interaction.completed",
+    ]
+    assert streamed_events[-1].interaction.id == interaction.id
     assert deleted is None
     assert app_client.get(f"/v1beta/interactions/{interaction.id}").status_code == 404
 
@@ -3837,6 +3854,57 @@ def test_gemini_agent_system_instruction_role_is_normalized(tmp_path, monkeypatc
     assert interaction.status_code == 200
     assert seen["request"]["systemInstruction"]["role"] == "user"
     assert seen["request"]["systemInstruction"]["parts"][0]["text"] == "agent system"
+
+
+def test_gemini_interactions_function_call_and_result_continuation(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", str(tmp_path / "interactions"))
+    seen = []
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen.append(request)
+            if len(seen) == 1:
+                return {
+                    "response": {
+                        "candidates": [{
+                            "content": {
+                                "role": "model",
+                                "parts": [{"functionCall": {"id": "call_lookup", "name": "lookup", "args": {"q": "weather"}}}],
+                            },
+                            "finishReason": "STOP",
+                        }],
+                        "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+                    }
+                }
+            return {"response": {"candidates": [{"content": {"role": "model", "parts": [{"text": "done"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    first = client.post("/v1beta/interactions", json={
+        "model": "gemini-3-flash-agent",
+        "input": "need lookup",
+        "tools": [{"type": "function", "name": "lookup", "parameters": {"type": "object"}}],
+    })
+    assert first.status_code == 200
+    first_body = first.json()
+    assert first_body["status"] == "requires_action"
+    assert first_body["steps"][0]["type"] == "function_call"
+    assert first_body["steps"][0]["id"] == "call_lookup"
+    assert first_body["steps"][0]["name"] == "lookup"
+    assert first_body["steps"][0]["arguments"] == {"q": "weather"}
+    assert first_body["requiredAction"]["type"] == "submit_function_result"
+
+    second = client.post("/v1beta/interactions", json={
+        "model": "gemini-3-flash-agent",
+        "previous_interaction_id": first_body["name"],
+        "input": [{"type": "function_result", "call_id": "call_lookup", "result": {"answer": "sunny"}}],
+    })
+    assert second.status_code == 200
+    assert second.json()["status"] == "completed"
+    assert second.json()["steps"][0]["type"] == "function_result"
+    last_part = seen[-1]["contents"][-1]["parts"][0]
+    assert last_part == {"functionResponse": {"name": "lookup", "response": {"answer": "sunny"}}}
 
 
 def test_gemini_interactions_native_computer_use_requires_action(tmp_path, monkeypatch):
@@ -3987,7 +4055,7 @@ def test_gemini_interactions_v1_aliases(tmp_path, monkeypatch):
         stream_body = streamed.read().decode()
 
     assert streamed.status_code == 200
-    assert '"event_type": "interaction.create"' in stream_body
+    assert '"event_type": "interaction.created"' in stream_body
     assert '"event_type": "step.start"' in stream_body
     assert '"event_type": "interaction.completed"' in stream_body
     assert "data: [DONE]" in stream_body
