@@ -466,6 +466,9 @@ def test_gemini_models_and_count_tokens():
     assert "generateAnswer" in first["supportedGenerationMethods"]
     assert "asyncBatchEmbedContent" in first["supportedGenerationMethods"]
     assert first["inputTokenLimit"] > 0
+    assert first["baseModelId"]
+    assert isinstance(first["thinking"], bool)
+    assert isinstance(first["maxTemperature"], float)
     assert "capabilities" in first
     paged = client.get("/v1beta/models?pageSize=1")
     next_page = client.get(f"/v1beta/models?pageSize=1&pageToken={paged.json()['nextPageToken']}")
@@ -485,10 +488,28 @@ def test_gemini_models_and_count_tokens():
     assert len(stable_snake.json()["models"]) == 1
     assert too_many.status_code == 200
     assert len(too_many.json()["models"]) <= 1000
+    stable_methods = stable_snake.json()["models"][0]["supportedGenerationMethods"]
+    assert stable_methods == [
+        "generateContent",
+        "streamGenerateContent",
+        "countTokens",
+        "embedContent",
+        "batchEmbedContents",
+        "asyncBatchEmbedContent",
+        "batchGenerateContent",
+    ]
+    assert "computeTokens" not in stable_methods
+    assert "generateText" not in stable_methods
+    assert "predict" not in stable_methods
 
     one = client.get("/v1beta/models/gemini-3-flash-agent")
+    stable_one = client.get("/v1/models/gemini-3-flash-agent")
     assert one.status_code == 200
     assert one.json()["name"] == "models/gemini-3-flash-agent"
+    assert one.json()["baseModelId"] == "gemini-3-flash-agent"
+    assert one.json()["thinking"] is True
+    assert stable_one.status_code == 200
+    assert stable_one.json()["supportedGenerationMethods"] == stable_methods
     for resource_name in (
         "models/gemini-3-flash-agent",
         "publishers/google/models/gemini-3-flash-agent",
@@ -513,6 +534,11 @@ def test_gemini_models_and_count_tokens():
     assert "generateContent" in image.json()["supportedGenerationMethods"]
     assert "generateImages" in image.json()["supportedGenerationMethods"]
     assert image.json()["capabilities"]["imageGeneration"] is True
+    assert image.json()["thinking"] is False
+
+    lite = client.get("/v1beta/models/gemini-3.1-flash-lite")
+    assert lite.status_code == 200
+    assert lite.json()["thinking"] is False
 
     counted = client.post("/v1beta/models/gemini-3-flash-agent:countTokens", json={
         "contents": [{"role": "user", "parts": [{"text": "hello world"}]}]
@@ -532,6 +558,8 @@ def test_gemini_models_and_count_tokens():
     assert counted_string.status_code == 200
     assert counted_string.json()["totalTokens"] > 0
     assert counted_string.json()["promptTokensDetails"][0]["modality"] == "TEXT"
+    assert "cachedContentTokenCount" not in counted_string.json()
+    assert counted_string.json()["cacheTokensDetails"] == []
     assert counted_vertex.status_code == 200
     assert counted_vertex.json()["totalTokens"] > 0
 
@@ -593,7 +621,7 @@ def test_gemini_compute_tokens_accepts_wrappers_and_media():
     assert v1_response.json()["tokensInfo"][0]["role"] == "user"
     assert vertex_response.status_code == 200
     assert vertex_response.json()["tokensInfo"][0]["role"] == "user"
-    assert "computeTokens" in client.get("/v1beta/models/gemini-3-flash-agent").json()["supportedGenerationMethods"]
+    assert "computeTokens" not in client.get("/v1beta/models/gemini-3-flash-agent").json()["supportedGenerationMethods"]
 
     tools_response = client.post("/v1beta/models/gemini-3-flash-agent:computeTokens", json={
         "contents": "tool tokenization",
@@ -1078,6 +1106,7 @@ def test_gemini_embeddings_are_deterministic():
     )
 
     assert first.status_code == 200
+    assert set(first.json()) == {"embedding", "usageMetadata"}
     values = first.json()["embedding"]["values"]
     assert len(values) == 32
     assert values == second.json()["embedding"]["values"]
@@ -1089,6 +1118,7 @@ def test_gemini_embeddings_are_deterministic():
     assert batch.json()["usageMetadata"]["promptTokenCount"] > first.json()["usageMetadata"]["promptTokenCount"]
     assert batch.json()["usageMetadata"]["promptTokenDetails"][0]["tokenCount"] == batch.json()["usageMetadata"]["promptTokenCount"]
     assert vertex.status_code == 200
+    assert set(vertex.json()) == {"embedding", "usageMetadata"}
     assert len(vertex.json()["embedding"]["values"]) == 32
     assert vertex_batch.status_code == 200
     assert len(vertex_batch.json()["embeddings"]) == 2
@@ -1181,10 +1211,8 @@ def test_gemini_embeddings_accept_latest_config_and_contents_forms():
     })
 
     assert configured.status_code == 200
-    assert len(configured.json()["embeddings"]) == 2
-    assert len(configured.json()["embeddings"][0]["values"]) == 14
-    assert configured.json()["embedding"] == configured.json()["embeddings"][0]
-    assert configured.json()["embeddings"][0]["values"] != configured.json()["embeddings"][1]["values"]
+    assert set(configured.json()) == {"embedding", "usageMetadata"}
+    assert len(configured.json()["embedding"]["values"]) == 14
     assert wrapped.status_code == 200
     assert len(wrapped.json()["embeddings"]) == 2
     assert len(wrapped.json()["embeddings"][0]["values"]) == 11
@@ -1318,6 +1346,7 @@ def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
         },
         "tools": [{"googleSearch": {}}],
         "tool_config": {"function_calling_config": {"mode": "any", "allowed_function_names": "lookup"}},
+        "model_armor_config": {"prompt_template_name": "projects/demo/locations/global/templates/safe"},
     })
     assert response.status_code == 200
     assert response.json()["candidates"][0]["content"]["parts"][0]["text"] == "hello"
@@ -1338,6 +1367,9 @@ def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
         "type": "object",
     }
     assert seen["request"]["generationConfig"]["maxOutputTokens"] == 32
+    assert seen["request"]["modelArmorConfig"] == {
+        "promptTemplateName": "projects/demo/locations/global/templates/safe",
+    }
     assert seen["request"]["tools"] == [{"google_search": {}}]
     assert seen["request"]["toolConfig"]["functionCallingConfig"] == {
         "mode": "ANY",
@@ -1415,6 +1447,7 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
                         "total_token_count": 14,
                         "tool_use_prompt_tokens": 3,
                         "thoughts_tokens": 5,
+                        "cached_content_token_count": 1,
                         "prompt_tokens_details": [{"modality": "TEXT", "token_count": 4}],
                         "tool_use_prompt_tokens_details": [{"modality": "TEXT", "token_count": 3}],
                         "thoughts_tokens_details": [{"modality": "TEXT", "token_count": 5}],
@@ -1429,9 +1462,12 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
     client = TestClient(proxy.app)
 
     response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={"contents": "hi"})
+    stable_response = client.post("/v1/models/gemini-3-flash-agent:generateContent", json={"contents": "hi"})
 
     assert response.status_code == 200
+    assert stable_response.status_code == 200
     body = response.json()
+    stable_body = stable_response.json()
     assert body["modelVersion"] == "gemini-upstream-version"
     assert body["responseId"] == "upstream-response-id"
     assert body["modelStatus"]["modelStage"] == "PREVIEW"
@@ -1482,12 +1518,16 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
     assert body["usageMetadata"]["promptTokensDetails"][0]["tokenCount"] == 4
     assert body["usageMetadata"]["toolUsePromptTokensDetails"][0]["tokenCount"] == 3
     assert body["usageMetadata"]["thoughtsTokensDetails"][0]["tokenCount"] == 5
+    assert body["usageMetadata"]["cachedContentTokenCount"] == 1
     assert body["usageMetadata"]["cacheTokensDetails"][0]["modality"] == "DOCUMENT"
     assert body["usageMetadata"]["cacheTokensDetails"][0]["tokenCount"] == 1
     assert body["usageMetadata"]["serviceTier"] == "priority"
     assert body["usageMetadata"]["trafficType"] == "ON_DEMAND"
     assert body["usageMetadata"]["totalTokenCount"] == 14
     assert "usage_metadata" not in body
+    assert "groundingAttributions" not in stable_body["candidates"][0]
+    assert "cachedContentTokenCount" not in stable_body["usageMetadata"]
+    assert stable_body["usageMetadata"]["cacheTokensDetails"][0]["tokenCount"] == 1
 
 
 def test_gemini_generate_content_accepts_sdk_content_unions(monkeypatch):
@@ -6506,6 +6546,10 @@ def test_gemini_image_model_generate_content_predict_and_generate_images(tmp_pat
         "instances": [{"prompt": "draw predict"}],
         "parameters": {"aspect_ratio": "1:1", "image_size": "1K"},
     })
+    predict_sample_count = client.post("/v1beta/models/gemini-image-latest:predict", json={
+        "instances": [{"prompt": "draw predict samples"}],
+        "parameters": {"aspect_ratio": "1:1", "sample_image_size": "2K", "sample_count": "2"},
+    })
     generated = client.post("/v1beta/models/gemini-image-latest:generateImages", json={
         "prompt": "draw generated",
         "config": {"aspect_ratio": "9:16", "image_size": "2K", "number_of_images": "2"},
@@ -6530,6 +6574,8 @@ def test_gemini_image_model_generate_content_predict_and_generate_images(tmp_pat
     assert predict.status_code == 200
     assert predict.json()["predictions"][0]["bytesBase64Encoded"]
     assert predict.json()["predictions"][0]["generatedFile"].startswith("generatedFiles/")
+    assert predict_sample_count.status_code == 200
+    assert len(predict_sample_count.json()["predictions"]) == 2
 
     assert generated.status_code == 200
     assert len(generated.json()["generatedImages"]) == 2
@@ -6543,6 +6589,8 @@ def test_gemini_image_model_generate_content_predict_and_generate_images(tmp_pat
     assert image_calls == [
         {"prompt": "draw image", "aspect_ratio": "16:9", "image_size": "2K"},
         {"prompt": "draw predict", "aspect_ratio": "1:1", "image_size": "1K"},
+        {"prompt": "draw predict samples", "aspect_ratio": "1:1", "image_size": "2K"},
+        {"prompt": "draw predict samples", "aspect_ratio": "1:1", "image_size": "2K"},
         {"prompt": "draw generated", "aspect_ratio": "9:16", "image_size": "2K"},
         {"prompt": "draw generated", "aspect_ratio": "9:16", "image_size": "2K"},
         {"prompt": "draw config prompt", "aspect_ratio": "4:3", "image_size": "1K"},
@@ -6552,9 +6600,9 @@ def test_gemini_image_model_generate_content_predict_and_generate_images(tmp_pat
     listed = client.get("/v1beta/generatedFiles")
     listed_clamped = client.get("/v1beta/generatedFiles?pageSize=51")
     assert listed.status_code == 200
-    assert len(listed.json()["generatedFiles"]) == 6
+    assert len(listed.json()["generatedFiles"]) == 8
     assert listed_clamped.status_code == 200
-    assert len(listed_clamped.json()["generatedFiles"]) == 6
+    assert len(listed_clamped.json()["generatedFiles"]) == 8
 
     generated_file_name = generated_image["generatedFile"]["name"]
     fetched_file = client.get(f"/v1beta/{generated_file_name}")

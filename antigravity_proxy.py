@@ -176,6 +176,18 @@ def _model_capabilities(model: dict[str, Any]) -> dict[str, bool]:
     }
 
 
+def _model_supports_thinking(model: dict[str, Any]) -> bool:
+    caps = _model_capabilities(model)
+    if caps["image_generation"] or caps["internal"]:
+        return False
+    upstream_id = str(model.get("antigravity_model") or model.get("id") or "").lower()
+    display_id = str(model.get("id") or "").lower()
+    text = f"{display_id} {upstream_id}"
+    if "flash-lite" in text or "extra-low" in text:
+        return False
+    return any(marker in text for marker in ("thinking", "agent", "pro", "flash"))
+
+
 def _model_sort_key(model: dict[str, Any]) -> tuple[int, str]:
     caps = _model_capabilities(model)
     upstream_id = str(model.get("antigravity_model") or "")
@@ -304,16 +316,60 @@ def _is_gemini_video_model_id(model_id: str) -> bool:
     return _gemini_resource_model_id(model_id).lower().startswith("veo-")
 
 
-def _gemini_video_model_resource(model_id: str) -> dict[str, Any]:
+_GEMINI_V1_MODEL_METHODS = [
+    "generateContent",
+    "streamGenerateContent",
+    "countTokens",
+    "embedContent",
+    "batchEmbedContents",
+    "asyncBatchEmbedContent",
+    "batchGenerateContent",
+]
+
+_GEMINI_V1BETA_TEXT_MODEL_METHODS = [
+    "generateContent",
+    "streamGenerateContent",
+    "countTokens",
+    "embedContent",
+    "batchEmbedContents",
+    "asyncBatchEmbedContent",
+    "batchGenerateContent",
+    "predict",
+    "predictLongRunning",
+    "generateText",
+    "generateMessage",
+    "generateAnswer",
+    "embedText",
+    "batchEmbedText",
+    "countTextTokens",
+    "countMessageTokens",
+]
+
+_GEMINI_V1BETA_IMAGE_MODEL_METHODS = [
+    "generateContent",
+    "generateImages",
+    "predict",
+    "predictLongRunning",
+]
+
+
+def _gemini_video_model_resource(model_id: str, *, api_version: str = "v1beta") -> dict[str, Any]:
     normalized_id = _gemini_resource_model_id(model_id)
+    methods = ["predictLongRunning", "generateVideos"] if api_version != "v1" else []
     return {
         "name": "models/" + normalized_id,
+        "baseModelId": normalized_id,
         "version": normalized_id,
         "displayName": normalized_id,
         "description": "Gemini-compatible video generation model placeholder",
         "inputTokenLimit": 32768,
         "outputTokenLimit": 0,
-        "supportedGenerationMethods": ["predictLongRunning", "generateVideos"],
+        "temperature": 1.0,
+        "maxTemperature": 2.0,
+        "topP": 0.95,
+        "topK": 64,
+        "thinking": False,
+        "supportedGenerationMethods": methods,
         "capabilities": {
             "chat": False,
             "tools": False,
@@ -325,10 +381,10 @@ def _gemini_video_model_resource(model_id: str) -> dict[str, Any]:
     }
 
 
-def _gemini_model_resource(model: dict[str, Any]) -> dict[str, Any]:
+def _gemini_model_resource(model: dict[str, Any], *, api_version: str = "v1beta") -> dict[str, Any]:
     caps = _model_capabilities(model)
     if caps["image_generation"]:
-        methods = ["generateContent", "generateImages", "predict", "predictLongRunning"]
+        methods = [] if api_version == "v1" else list(_GEMINI_V1BETA_IMAGE_MODEL_METHODS)
         input_limit = 32768
         output_limit = 8192
     elif caps["internal"]:
@@ -336,29 +392,12 @@ def _gemini_model_resource(model: dict[str, Any]) -> dict[str, Any]:
         input_limit = 0
         output_limit = 0
     else:
-        methods = [
-            "generateContent",
-            "streamGenerateContent",
-            "countTokens",
-            "computeTokens",
-            "embedContent",
-            "batchEmbedContents",
-            "asyncBatchEmbedContent",
-            "batchGenerateContent",
-            "predict",
-            "predictLongRunning",
-            "generateText",
-            "generateMessage",
-            "generateAnswer",
-            "embedText",
-            "batchEmbedText",
-            "countTextTokens",
-            "countMessageTokens",
-        ]
+        methods = list(_GEMINI_V1_MODEL_METHODS if api_version == "v1" else _GEMINI_V1BETA_TEXT_MODEL_METHODS)
         input_limit = 1048576
         output_limit = 65536
     return {
         "name": _gemini_model_name(model),
+        "baseModelId": _gemini_model_id(model),
         "version": _gemini_model_id(model),
         "displayName": str(model.get("id") or _gemini_model_id(model)),
         "description": "Antigravity-backed Gemini-compatible model",
@@ -366,8 +405,10 @@ def _gemini_model_resource(model: dict[str, Any]) -> dict[str, Any]:
         "outputTokenLimit": output_limit,
         "supportedGenerationMethods": methods,
         "temperature": 1.0,
+        "maxTemperature": 2.0,
         "topP": 0.95,
         "topK": 64,
+        "thinking": _model_supports_thinking(model),
         "capabilities": {
             "chat": caps["chat"],
             "tools": caps["tools"],
@@ -423,6 +464,8 @@ _GEMINI_KEY_ALIASES = {
     "cached_content": "cachedContent",
     "processing_options": "processingOptions",
     "processingOptions": "processingOptions",
+    "model_armor_config": "modelArmorConfig",
+    "prompt_template_name": "promptTemplateName",
     "response_mime_type": "responseMimeType",
     "response_schema": "responseSchema",
     "response_json_schema": "responseJsonSchema",
@@ -2483,6 +2526,7 @@ def _gemini_finalize_generate_response(
     model_name: str,
     request_body: dict[str, Any] | None = None,
     response_id: str | None = None,
+    api_version: str = "v1beta",
 ) -> dict[str, Any]:
     if not isinstance(response, dict):
         return response
@@ -2532,6 +2576,14 @@ def _gemini_finalize_generate_response(
         request_body=request_body,
         response=out,
     )
+    if api_version == "v1":
+        usage = out.get("usageMetadata")
+        if isinstance(usage, dict):
+            usage.pop("cachedContentTokenCount", None)
+        if isinstance(out.get("candidates"), list):
+            for candidate in out["candidates"]:
+                if isinstance(candidate, dict):
+                    candidate.pop("groundingAttributions", None)
     out.pop("usage_metadata", None)
     return out
 
@@ -3110,6 +3162,14 @@ def _gemini_embedding_from_request(body: dict[str, Any]) -> dict[str, Any]:
     return {"embeddings": embeddings, "embedding": embeddings[0], "usageMetadata": usage}
 
 
+def _gemini_embed_content_response(body: dict[str, Any]) -> dict[str, Any]:
+    embedded = _gemini_embedding_from_request(body)
+    return {
+        "embedding": embedded["embedding"],
+        "usageMetadata": embedded.get("usageMetadata", {}),
+    }
+
+
 def _gemini_embedding_predict_response(model_name: str, body: dict[str, Any]) -> dict[str, Any]:
     normalized = _gemini_normalize_request(body)
     if not isinstance(normalized, dict):
@@ -3256,6 +3316,15 @@ def _gemini_operation_scope_from_request(request: Request) -> str | None:
     if path.startswith(("models/", "publishers/", "projects/")):
         return path
     return None
+
+
+def _gemini_request_version(request: Request) -> str:
+    path = str(request.scope.get("path") or request.url.path)
+    if path.startswith("/v1beta/") or path.startswith("/upload/v1beta/"):
+        return "v1beta"
+    if path.startswith("/v1alpha/") or path.startswith("/upload/v1alpha/"):
+        return "v1alpha"
+    return "v1"
 
 
 def _gemini_get_operation(name: str) -> dict[str, Any] | None:
@@ -8295,7 +8364,12 @@ def _gemini_part_modality(part: Any) -> str:
     return "DOCUMENT"
 
 
-def _gemini_count_tokens_response(messages: list[ChatMessage], *, cached_tokens: int = 0) -> dict[str, Any]:
+def _gemini_count_tokens_response(
+    messages: list[ChatMessage],
+    *,
+    cached_tokens: int = 0,
+    include_cached_content_count: bool = True,
+) -> dict[str, Any]:
     prompt_estimate = _estimate_prompt_tokens(messages)
     by_modality: dict[str, int] = {}
     for message in messages:
@@ -8320,9 +8394,10 @@ def _gemini_count_tokens_response(messages: list[ChatMessage], *, cached_tokens:
             for modality, count in sorted(by_modality.items())
             if count > 0
         ],
-        "cachedContentTokenCount": cached_tokens,
         "cacheTokensDetails": [{"modality": "TEXT", "tokenCount": cached_tokens}] if cached_tokens > 0 else [],
     }
+    if include_cached_content_count:
+        response["cachedContentTokenCount"] = cached_tokens
     return response
 
 
@@ -8638,9 +8713,15 @@ def _gemini_model_filter_matches(model: dict[str, Any], filter_expr: str | None)
     return True
 
 
-def _gemini_models_list_response(page_size: int, page_token: str | None, filter_expr: str | None = None) -> dict[str, Any]:
+def _gemini_models_list_response(
+    page_size: int,
+    page_token: str | None,
+    filter_expr: str | None = None,
+    *,
+    api_version: str = "v1beta",
+) -> dict[str, Any]:
     models = [
-        _gemini_model_resource(model)
+        _gemini_model_resource(model, api_version=api_version)
         for model in _MODELS
         if not _model_capabilities(model)["internal"] and _gemini_model_filter_matches(model, filter_expr)
     ]
@@ -8661,7 +8742,7 @@ async def list_models(request: Request, project: str | None = None, location: st
         page_size, page_token = _gemini_list_query_params(request, default_page_size=50, max_page_size=1000, clamp_page_size=True)
     except HTTPException as exc:
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT", field="pageSize")
-    return _gemini_models_list_response(page_size, page_token, request.query_params.get("filter"))
+    return _gemini_models_list_response(page_size, page_token, request.query_params.get("filter"), api_version="v1")
 
 
 @app.get("/v1beta/models")
@@ -8670,7 +8751,7 @@ async def list_models(request: Request, project: str | None = None, location: st
 async def gemini_list_models(request: Request, project: str | None = None, location: str | None = None):
     """Gemini-compatible model listing."""
     pageSize, pageToken = _gemini_list_query_params(request, default_page_size=50, max_page_size=1000, clamp_page_size=True)
-    return _gemini_models_list_response(pageSize, pageToken, request.query_params.get("filter"))
+    return _gemini_models_list_response(pageSize, pageToken, request.query_params.get("filter"), api_version="v1beta")
 
 
 @app.get("/v1/models/{model_name:path}/operations")
@@ -8748,15 +8829,16 @@ async def gemini_delete_model_operation(model_name: str, operation_id: str):
 @app.get("/v1beta/models/{model_name:path}")
 @app.get("/v1beta/publishers/google/models/{model_name:path}")
 @app.get("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}")
-async def gemini_get_model(model_name: str, project: str | None = None, location: str | None = None):
+async def gemini_get_model(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Gemini-compatible model retrieval."""
+    api_version = _gemini_request_version(request)
     try:
         model = _resolve_gemini_model(model_name)
     except HTTPException as exc:
         if _is_gemini_video_model_id(model_name):
-            return _gemini_video_model_resource(model_name)
+            return _gemini_video_model_resource(model_name, api_version=api_version)
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status="NOT_FOUND")
-    return _gemini_model_resource(model)
+    return _gemini_model_resource(model, api_version=api_version)
 
 
 @app.get("/v1/files")
@@ -10640,7 +10722,11 @@ async def gemini_count_tokens(model_name: str, request: Request, project: str | 
         else:
             cached_tokens = 0
         messages = _gemini_count_tokens_request(body if isinstance(body, dict) else {})
-        return _gemini_count_tokens_response(messages, cached_tokens=cached_tokens)
+        return _gemini_count_tokens_response(
+            messages,
+            cached_tokens=cached_tokens,
+            include_cached_content_count=_gemini_request_version(request) != "v1",
+        )
     except HTTPException as exc:
         return _gemini_error_response(exc.detail, status_code=exc.status_code)
     except Exception as exc:
@@ -10684,7 +10770,7 @@ async def gemini_embed_content(model_name: str, request: Request, project: str |
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
-        return _gemini_embedding_from_request(body)
+        return _gemini_embed_content_response(body)
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
@@ -10887,13 +10973,16 @@ async def _gemini_predict_payload(model_name: str, body: dict[str, Any]) -> tupl
     body = _gemini_apply_response_format(body)
     body = _gemini_normalize_generate_body(body)
     if _model_capabilities(model)["image_generation"]:
-        image = await _gemini_generate_image_payload(model_name, body)
-        prediction = {
-            "predictions": [{
+        predictions = []
+        for _ in range(_gemini_image_count(body)):
+            image = await _gemini_generate_image_payload(model_name, body)
+            predictions.append({
                 "bytesBase64Encoded": image["base64"],
                 "mimeType": image["mimeType"],
                 "generatedFile": image["generatedFile"]["name"],
-            }],
+            })
+        prediction = {
+            "predictions": predictions,
             "deployedModelId": _gemini_model_name(model),
         }
         return prediction, body
@@ -11197,6 +11286,7 @@ async def gemini_generate_answer(model_name: str, request: Request, project: str
 async def gemini_generate_content(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Gemini REST-compatible generateContent endpoint backed by Antigravity."""
     try:
+        api_version = _gemini_request_version(request)
         model = _resolve_gemini_model(model_name)
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
@@ -11221,7 +11311,7 @@ async def gemini_generate_content(model_name: str, request: Request, project: st
                     "finishReason": "STOP",
                 }],
                 "generatedFile": image["generatedFile"]["name"],
-            }, model_name=model_name, request_body=body))
+            }, model_name=model_name, request_body=body, api_version=api_version))
         body = _gemini_apply_cached_content(body)
         body = _gemini_apply_url_context(_gemini_apply_file_search(body))
         _gemini_reject_unsupported_builtin_tools(body, allow_computer_use=True)
@@ -11244,6 +11334,7 @@ async def gemini_generate_content(model_name: str, request: Request, project: st
                 body=body,
                 model_name=model_name,
                 antigravity_model=str(model["antigravity_model"]),
+                api_version=api_version,
             )
         data = await asyncio.to_thread(
             _get_client().generate_raw,
@@ -11254,6 +11345,7 @@ async def gemini_generate_content(model_name: str, request: Request, project: st
             _gemini_unwrap_response(data),
             model_name=model_name,
             request_body=body,
+            api_version=api_version,
         ))
     except HTTPException as exc:
         status = _gemini_status_for_http(exc.status_code)
@@ -11271,7 +11363,7 @@ async def gemini_generate_content(model_name: str, request: Request, project: st
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
-def _gemini_streaming_response(*, body: dict[str, Any], model_name: str, antigravity_model: str) -> StreamingResponse:
+def _gemini_streaming_response(*, body: dict[str, Any], model_name: str, antigravity_model: str, api_version: str = "v1beta") -> StreamingResponse:
     async def _gen():
         got_any = False
         stream_response_id = "resp_" + uuid.uuid4().hex
@@ -11286,6 +11378,7 @@ def _gemini_streaming_response(*, body: dict[str, Any], model_name: str, antigra
                     model_name=model_name,
                     request_body=body,
                     response_id=stream_response_id,
+                    api_version=api_version,
                 )
                 got_any = True
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -11303,6 +11396,7 @@ def _gemini_streaming_response(*, body: dict[str, Any], model_name: str, antigra
                     model_name=model_name,
                     request_body=body,
                     response_id=stream_response_id,
+                    api_version=api_version,
                 )
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
             except Exception as inner:
