@@ -11044,7 +11044,7 @@ async def gemini_create_batch(request: Request):
             raise HTTPException(status_code=400, detail="batches.create requires a model.")
         batch_kind = body.pop("_batchKind", None)
         if batch_kind == "embed":
-            model = _resolve_gemini_model(model_name)
+            model = _resolve_gemini_embedding_model(model_name)
             _operation, batch = _gemini_create_completed_embed_batch(model, body)
         else:
             _operation, batch = await _gemini_create_completed_batch(model_name, body)

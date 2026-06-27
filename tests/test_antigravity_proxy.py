@@ -2758,6 +2758,28 @@ def test_google_genai_sdk_models_embed_content_with_standard_embedding_models():
         assert len(response.embeddings[0].values) > 0
 
 
+def test_gemini_batches_create_embed_content_batch_accepts_embedding_models(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    client = TestClient(proxy.app)
+
+    for model_name in ("text-embedding-004", "embedding-001", "gemini-embedding-001"):
+        created = client.post("/v1beta/batches", json={
+            "embed_content_batch": {
+                "model": model_name,
+                "requests": [{
+                    "content": {"parts": [{"text": f"embed batch for {model_name}"}]},
+                }],
+            },
+        })
+
+        assert created.status_code == 200
+        body = created.json()
+        assert body["metadata"]["model"] == f"models/{model_name}"
+        assert body["metadata"]["batchResource"]["model"] == f"models/{model_name}"
+        assert body["metadata"]["batchResource"]["response"]["embeddings"][0]["values"]
+
+
 def test_google_genai_sdk_vertex_batch_prediction_jobs(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
     app_client = TestClient(proxy.app)

@@ -1005,7 +1005,9 @@ Embeddings and batch operations:
   `{"embed_content_batch": {...}}`. Top-level `inputConfig` / `input_config`,
   `outputConfig` / `output_config`, and `priority` fields are preserved on the
   stored batch resource. Embed wrappers are completed with local deterministic
-  embeddings, and embed request items may use
+  embeddings and accept standard Gemini embedding model names such as
+  `text-embedding-004`, `embedding-001`, and `gemini-embedding-001`. Embed
+  request items may use
   `{"request": {...}}` / `{"embedContentRequest": {...}}`. It is intended for
   Gemini SDK/REST management compatibility; it does not run true asynchronous
   Batch Mode jobs.
