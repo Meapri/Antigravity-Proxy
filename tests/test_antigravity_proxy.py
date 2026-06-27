@@ -3449,7 +3449,10 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
 
     document = client.post(f"/v1/corpora/{corpus_id}/documents", json={
         "displayName": "Launch notes",
-        "customMetadata": [{"key": "source", "stringValue": "initial"}],
+        "customMetadata": [
+            {"key": "source", "stringValue": "initial"},
+            {"key": "tags", "string_list_value": {"values": ["atlas", "launch"]}},
+        ],
     })
     assert document.status_code == 200
     doc_name = document.json()["name"]
@@ -3469,6 +3472,7 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     assert patched_doc.status_code == 200
     assert patched_doc.json()["displayName"] == "Launch notes updated"
     assert patched_doc.json()["customMetadata"][0]["stringValue"] == "initial"
+    assert patched_doc.json()["customMetadata"][1]["stringListValue"]["values"] == ["atlas", "launch"]
 
     wrapped_doc = client.post(f"/v1/corpora/{corpus_id}/documents?document_id=wrapped_doc", json={
         "document": {
@@ -3657,12 +3661,16 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
                 }
             },
         },
-        "custom_metadata": [{"key": "wrapped", "string_value": "yes"}],
+        "custom_metadata": [
+            {"key": "wrapped", "string_value": "yes"},
+            {"key": "tags", "string_list_value": {"values": ["notes", "wrapped"]}},
+        ],
     })
     assert wrapped_created.status_code == 200
     assert wrapped_created.json()["displayName"] == "wrapped notes"
     assert wrapped_created.json()["embeddingModel"] == "models/text-embedding-004"
     assert wrapped_created.json()["customMetadata"][0]["stringValue"] == "yes"
+    assert wrapped_created.json()["customMetadata"][1]["stringListValue"]["values"] == ["notes", "wrapped"]
     assert wrapped_created.json()["chunkingConfig"]["whiteSpaceConfig"]["maxTokensPerChunk"] == 128
     assert wrapped_created.json()["chunkingConfig"]["whiteSpaceConfig"]["maxOverlapTokens"] == 16
 

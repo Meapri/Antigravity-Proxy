@@ -759,6 +759,8 @@ mapped into Gemini-compatible JSON output controls.
 `generationConfig.responseFormat` / `generation_config.response_format` is
 handled through the same path, including nested `jsonSchema` / `json_schema`
 objects and Gemini's `_responseJsonSchema` alias. Official
+`customMetadata.string_list_value` entries are normalized to
+`customMetadata.stringListValue`.
 `responseFormat.text`, `.image`, and `.audio` configs are preserved, with
 snake_case fields such as `mime_type`, `image_size`, `sample_rate`, and
 `bit_rate` normalized to Gemini REST casing.

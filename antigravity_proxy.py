@@ -544,6 +544,8 @@ _GEMINI_KEY_ALIASES = {
     "size_bytes": "sizeBytes",
     "string_value": "stringValue",
     "stringValue": "stringValue",
+    "string_list_value": "stringListValue",
+    "stringListValue": "stringListValue",
     "numeric_value": "numericValue",
     "numericValue": "numericValue",
     "download_uri": "downloadUri",
