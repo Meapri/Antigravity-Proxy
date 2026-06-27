@@ -787,7 +787,9 @@ counts, and computed `totalTokenCount` includes prompt, candidate, tool-use
 prompt, and thought tokens. Candidate metadata aliases such as
 `safety_ratings`, `grounding_metadata`, and `avg_logprobs`, plus top-level
 aliases such as `prompt_feedback`, `model_version`, and `response_id`, are also
-returned in Gemini REST camelCase form.
+returned in Gemini REST camelCase form. Candidate `finishReason` accepts common
+spellings such as `max tokens` and normalizes them to Gemini enum values such
+as `MAX_TOKENS`.
 Gemini compatibility errors use the `google.rpc.Status`-style
 `error.code` / `error.message` / `error.status` shape. `INVALID_ARGUMENT`
 responses include `google.rpc.BadRequest` field-violation details, and

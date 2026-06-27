@@ -751,6 +751,38 @@ def _gemini_response_modalities_value(value: Any) -> Any:
     return modalities
 
 
+def _gemini_finish_reason_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "FINISH_REASON_UNSPECIFIED",
+        "finish_reason_unspecified": "FINISH_REASON_UNSPECIFIED",
+        "stop": "STOP",
+        "max_tokens": "MAX_TOKENS",
+        "finish_reason_max_tokens": "MAX_TOKENS",
+        "safety": "SAFETY",
+        "recitation": "RECITATION",
+        "language": "LANGUAGE",
+        "other": "OTHER",
+        "blocklist": "BLOCKLIST",
+        "prohibited_content": "PROHIBITED_CONTENT",
+        "spii": "SPII",
+        "malformed_function_call": "MALFORMED_FUNCTION_CALL",
+        "image_safety": "IMAGE_SAFETY",
+        "image_prohibited_content": "IMAGE_PROHIBITED_CONTENT",
+        "image_other": "IMAGE_OTHER",
+        "no_image": "NO_IMAGE",
+        "image_recitation": "IMAGE_RECITATION",
+        "unexpected_tool_call": "UNEXPECTED_TOOL_CALL",
+        "too_many_tool_calls": "TOO_MANY_TOOL_CALLS",
+        "missing_thought_signature": "MISSING_THOUGHT_SIGNATURE",
+        "malformed_response": "MALFORMED_RESPONSE",
+        "escalation": "ESCALATION",
+    }
+    return aliases.get(normalized, value)
+
+
 def _gemini_function_response_scheduling_value(value: Any) -> Any:
     if not isinstance(value, str):
         return value
@@ -1801,6 +1833,7 @@ def _gemini_normalize_candidate(candidate: dict[str, Any], index: int) -> dict[s
         out.pop(old, None)
     out.setdefault("index", index)
     out.setdefault("finishReason", "STOP")
+    out["finishReason"] = _gemini_finish_reason_value(out["finishReason"])
     content = out.get("content")
     if isinstance(content, dict):
         content = dict(content)

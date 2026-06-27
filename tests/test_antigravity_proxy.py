@@ -769,7 +769,7 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
                     },
                     "candidates": [{
                         "content": {"parts": "hello"},
-                        "finish_reason": "MAX_TOKENS",
+                        "finish_reason": "max tokens",
                         "safety_ratings": [{"category": "HARM_CATEGORY_HARASSMENT", "probability": "LOW"}],
                         "citation_metadata": {
                             "citation_sources": [{"start_index": 0, "end_index": 5, "uri": "https://example.test"}],
