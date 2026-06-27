@@ -2316,13 +2316,23 @@ def _gemini_embedding_values(text: str, *, dimensions: int = 768) -> list[float]
     return [v / norm for v in values]
 
 
+def _gemini_embedding_usage(contents: list[dict[str, Any]]) -> dict[str, Any]:
+    prompt_tokens = sum(_estimate_tokens(content) for content in contents)
+    usage = {"promptTokenCount": prompt_tokens}
+    if prompt_tokens > 0:
+        usage["promptTokenDetails"] = [{"modality": "TEXT", "tokenCount": prompt_tokens}]
+    return usage
+
+
 def _gemini_embedding_from_request(body: dict[str, Any]) -> dict[str, Any]:
     body = _gemini_normalize_request(_gemini_embed_request_payload(body))
     config = _gemini_embedding_config(body)
     output_dim = config.get("outputDimensionality") or 768
     embeddings: list[dict[str, Any]] = []
+    contents: list[dict[str, Any]] = []
     for item in _gemini_embedding_content_items(body):
         content = _gemini_embedding_content(item)
+        contents.append(content)
         seed_parts = [_gemini_content_text(content)]
         if config.get("taskType"):
             seed_parts.append(f"taskType:{config['taskType']}")
@@ -2330,9 +2340,10 @@ def _gemini_embedding_from_request(body: dict[str, Any]) -> dict[str, Any]:
             seed_parts.append(f"title:{config['title']}")
         text = "\n".join(str(part) for part in seed_parts if part is not None)
         embeddings.append({"values": _gemini_embedding_values(text, dimensions=int(output_dim))})
+    usage = _gemini_embedding_usage(contents)
     if len(embeddings) == 1:
-        return {"embedding": embeddings[0], "embeddings": embeddings}
-    return {"embeddings": embeddings, "embedding": embeddings[0]}
+        return {"embedding": embeddings[0], "embeddings": embeddings, "usageMetadata": usage}
+    return {"embeddings": embeddings, "embedding": embeddings[0], "usageMetadata": usage}
 
 
 def _gemini_batch_request_item(item: dict[str, Any], *wrapper_keys: str) -> dict[str, Any]:
@@ -2366,6 +2377,7 @@ def _gemini_batch_embedding_from_request(body: dict[str, Any]) -> dict[str, Any]
     if not isinstance(requests, list):
         raise HTTPException(status_code=400, detail="batchEmbedContents requires a requests array.")
     embeddings: list[dict[str, Any]] = []
+    prompt_tokens = 0
     shared_config = _gemini_embedding_config(body)
     for item in requests:
         if not isinstance(item, dict):
@@ -2378,7 +2390,15 @@ def _gemini_batch_embedding_from_request(body: dict[str, Any]) -> dict[str, Any]
             normalized_item["config"] = merged_config
         embedded = _gemini_embedding_from_request(normalized_item)
         embeddings.extend(embedded.get("embeddings") or [embedded["embedding"]])
-    return {"embeddings": embeddings}
+        embedded_usage = embedded.get("usageMetadata") if isinstance(embedded.get("usageMetadata"), dict) else {}
+        try:
+            prompt_tokens += int(embedded_usage.get("promptTokenCount") or 0)
+        except (TypeError, ValueError):
+            pass
+    usage = {"promptTokenCount": prompt_tokens}
+    if prompt_tokens > 0:
+        usage["promptTokenDetails"] = [{"modality": "TEXT", "tokenCount": prompt_tokens}]
+    return {"embeddings": embeddings, "usageMetadata": usage}
 
 
 def _gemini_operations_root() -> Path:

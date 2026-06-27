@@ -502,9 +502,13 @@ def test_gemini_embeddings_are_deterministic():
     values = first.json()["embedding"]["values"]
     assert len(values) == 32
     assert values == second.json()["embedding"]["values"]
+    assert first.json()["usageMetadata"]["promptTokenCount"] > 0
+    assert first.json()["usageMetadata"]["promptTokenDetails"][0]["modality"] == "TEXT"
     assert batch.status_code == 200
     assert len(batch.json()["embeddings"]) == 2
     assert len(batch.json()["embeddings"][0]["values"]) == 16
+    assert batch.json()["usageMetadata"]["promptTokenCount"] > first.json()["usageMetadata"]["promptTokenCount"]
+    assert batch.json()["usageMetadata"]["promptTokenDetails"][0]["tokenCount"] == batch.json()["usageMetadata"]["promptTokenCount"]
 
 
 def test_gemini_embeddings_respect_task_type_title_and_snake_case():
