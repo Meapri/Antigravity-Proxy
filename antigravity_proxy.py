@@ -420,6 +420,8 @@ _GEMINI_KEY_ALIASES = {
     "include_thoughts": "includeThoughts",
     "response_modalities": "responseModalities",
     "media_resolution": "mediaResolution",
+    "audio_timestamp": "audioTimestamp",
+    "audioTimestamp": "audioTimestamp",
     "start_offset": "startOffset",
     "startOffset": "startOffset",
     "end_offset": "endOffset",
@@ -553,6 +555,7 @@ _GEMINI_GENERATION_CONFIG_KEYS = {
     "thinkingConfig",
     "responseModalities",
     "mediaResolution",
+    "audioTimestamp",
     "imageConfig",
     "speechConfig",
     "routingConfig",
@@ -636,6 +639,44 @@ def _gemini_service_tier_value(value: Any) -> Any:
     return aliases.get(normalized, value)
 
 
+def _gemini_media_resolution_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "MEDIA_RESOLUTION_UNSPECIFIED",
+        "media_resolution_unspecified": "MEDIA_RESOLUTION_UNSPECIFIED",
+        "low": "MEDIA_RESOLUTION_LOW",
+        "media_resolution_low": "MEDIA_RESOLUTION_LOW",
+        "medium": "MEDIA_RESOLUTION_MEDIUM",
+        "media_resolution_medium": "MEDIA_RESOLUTION_MEDIUM",
+        "high": "MEDIA_RESOLUTION_HIGH",
+        "media_resolution_high": "MEDIA_RESOLUTION_HIGH",
+    }
+    return aliases.get(normalized, value)
+
+
+def _gemini_response_modality_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "MODALITY_UNSPECIFIED",
+        "modality_unspecified": "MODALITY_UNSPECIFIED",
+        "text": "TEXT",
+        "image": "IMAGE",
+        "audio": "AUDIO",
+    }
+    return aliases.get(normalized, value)
+
+
+def _gemini_response_modalities_value(value: Any) -> Any:
+    modalities = _gemini_string_list(value)
+    if isinstance(modalities, list):
+        return [_gemini_response_modality_value(item) for item in modalities]
+    return modalities
+
+
 def _gemini_normalize_generation_config(value: Any) -> Any:
     if not isinstance(value, dict):
         return value
@@ -643,18 +684,21 @@ def _gemini_normalize_generation_config(value: Any) -> Any:
     response_format = out.pop("responseFormat", None)
     if response_format is not None:
         _gemini_apply_response_format_to_generation_config(out, response_format)
-    for key in ("stopSequences", "responseModalities"):
-        if key in out:
-            out[key] = _gemini_string_list(out[key])
+    if "stopSequences" in out:
+        out["stopSequences"] = _gemini_string_list(out["stopSequences"])
+    if "responseModalities" in out:
+        out["responseModalities"] = _gemini_response_modalities_value(out["responseModalities"])
     for key in ("topK", "candidateCount", "maxOutputTokens", "logprobs", "seed"):
         if key in out:
             out[key] = _gemini_int_value(out[key])
     for key in ("temperature", "topP", "presencePenalty", "frequencyPenalty"):
         if key in out:
             out[key] = _gemini_float_value(out[key])
-    for key in ("responseLogprobs", "enableEnhancedCivicAnswers"):
+    for key in ("responseLogprobs", "enableEnhancedCivicAnswers", "audioTimestamp"):
         if key in out:
             out[key] = _gemini_bool_value(out[key])
+    if "mediaResolution" in out:
+        out["mediaResolution"] = _gemini_media_resolution_value(out["mediaResolution"])
     if isinstance(out.get("responseSchema"), dict):
         out["responseSchema"] = _sanitize_schema(dict(out["responseSchema"]))
     if isinstance(out.get("responseJsonSchema"), dict):

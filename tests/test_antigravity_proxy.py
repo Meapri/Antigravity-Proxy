@@ -916,7 +916,9 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
             "top_k": "40",
             "response_logprobs": "true",
             "stop_sequences": "END",
-            "response_modalities": "TEXT",
+            "response_modalities": "text",
+            "media_resolution": "low",
+            "audio_timestamp": "true",
             "response_mime_type": "application/json",
             "response_schema": {
                 "type": "object",
@@ -959,6 +961,8 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
     assert seen["request"]["generationConfig"]["enableEnhancedCivicAnswers"] is True
     assert seen["request"]["generationConfig"]["stopSequences"] == ["END"]
     assert seen["request"]["generationConfig"]["responseModalities"] == ["TEXT"]
+    assert seen["request"]["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_LOW"
+    assert seen["request"]["generationConfig"]["audioTimestamp"] is True
     assert seen["request"]["generationConfig"]["responseMimeType"] == "application/json"
     schema = seen["request"]["generationConfig"]["responseSchema"]
     assert schema["type"] == "object"
@@ -2083,8 +2087,9 @@ def test_gemini_interactions_accept_content_item_aliases_and_image_model(tmp_pat
             ],
         }],
         "generation_config": {
-            "response_modalities": ["TEXT"],
-            "media_resolution": "MEDIA_RESOLUTION_LOW",
+            "response_modalities": ["text"],
+            "media_resolution": "low",
+            "audio_timestamp": "false",
         },
     })
 
@@ -2094,6 +2099,7 @@ def test_gemini_interactions_accept_content_item_aliases_and_image_model(tmp_pat
     assert parts[1]["inlineData"] == {"mimeType": "image/jpeg", "data": "aW1hZ2U="}
     assert seen["request"]["generationConfig"]["responseModalities"] == ["TEXT"]
     assert seen["request"]["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_LOW"
+    assert seen["request"]["generationConfig"]["audioTimestamp"] is False
 
     bytes_interaction = client.post("/v1beta/interactions", json={
         "input": [{
