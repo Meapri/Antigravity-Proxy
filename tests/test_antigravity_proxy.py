@@ -3358,7 +3358,28 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     assert client.delete(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks/{chunk_id}").status_code == 200
     assert client.delete(f"/v1/corpora/{corpus_id}/permissions/{perm_id}").status_code == 200
     assert client.delete(f"/v1/corpora/{corpus_id}/documents/{doc_id}").status_code == 200
+    assert client.delete(f"/v1/{wrapped_doc.json()['name']}").status_code == 200
     assert client.delete(f"/v1/{corpus_name}").status_code == 200
+
+
+def test_gemini_corpus_delete_requires_force_for_documents(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_CORPORA_DIR", str(tmp_path / "corpora"))
+    client = TestClient(proxy.app)
+
+    corpus = client.post("/v1beta/corpora", json={"displayName": "Force corpus"}).json()
+    corpus_id = corpus["name"].split("/", 1)[1]
+    document = client.post(f"/v1beta/corpora/{corpus_id}/documents", json={
+        "displayName": "Blocking doc",
+    })
+
+    blocked = client.delete(f"/v1beta/{corpus['name']}")
+    forced = client.delete(f"/v1beta/{corpus['name']}?force=true")
+
+    assert document.status_code == 200
+    assert blocked.status_code == 400
+    assert blocked.json()["error"]["status"] == "FAILED_PRECONDITION"
+    assert blocked.json()["error"]["details"][0]["fieldViolations"][0]["field"] == "force"
+    assert forced.status_code == 200
 
 
 def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):

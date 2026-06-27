@@ -6868,11 +6868,20 @@ async def gemini_patch_corpus(corpus_id: str, request: Request, updateMask: str 
 
 @app.delete("/v1/corpora/{corpus_id}")
 @app.delete("/v1beta/corpora/{corpus_id}")
-async def gemini_delete_corpus(corpus_id: str):
+async def gemini_delete_corpus(corpus_id: str, request: Request):
     name = _gemini_corpus_name(corpus_id)
     index = _gemini_load_corpora_index()
-    if name not in index:
+    meta = index.get(name)
+    if not meta:
         return _gemini_error_response(f"Corpus '{corpus_id}' not found.", status_code=404, status="NOT_FOUND")
+    force = _gemini_query_bool(request, "force", "force")
+    if (meta.get("documents") or {}) and not force:
+        return _gemini_error_response(
+            "Corpus contains documents. Set force=true to delete it.",
+            status_code=400,
+            status="FAILED_PRECONDITION",
+            field="force",
+        )
     index.pop(name, None)
     _gemini_save_corpora_index(index)
     return JSONResponse({})

@@ -960,6 +960,8 @@ Corpora and semantic retriever:
 - Corpus, document, and chunk patch calls honor `updateMask` / `update_mask`
   for supported mutable fields, including wrapper paths such as
   `corpus.displayName`, `document.customMetadata`, and `chunk.data`.
+- Deleting a corpus that still contains documents requires `force=true`, matching
+  the Gemini REST delete parameter behavior.
 - Document and chunk create/update calls accept SDK-style `document` / `chunk`
   wrapper bodies, query/body `documentId` / `chunkId` aliases, and per-request
   `updateMask` values in `chunks:batchUpdate`.
