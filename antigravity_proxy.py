@@ -1120,6 +1120,11 @@ def _gemini_normalize_part_options(part: dict[str, Any]) -> dict[str, Any]:
         if "scheduling" in normalized_response:
             normalized_response["scheduling"] = _gemini_function_response_scheduling_value(normalized_response["scheduling"])
         out["functionResponse"] = normalized_response
+    video_metadata = out.get("videoMetadata")
+    if isinstance(video_metadata, dict) and "fps" in video_metadata:
+        normalized_video = dict(video_metadata)
+        normalized_video["fps"] = _gemini_float_value(normalized_video["fps"])
+        out["videoMetadata"] = normalized_video
     return out
 
 

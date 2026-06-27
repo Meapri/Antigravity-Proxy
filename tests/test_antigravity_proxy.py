@@ -924,6 +924,10 @@ def test_gemini_generate_content_accepts_sdk_content_unions(monkeypatch):
             "role": "user",
             "parts": [
                 {"data": "aW1hZ2U=", "mime_type": "image/png"},
+                {
+                    "file_data": {"mime_type": "video/mp4", "file_uri": "files/video-1"},
+                    "video_metadata": {"start_offset": "1s", "end_offset": "3s", "fps": "24"},
+                },
                 {"text": "describe bytes"},
             ],
         }]
@@ -933,7 +937,16 @@ def test_gemini_generate_content_accepts_sdk_content_unions(monkeypatch):
         "mimeType": "image/png",
         "data": "aW1hZ2U=",
     }
-    assert seen["request"]["contents"][0]["parts"][1]["text"] == "describe bytes"
+    assert seen["request"]["contents"][0]["parts"][1]["fileData"] == {
+        "mimeType": "video/mp4",
+        "fileUri": "files/video-1",
+    }
+    assert seen["request"]["contents"][0]["parts"][1]["videoMetadata"] == {
+        "startOffset": "1s",
+        "endOffset": "3s",
+        "fps": 24.0,
+    }
+    assert seen["request"]["contents"][0]["parts"][2]["text"] == "describe bytes"
 
     part_aliases = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
         "contents": [{

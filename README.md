@@ -739,6 +739,9 @@ and `config` fields taking precedence.
 and `end_offset` are accepted for current Gemini SDK compatibility; because
 Antigravity's internal endpoint does not expose that field yet, the proxy
 removes it before forwarding so requests do not fail with unknown-field errors.
+Video part metadata normalizes SDK-style `video_metadata.start_offset`,
+`video_metadata.end_offset`, and string `fps` values to Gemini REST
+`videoMetadata.startOffset`, `videoMetadata.endOffset`, and numeric `fps`.
 Content parts preserve SDK-style aliases such as `function_call`,
 `function_response`, `executable_code`, `code_execution_result`, and
 `thought_signature` as canonical Gemini REST fields. Latest Part fields such
