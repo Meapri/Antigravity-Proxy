@@ -1193,26 +1193,6 @@ curl http://127.0.0.1:8765/v1beta/models \
 Most clients want the model id without the `models/` prefix, for example
 `gemini-3-flash-agent`.
 
-Hermes' built-in Gemini picker may fall back to its curated static model list.
-To make the picker read the Antigravity proxy's live Gemini `/models` response
-without editing the Hermes git checkout, install the overlay module from
-`hermes_overrides/antigravity_gemini_models_patch.py` into
-`~/.hermes/overrides/` and load it from the Hermes venv with a `.pth` file:
-
-```bash
-mkdir -p ~/.hermes/overrides
-cp hermes_overrides/antigravity_gemini_models_patch.py ~/.hermes/overrides/
-cat > ~/.hermes/hermes-agent/venv/lib/python3.11/site-packages/antigravity_gemini_models_overlay.pth <<EOF
-$HOME/.hermes/overrides
-import antigravity_gemini_models_patch
-EOF
-```
-
-After installing it, run `/model --refresh` or clear Hermes'
-`provider_models_cache.json` so the picker re-fetches the live list. The overlay
-patches only `provider_model_ids("gemini")`, so normal Hermes updates do not
-overwrite it.
-
 For Hermes web search, point the SearXNG backend at:
 
 ```text
