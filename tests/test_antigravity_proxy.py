@@ -1651,6 +1651,31 @@ def test_gemini_generate_content_normalizes_tools_unions(monkeypatch):
             "topK": 3,
         }
     }]
+    assert proxy._gemini_normalize_tools_value({
+        "computer_use": {
+            "environment": "browser",
+            "disabled_safety_policies": [
+                "financial_transactions",
+                "sensitive_data_modification",
+                "legal_terms_and_agreements",
+            ],
+            "enable_prompt_injection_detection": "true",
+        }
+    }) == [{
+        "computerUse": {
+            "environment": "ENVIRONMENT_BROWSER",
+            "disabledSafetyPolicies": [
+                "FINANCIAL_TRANSACTIONS",
+                "SENSITIVE_DATA_MODIFICATION",
+                "LEGAL_TERMS_AND_AGREEMENTS",
+            ],
+            "enablePromptInjectionDetection": True,
+        }
+    }]
+    assert proxy._gemini_url_retrieval_status_value("paywall") == "URL_RETRIEVAL_STATUS_PAYWALL"
+    assert proxy._gemini_url_retrieval_status_value("unsafe") == "URL_RETRIEVAL_STATUS_UNSAFE"
+    assert proxy._gemini_model_stage_value("unstable") == "UNSTABLE_EXPERIMENTAL"
+    assert proxy._gemini_model_stage_value("legacy") == "LEGACY"
 
     function_declarations = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
         "contents": "hi",

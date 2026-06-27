@@ -711,6 +711,9 @@ for `promptFeedback`, `citationMetadata`, `groundingMetadata`,
 grounding chunk/support fields such as `retrieved_context`, `image_uri`,
 `place_id`, `grounding_chunk_indices`, `confidence_scores`, `source_id`,
 `grounding_passage`, `semantic_retriever_chunk`, and logprobs `token_id`.
+Latest enum spellings for `UrlMetadata.urlRetrievalStatus`,
+`ModelStatus.modelStage`, and `ComputerUse` options are normalized from common
+SDK-style aliases to Gemini REST values.
 String `stopSequences` and `responseModalities` values are normalized to the
 Gemini REST list form. Numeric and boolean generation config values such as
 `maxOutputTokens`, `temperature`, `topK`, and `responseLogprobs` are coerced

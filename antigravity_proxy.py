@@ -1041,6 +1041,10 @@ def _gemini_url_retrieval_status_value(value: Any) -> Any:
         "failed": "URL_RETRIEVAL_STATUS_ERROR",
         "failure": "URL_RETRIEVAL_STATUS_ERROR",
         "url_retrieval_status_error": "URL_RETRIEVAL_STATUS_ERROR",
+        "paywall": "URL_RETRIEVAL_STATUS_PAYWALL",
+        "url_retrieval_status_paywall": "URL_RETRIEVAL_STATUS_PAYWALL",
+        "unsafe": "URL_RETRIEVAL_STATUS_UNSAFE",
+        "url_retrieval_status_unsafe": "URL_RETRIEVAL_STATUS_UNSAFE",
     }
     return aliases.get(normalized, value)
 
@@ -1055,7 +1059,48 @@ def _gemini_model_stage_value(value: Any) -> Any:
         "preview": "PREVIEW",
         "stable": "STABLE",
         "experimental": "EXPERIMENTAL",
+        "unstable": "UNSTABLE_EXPERIMENTAL",
+        "unstable_experimental": "UNSTABLE_EXPERIMENTAL",
         "deprecated": "DEPRECATED",
+        "legacy": "LEGACY",
+        "retired": "RETIRED",
+    }
+    return aliases.get(normalized, value)
+
+
+def _gemini_computer_environment_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "ENVIRONMENT_UNSPECIFIED",
+        "environment_unspecified": "ENVIRONMENT_UNSPECIFIED",
+        "browser": "ENVIRONMENT_BROWSER",
+        "environment_browser": "ENVIRONMENT_BROWSER",
+        "mobile": "ENVIRONMENT_MOBILE",
+        "environment_mobile": "ENVIRONMENT_MOBILE",
+        "desktop": "ENVIRONMENT_DESKTOP",
+        "environment_desktop": "ENVIRONMENT_DESKTOP",
+    }
+    return aliases.get(normalized, value)
+
+
+def _gemini_computer_safety_policy_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "SAFETY_POLICY_UNSPECIFIED",
+        "policy_unspecified": "SAFETY_POLICY_UNSPECIFIED",
+        "safety_policy_unspecified": "SAFETY_POLICY_UNSPECIFIED",
+        "financial_transactions": "FINANCIAL_TRANSACTIONS",
+        "sensitive_data_modification": "SENSITIVE_DATA_MODIFICATION",
+        "communication_tool": "COMMUNICATION_TOOL",
+        "communication_tools": "COMMUNICATION_TOOL",
+        "account_creation": "ACCOUNT_CREATION",
+        "data_modification": "DATA_MODIFICATION",
+        "user_consent_management": "USER_CONSENT_MANAGEMENT",
+        "legal_terms_and_agreements": "LEGAL_TERMS_AND_AGREEMENTS",
     }
     return aliases.get(normalized, value)
 
@@ -1773,6 +1818,21 @@ def _gemini_normalize_builtin_tool_options(tool: dict[str, Any]) -> dict[str, An
         if "topK" in normalized_file_search:
             normalized_file_search["topK"] = _gemini_int_value(normalized_file_search["topK"])
         out["file_search"] = normalized_file_search
+    computer_use = out.get("computerUse")
+    if isinstance(computer_use, dict):
+        normalized_computer_use = _gemini_normalize_request(computer_use)
+        if "environment" in normalized_computer_use:
+            normalized_computer_use["environment"] = _gemini_computer_environment_value(normalized_computer_use["environment"])
+        if isinstance(normalized_computer_use.get("disabledSafetyPolicies"), list):
+            normalized_computer_use["disabledSafetyPolicies"] = [
+                _gemini_computer_safety_policy_value(item)
+                for item in normalized_computer_use["disabledSafetyPolicies"]
+            ]
+        if "enablePromptInjectionDetection" in normalized_computer_use:
+            normalized_computer_use["enablePromptInjectionDetection"] = _gemini_bool_value(
+                normalized_computer_use["enablePromptInjectionDetection"]
+            )
+        out["computerUse"] = normalized_computer_use
     return out
 
 
