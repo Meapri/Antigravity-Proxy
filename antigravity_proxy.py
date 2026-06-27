@@ -7651,6 +7651,7 @@ def _gemini_models_list_response(page_size: int, page_token: str | None) -> dict
 
 
 @app.get("/v1/models")
+@app.get("/v1/publishers/google/models")
 async def list_models(request: Request):
     """Return the list of supported models (Gemini stable-compatible)."""
     try:
@@ -7661,6 +7662,7 @@ async def list_models(request: Request):
 
 
 @app.get("/v1beta/models")
+@app.get("/v1beta/publishers/google/models")
 async def gemini_list_models(request: Request):
     """Gemini-compatible model listing."""
     pageSize, pageToken = _gemini_list_query_params(request, default_page_size=50, max_page_size=1000)
@@ -7737,7 +7739,9 @@ async def gemini_delete_model_operation(model_name: str, operation_id: str):
 
 
 @app.get("/v1/models/{model_name:path}")
+@app.get("/v1/publishers/google/models/{model_name:path}")
 @app.get("/v1beta/models/{model_name:path}")
+@app.get("/v1beta/publishers/google/models/{model_name:path}")
 async def gemini_get_model(model_name: str):
     """Gemini-compatible model retrieval."""
     try:
@@ -9439,7 +9443,9 @@ async def gemini_delete_tuned_model_permission(tuned_model_id: str, permission_i
 
 
 @app.post("/v1/models/{model_name:path}:countTokens")
+@app.post("/v1/publishers/google/models/{model_name:path}:countTokens")
 @app.post("/v1beta/models/{model_name:path}:countTokens")
+@app.post("/v1beta/publishers/google/models/{model_name:path}:countTokens")
 async def gemini_count_tokens(model_name: str, request: Request):
     """Gemini-compatible approximate countTokens endpoint."""
     try:
@@ -9480,7 +9486,9 @@ async def gemini_compute_tokens(model_name: str, request: Request):
 
 
 @app.post("/v1/models/{model_name:path}:embedContent")
+@app.post("/v1/publishers/google/models/{model_name:path}:embedContent")
 @app.post("/v1beta/models/{model_name:path}:embedContent")
+@app.post("/v1beta/publishers/google/models/{model_name:path}:embedContent")
 async def gemini_embed_content(model_name: str, request: Request):
     """Gemini-compatible embedContent endpoint with deterministic local vectors."""
     try:
@@ -9498,7 +9506,9 @@ async def gemini_embed_content(model_name: str, request: Request):
 
 
 @app.post("/v1/models/{model_name:path}:batchEmbedContents")
+@app.post("/v1/publishers/google/models/{model_name:path}:batchEmbedContents")
 @app.post("/v1beta/models/{model_name:path}:batchEmbedContents")
+@app.post("/v1beta/publishers/google/models/{model_name:path}:batchEmbedContents")
 async def gemini_batch_embed_contents(model_name: str, request: Request):
     """Gemini-compatible batchEmbedContents endpoint with deterministic local vectors."""
     try:
@@ -9693,7 +9703,9 @@ async def _gemini_predict_payload(model_name: str, body: dict[str, Any]) -> tupl
 
 
 @app.post("/v1/models/{model_name:path}:predict")
+@app.post("/v1/publishers/google/models/{model_name:path}:predict")
 @app.post("/v1beta/models/{model_name:path}:predict")
+@app.post("/v1beta/publishers/google/models/{model_name:path}:predict")
 async def gemini_predict(model_name: str, request: Request):
     """Gemini/Vertex-compatible predict endpoint mapped to generateContent."""
     try:
@@ -9915,7 +9927,9 @@ async def gemini_generate_answer(model_name: str, request: Request):
 
 
 @app.post("/v1/models/{model_name:path}:generateContent")
+@app.post("/v1/publishers/google/models/{model_name:path}:generateContent")
 @app.post("/v1beta/models/{model_name:path}:generateContent")
+@app.post("/v1beta/publishers/google/models/{model_name:path}:generateContent")
 @app.post("/v1/dynamic/{model_name:path}:generateContent")
 @app.post("/v1beta/dynamic/{model_name:path}:generateContent")
 async def gemini_generate_content(model_name: str, request: Request):
@@ -10016,7 +10030,6 @@ def _gemini_streaming_response(*, body: dict[str, Any], model_name: str, antigra
                     status="UNAVAILABLE",
                 )
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-        yield "data: [DONE]\n\n"
 
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
@@ -10914,7 +10927,9 @@ async def gemini_live_websocket(websocket: WebSocket):
 
 
 @app.post("/v1/models/{model_name:path}:streamGenerateContent")
+@app.post("/v1/publishers/google/models/{model_name:path}:streamGenerateContent")
 @app.post("/v1beta/models/{model_name:path}:streamGenerateContent")
+@app.post("/v1beta/publishers/google/models/{model_name:path}:streamGenerateContent")
 @app.post("/v1/dynamic/{model_name:path}:streamGenerateContent")
 @app.post("/v1beta/dynamic/{model_name:path}:streamGenerateContent")
 async def gemini_stream_generate_content(model_name: str, request: Request):

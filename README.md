@@ -286,12 +286,42 @@ Common SDK spelling variants are accepted for query parameters: `page_size`,
 `return_partial_success` are normalized to the Gemini REST camelCase forms.
 `generateContent?alt=sse` and
 `generateContent?stream=true` are treated as streaming Gemini SSE responses.
-Streaming fallback errors use the same Gemini `error` payload and
+Gemini streaming responses emit only JSON `data:` chunks; OpenAI-style
+`data: [DONE]` terminators are intentionally not sent on Gemini REST streams
+because the official Google GenAI SDK parses every Gemini SSE data segment as
+JSON. Streaming fallback errors use the same Gemini `error` payload and
 `google.rpc.ErrorInfo` details as non-streaming Gemini errors.
 `interactions.create` accepts the same SDK-style `config` object used by
 `generateContent`, including `systemInstruction`, `generationConfig` scalar
 coercion, `safetySettings`, `functionDeclarations`, `toolConfig`, and
 response-format aliases.
+
+Python `google-genai` SDK clients can use a collection-scoped custom base URL:
+
+```python
+from google import genai
+from google.genai import types
+
+client = genai.Client(
+    vertexai=True,
+    http_options=types.HttpOptions(
+        base_url="http://127.0.0.1:8765/v1beta",
+        api_version=None,
+        base_url_resource_scope=types.ResourceScope.COLLECTION,
+        headers={"x-goog-api-key": "your-proxy-key"},
+    ),
+)
+
+response = client.models.generate_content(
+    model="gemini-3-flash-agent",
+    contents="Say hello.",
+)
+```
+
+For that SDK mode, the proxy accepts Vertex collection aliases such as
+`/v1beta/publishers/google/models/{model}:generateContent`,
+`:streamGenerateContent`, `:countTokens`, `:embedContent`,
+`:batchEmbedContents`, and `:predict`, plus model list/get aliases.
 
 Implemented Gemini-compatible routes:
 

@@ -2,8 +2,11 @@ import asyncio
 import base64
 import json
 
+import httpx
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from google import genai
+from google.genai import types
 from starlette.routing import Match
 
 import antigravity_proxy as proxy
@@ -1935,7 +1938,7 @@ def test_gemini_generate_content_alt_sse(monkeypatch):
     assert "alt stream" in body
     assert '"modelVersion": "gemini-3-flash-agent"' in body
     assert seen["model"] == "gemini-3-flash-agent"
-    assert "data: [DONE]" in body
+    assert "data: [DONE]" not in body
 
 
 def test_gemini_generate_content_alt_sse_falls_back_on_empty_stream(monkeypatch):
@@ -1957,7 +1960,7 @@ def test_gemini_generate_content_alt_sse_falls_back_on_empty_stream(monkeypatch)
 
     assert response.status_code == 200
     assert "fallback stream" in body
-    assert "data: [DONE]" in body
+    assert "data: [DONE]" not in body
 
 
 def test_gemini_generate_content_alt_sse_error_uses_gemini_error_details(monkeypatch):
@@ -1980,7 +1983,7 @@ def test_gemini_generate_content_alt_sse_error_uses_gemini_error_details(monkeyp
     assert response.status_code == 200
     assert '"status": "UNAVAILABLE"' in body
     assert '"@type": "type.googleapis.com/google.rpc.ErrorInfo"' in body
-    assert "data: [DONE]" in body
+    assert "data: [DONE]" not in body
 
 
 def test_gemini_predict_and_predict_long_running(tmp_path, monkeypatch):
@@ -2139,7 +2142,80 @@ def test_gemini_stream_generate_content_sse(monkeypatch):
 
     assert response.status_code == 200
     assert 'data: {"candidates":' in body
-    assert "data: [DONE]" in body
+    assert "data: [DONE]" not in body
+
+
+class _FastApiTransport(httpx.BaseTransport):
+    def __init__(self, client: TestClient):
+        self.client = client
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        target = request.url.path
+        if request.url.query:
+            target += "?" + request.url.query.decode("ascii")
+        response = self.client.request(
+            request.method,
+            target,
+            content=request.content,
+            headers=dict(request.headers),
+        )
+        return httpx.Response(
+            response.status_code,
+            headers=dict(response.headers),
+            content=response.content,
+            request=request,
+        )
+
+
+def test_google_genai_sdk_vertex_collection_base_url(monkeypatch):
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            assert model == "gemini-3-flash-agent"
+            return {
+                "response": {
+                    "candidates": [{
+                        "content": {"role": "model", "parts": [{"text": "sdk ok"}]},
+                        "finishReason": "STOP",
+                    }],
+                    "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 2, "totalTokenCount": 3},
+                }
+            }
+
+        async def generate_raw_stream_async(self, *, request, model=""):
+            assert model == "gemini-3-flash-agent"
+            yield {
+                "response": {
+                    "candidates": [{
+                        "content": {"role": "model", "parts": [{"text": "sdk stream"}]},
+                        "finishReason": "STOP",
+                    }],
+                    "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 2, "totalTokenCount": 3},
+                }
+            }
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    app_client = TestClient(proxy.app)
+    sdk_http = httpx.Client(transport=_FastApiTransport(app_client))
+    sdk = genai.Client(
+        vertexai=True,
+        http_options=types.HttpOptions(
+            base_url="http://testserver/v1beta",
+            api_version=None,
+            base_url_resource_scope=types.ResourceScope.COLLECTION,
+            httpx_client=sdk_http,
+        ),
+    )
+
+    models = list(sdk.models.list(config={"page_size": 1}))
+    generated = sdk.models.generate_content(model="gemini-3-flash-agent", contents="hello")
+    counted = sdk.models.count_tokens(model="gemini-3-flash-agent", contents="hello")
+    streamed = list(sdk.models.generate_content_stream(model="gemini-3-flash-agent", contents="hello"))
+
+    assert models
+    assert models[0].name.startswith("models/")
+    assert generated.text == "sdk ok"
+    assert counted.total_tokens > 0
+    assert "".join(chunk.text or "" for chunk in streamed) == "sdk stream"
 
 
 def test_gemini_batch_generate_content_operation(tmp_path, monkeypatch):
