@@ -380,6 +380,8 @@ _GEMINI_KEY_ALIASES = {
     "safety_settings": "safetySettings",
     "tool_config": "toolConfig",
     "include_server_side_tool_invocations": "includeServerSideToolInvocations",
+    "retrieval_config": "retrievalConfig",
+    "lat_lng": "latLng",
     "cached_content": "cachedContent",
     "processing_options": "processingOptions",
     "processingOptions": "processingOptions",
@@ -1185,6 +1187,15 @@ def _gemini_normalize_tool_config(value: Any) -> Any:
         out["functionCallingConfig"] = _gemini_normalize_function_calling_config(out["functionCallingConfig"])
     if "includeServerSideToolInvocations" in out:
         out["includeServerSideToolInvocations"] = _gemini_bool_value(out["includeServerSideToolInvocations"])
+    if isinstance(out.get("retrievalConfig"), dict):
+        retrieval = _gemini_normalize_request(out["retrievalConfig"])
+        if isinstance(retrieval.get("latLng"), dict):
+            lat_lng = dict(retrieval["latLng"])
+            for key in ("latitude", "longitude"):
+                if key in lat_lng:
+                    lat_lng[key] = _gemini_float_value(lat_lng[key])
+            retrieval["latLng"] = lat_lng
+        out["retrievalConfig"] = retrieval
     return out
 
 

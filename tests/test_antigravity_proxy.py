@@ -1395,6 +1395,13 @@ def test_gemini_generate_content_normalizes_safety_and_tool_config_shortcuts(mon
             "mode": "any",
             "allowed_function_names": "lookup",
             "include_server_side_tool_invocations": "true",
+            "retrieval_config": {
+                "language_code": "ko-KR",
+                "lat_lng": {
+                    "latitude": "37.5665",
+                    "longitude": "126.9780",
+                },
+            },
         },
     })
 
@@ -1409,6 +1416,13 @@ def test_gemini_generate_content_normalizes_safety_and_tool_config_shortcuts(mon
             "allowedFunctionNames": ["lookup"],
         },
         "includeServerSideToolInvocations": True,
+        "retrievalConfig": {
+            "languageCode": "ko-KR",
+            "latLng": {
+                "latitude": 37.5665,
+                "longitude": 126.978,
+            },
+        },
     }
 
     shortcut = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
