@@ -772,6 +772,16 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
                         },
                         "grounding_metadata": {
                             "search_entry_point": {"rendered_content": "x", "sdk_blob": "blob"},
+                            "grounding_chunks": [
+                                {"retrieved_context": {"media_id": "media-1", "page_number": 3, "text": "retrieved"}},
+                                {"image": {"image_uri": "https://example.test/image.png", "source_uri": "https://example.test"}},
+                                {"maps": {"place_id": "place-1", "place_answer_sources": {"review_snippets": ["good"]}}},
+                            ],
+                            "grounding_supports": [{
+                                "segment": {"part_index": 0, "start_index": 0, "end_index": 5, "text": "hello"},
+                                "grounding_chunk_indices": [0, 1],
+                                "confidence_scores": [0.9, 0.8],
+                            }],
                             "web_search_queries": ["atlas"],
                             "image_search_queries": ["atlas image"],
                             "google_maps_widget_context_token": "maps-token",
@@ -826,6 +836,15 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
     assert body["candidates"][0]["groundingMetadata"]["imageSearchQueries"] == ["atlas image"]
     assert body["candidates"][0]["groundingMetadata"]["googleMapsWidgetContextToken"] == "maps-token"
     assert body["candidates"][0]["groundingMetadata"]["retrievalMetadata"]["googleSearchDynamicRetrievalScore"] == 0.42
+    assert body["candidates"][0]["groundingMetadata"]["groundingChunks"][0]["retrievedContext"]["mediaId"] == "media-1"
+    assert body["candidates"][0]["groundingMetadata"]["groundingChunks"][0]["retrievedContext"]["pageNumber"] == 3
+    assert body["candidates"][0]["groundingMetadata"]["groundingChunks"][1]["image"]["imageUri"] == "https://example.test/image.png"
+    assert body["candidates"][0]["groundingMetadata"]["groundingChunks"][1]["image"]["sourceUri"] == "https://example.test"
+    assert body["candidates"][0]["groundingMetadata"]["groundingChunks"][2]["maps"]["placeId"] == "place-1"
+    assert body["candidates"][0]["groundingMetadata"]["groundingChunks"][2]["maps"]["placeAnswerSources"]["reviewSnippets"] == ["good"]
+    assert body["candidates"][0]["groundingMetadata"]["groundingSupports"][0]["segment"]["partIndex"] == 0
+    assert body["candidates"][0]["groundingMetadata"]["groundingSupports"][0]["groundingChunkIndices"] == [0, 1]
+    assert body["candidates"][0]["groundingMetadata"]["groundingSupports"][0]["confidenceScores"] == [0.9, 0.8]
     assert body["candidates"][0]["citationMetadata"]["citationSources"][0]["startIndex"] == 0
     assert body["candidates"][0]["citationMetadata"]["citationSources"][0]["endIndex"] == 5
     assert body["candidates"][0]["urlContextMetadata"]["urlMetadata"][0]["retrievedUrl"] == "https://example.test"
