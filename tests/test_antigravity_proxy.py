@@ -806,8 +806,8 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
                         },
                         "logprobs_result": {
                             "log_probability_sum": -1.5,
-                            "top_candidates": [{"candidates": [{"token": "hello", "log_probability": -0.1}]}],
-                            "chosen_candidates": [{"token": "hello", "log_probability": -0.1}],
+                            "top_candidates": [{"candidates": [{"token": "hello", "token_id": 42, "log_probability": -0.1}]}],
+                            "chosen_candidates": [{"token": "hello", "token_id": 42, "log_probability": -0.1}],
                         },
                         "avg_logprobs": -0.2,
                     }],
@@ -868,6 +868,8 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
     assert body["candidates"][0]["urlContextMetadata"]["urlMetadata"][0]["urlRetrievalStatus"] == "URL_RETRIEVAL_STATUS_SUCCESS"
     assert body["candidates"][0]["logprobsResult"]["logProbabilitySum"] == -1.5
     assert body["candidates"][0]["logprobsResult"]["topCandidates"][0]["candidates"][0]["logProbability"] == -0.1
+    assert body["candidates"][0]["logprobsResult"]["topCandidates"][0]["candidates"][0]["tokenId"] == 42
+    assert body["candidates"][0]["logprobsResult"]["chosenCandidates"][0]["tokenId"] == 42
     assert body["candidates"][0]["avgLogprobs"] == -0.2
     assert body["usageMetadata"]["promptTokenCount"] == 4
     assert body["usageMetadata"]["candidatesTokenCount"] == 2

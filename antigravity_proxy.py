@@ -1861,6 +1861,7 @@ def _gemini_normalize_response_object(value: Any) -> Any:
         "url_retrieval_status": "urlRetrievalStatus",
         "log_probability_sum": "logProbabilitySum",
         "log_probability": "logProbability",
+        "token_id": "tokenId",
         "top_candidates": "topCandidates",
         "chosen_candidates": "chosenCandidates",
         "block_reason": "blockReason",
