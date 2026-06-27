@@ -744,6 +744,8 @@ Content parts preserve SDK-style aliases such as `function_call`,
 `thought_signature` as canonical Gemini REST fields. Latest Part fields such
 as `tool_call`, `tool_response`, `tool_type`, `part_metadata`, and
 `function_response.will_continue` are also normalized.
+Function response `scheduling` accepts common spellings such as `when idle`
+and normalizes them to Gemini enum values such as `WHEN_IDLE`.
 Generated responses canonicalize common SDK/upstream snake_case metadata aliases
 for `promptFeedback`, `citationMetadata`, `groundingMetadata`,
 `groundingAttributions`,

@@ -943,6 +943,7 @@ def test_gemini_generate_content_accepts_sdk_content_unions(monkeypatch):
                         "name": "lookup",
                         "response": {"answer": "October"},
                         "will_continue": "false",
+                        "scheduling": "when idle",
                     }
                 },
                 {"tool_call": {"id": "tool-1", "tool_type": "web", "args": {"query": "atlas"}}},
@@ -966,6 +967,7 @@ def test_gemini_generate_content_accepts_sdk_content_unions(monkeypatch):
             "name": "lookup",
             "response": {"answer": "October"},
             "willContinue": False,
+            "scheduling": "WHEN_IDLE",
         }
     }
     assert alias_parts[2] == {"toolCall": {"id": "tool-1", "toolType": "web", "args": {"query": "atlas"}}}

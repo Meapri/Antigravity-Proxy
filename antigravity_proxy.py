@@ -749,6 +749,21 @@ def _gemini_response_modalities_value(value: Any) -> Any:
     return modalities
 
 
+def _gemini_function_response_scheduling_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "SCHEDULING_UNSPECIFIED",
+        "scheduling_unspecified": "SCHEDULING_UNSPECIFIED",
+        "silent": "SILENT",
+        "when_idle": "WHEN_IDLE",
+        "scheduling_when_idle": "WHEN_IDLE",
+        "interrupt": "INTERRUPT",
+    }
+    return aliases.get(normalized, value)
+
+
 def _gemini_normalize_generation_config(value: Any) -> Any:
     if not isinstance(value, dict):
         return value
@@ -1096,9 +1111,12 @@ def _gemini_inline_data_part(value: dict[str, Any]) -> dict[str, Any] | None:
 def _gemini_normalize_part_options(part: dict[str, Any]) -> dict[str, Any]:
     out = dict(part)
     function_response = out.get("functionResponse")
-    if isinstance(function_response, dict) and "willContinue" in function_response:
+    if isinstance(function_response, dict) and ("willContinue" in function_response or "scheduling" in function_response):
         normalized_response = dict(function_response)
-        normalized_response["willContinue"] = _gemini_bool_value(normalized_response["willContinue"])
+        if "willContinue" in normalized_response:
+            normalized_response["willContinue"] = _gemini_bool_value(normalized_response["willContinue"])
+        if "scheduling" in normalized_response:
+            normalized_response["scheduling"] = _gemini_function_response_scheduling_value(normalized_response["scheduling"])
         out["functionResponse"] = normalized_response
     return out
 
