@@ -513,6 +513,8 @@ _GEMINI_KEY_ALIASES = {
     "mcp_servers": "mcpServers",
     "mcpServers": "mcpServers",
     "streamable_http_transport": "streamableHttpTransport",
+    "terminate_on_close": "terminateOnClose",
+    "sse_read_timeout": "sseReadTimeout",
     "google_search": "google_search",
     "googleSearch": "google_search",
     "google_search_retrieval": "googleSearchRetrieval",
@@ -557,8 +559,15 @@ _GEMINI_KEY_ALIASES = {
     "functionCall": "functionCall",
     "function_response": "functionResponse",
     "functionResponse": "functionResponse",
+    "will_continue": "willContinue",
     "thought_signature": "thoughtSignature",
     "thoughtSignature": "thoughtSignature",
+    "tool_call": "toolCall",
+    "toolCall": "toolCall",
+    "tool_response": "toolResponse",
+    "toolResponse": "toolResponse",
+    "tool_type": "toolType",
+    "part_metadata": "partMetadata",
     "executable_code": "executableCode",
     "executableCode": "executableCode",
     "code_execution_result": "codeExecutionResult",
@@ -1066,15 +1075,27 @@ def _gemini_inline_data_part(value: dict[str, Any]) -> dict[str, Any] | None:
     return {"inlineData": {"mimeType": resolved_mime, "data": text_data}}
 
 
+def _gemini_normalize_part_options(part: dict[str, Any]) -> dict[str, Any]:
+    out = dict(part)
+    function_response = out.get("functionResponse")
+    if isinstance(function_response, dict) and "willContinue" in function_response:
+        normalized_response = dict(function_response)
+        normalized_response["willContinue"] = _gemini_bool_value(normalized_response["willContinue"])
+        out["functionResponse"] = normalized_response
+    return out
+
+
 def _gemini_content_part(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
-        out = _gemini_normalize_request(value)
+        out = _gemini_normalize_part_options(_gemini_normalize_request(value))
         if any(key in out for key in (
             "text",
             "inlineData",
             "fileData",
             "functionCall",
             "functionResponse",
+            "toolCall",
+            "toolResponse",
             "executableCode",
             "codeExecutionResult",
         )):
@@ -1124,7 +1145,17 @@ def _gemini_content_from_value(value: Any, *, default_role: str = "user") -> dic
             content = _gemini_content_from_value(value.get("content"), default_role=str(value.get("role") or default_role))
             content["role"] = str(value.get("role") or content.get("role") or default_role)
             return content
-        if any(key in value for key in ("text", "inlineData", "fileData", "functionCall", "functionResponse")):
+        if any(key in value for key in (
+            "text",
+            "inlineData",
+            "fileData",
+            "functionCall",
+            "functionResponse",
+            "toolCall",
+            "toolResponse",
+            "executableCode",
+            "codeExecutionResult",
+        )):
             return {"role": default_role, "parts": [_gemini_content_part(value)]}
     if isinstance(value, list):
         return {"role": default_role, "parts": [_gemini_content_part(part) for part in value]}
@@ -1903,7 +1934,7 @@ def _gemini_content_item_to_part(item: Any) -> dict[str, Any] | None:
         if item is None:
             return None
         return {"text": str(item)}
-    normalized = _gemini_normalize_request(item)
+    normalized = _gemini_normalize_part_options(_gemini_normalize_request(item))
     if not isinstance(normalized, dict):
         return {"text": str(normalized)}
     item_type = str(normalized.get("type") or "").strip()
@@ -1945,7 +1976,17 @@ def _gemini_content_item_to_part(item: Any) -> dict[str, Any] | None:
                     "fileUri": str(uri),
                 }
             }
-    for key in ("text", "inlineData", "fileData", "functionCall", "functionResponse", "executableCode", "codeExecutionResult"):
+    for key in (
+        "text",
+        "inlineData",
+        "fileData",
+        "functionCall",
+        "functionResponse",
+        "toolCall",
+        "toolResponse",
+        "executableCode",
+        "codeExecutionResult",
+    ):
         if key in normalized:
             if key == "text":
                 return {"text": str(normalized[key])}

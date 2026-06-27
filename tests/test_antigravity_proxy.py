@@ -867,24 +867,46 @@ def test_gemini_generate_content_accepts_sdk_content_unions(monkeypatch):
             "role": "model",
             "parts": [
                 {
-                    "function_call": {"name": "lookup", "args": {"q": "atlas"}},
+                    "function_call": {"id": "fn-1", "name": "lookup", "args": {"q": "atlas"}},
                     "thought_signature": "sig-123",
                     "thought": True,
+                    "part_metadata": {"source": "test"},
                 },
-                {"executable_code": {"language": "PYTHON", "code": "print(1)"}},
-                {"code_execution_result": {"outcome": "OUTCOME_OK", "output": "1"}},
+                {
+                    "function_response": {
+                        "id": "fn-1",
+                        "name": "lookup",
+                        "response": {"answer": "October"},
+                        "will_continue": "false",
+                    }
+                },
+                {"tool_call": {"id": "tool-1", "tool_type": "web", "args": {"query": "atlas"}}},
+                {"tool_response": {"id": "tool-1", "tool_type": "web", "response": {"ok": True}}},
+                {"executable_code": {"id": "code-1", "language": "PYTHON", "code": "print(1)"}},
+                {"code_execution_result": {"id": "code-1", "outcome": "OUTCOME_OK", "output": "1"}},
             ],
         }]
     })
     assert part_aliases.status_code == 200
     alias_parts = seen["request"]["contents"][0]["parts"]
     assert alias_parts[0] == {
-        "functionCall": {"name": "lookup", "args": {"q": "atlas"}},
+        "functionCall": {"id": "fn-1", "name": "lookup", "args": {"q": "atlas"}},
         "thoughtSignature": "sig-123",
         "thought": True,
+        "partMetadata": {"source": "test"},
     }
-    assert alias_parts[1] == {"executableCode": {"language": "PYTHON", "code": "print(1)"}}
-    assert alias_parts[2] == {"codeExecutionResult": {"outcome": "OUTCOME_OK", "output": "1"}}
+    assert alias_parts[1] == {
+        "functionResponse": {
+            "id": "fn-1",
+            "name": "lookup",
+            "response": {"answer": "October"},
+            "willContinue": False,
+        }
+    }
+    assert alias_parts[2] == {"toolCall": {"id": "tool-1", "toolType": "web", "args": {"query": "atlas"}}}
+    assert alias_parts[3] == {"toolResponse": {"id": "tool-1", "toolType": "web", "response": {"ok": True}}}
+    assert alias_parts[4] == {"executableCode": {"id": "code-1", "language": "PYTHON", "code": "print(1)"}}
+    assert alias_parts[5] == {"codeExecutionResult": {"id": "code-1", "outcome": "OUTCOME_OK", "output": "1"}}
 
 
 def test_gemini_candidate_part_aliases_are_canonicalized(monkeypatch):

@@ -741,7 +741,9 @@ Antigravity's internal endpoint does not expose that field yet, the proxy
 removes it before forwarding so requests do not fail with unknown-field errors.
 Content parts preserve SDK-style aliases such as `function_call`,
 `function_response`, `executable_code`, `code_execution_result`, and
-`thought_signature` as canonical Gemini REST fields.
+`thought_signature` as canonical Gemini REST fields. Latest Part fields such
+as `tool_call`, `tool_response`, `tool_type`, `part_metadata`, and
+`function_response.will_continue` are also normalized.
 String `stopSequences` and `responseModalities` values are normalized to the
 Gemini REST list form. Numeric and boolean generation config values such as
 `maxOutputTokens`, `temperature`, `topK`, and `responseLogprobs` are coerced
