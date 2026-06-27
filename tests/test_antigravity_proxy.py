@@ -801,8 +801,9 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
                         "avg_logprobs": -0.2,
                     }],
                     "usage_metadata": {
-                        "prompt_tokens": 4,
-                        "output_tokens": 2,
+                        "prompt_token_count": 4,
+                        "candidates_token_count": 2,
+                        "total_token_count": 14,
                         "tool_use_prompt_tokens": 3,
                         "thoughts_tokens": 5,
                         "prompt_tokens_details": [{"modality": "TEXT", "tokenCount": 4}],
@@ -3074,7 +3075,7 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
             "displayName": "clip.mp4",
             "mimeType": "video/mp4",
             "uri": "gs://bucket/clip.mp4",
-            "videoMetadata": {"videoDuration": "3s"},
+            "video_metadata": {"video_duration": "3s"},
         }
     })
     assert video.status_code == 200

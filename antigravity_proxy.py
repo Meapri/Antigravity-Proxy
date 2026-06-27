@@ -572,6 +572,7 @@ _GEMINI_KEY_ALIASES = {
     "image_url": "imageUrl",
     "image_bytes": "imageBytes",
     "video_metadata": "videoMetadata",
+    "video_duration": "videoDuration",
     "function_call": "functionCall",
     "functionCall": "functionCall",
     "function_response": "functionResponse",
@@ -1601,11 +1602,14 @@ def _gemini_response_text(response: dict[str, Any]) -> str:
 def _gemini_normalize_usage_metadata(value: Any, *, request_body: dict[str, Any] | None, response: dict[str, Any]) -> dict[str, Any]:
     usage = dict(value) if isinstance(value, dict) else {}
     aliases = {
+        "prompt_token_count": "promptTokenCount",
         "prompt_tokens": "promptTokenCount",
         "input_tokens": "promptTokenCount",
+        "candidates_token_count": "candidatesTokenCount",
         "candidates_tokens": "candidatesTokenCount",
         "candidate_tokens": "candidatesTokenCount",
         "output_tokens": "candidatesTokenCount",
+        "total_token_count": "totalTokenCount",
         "total_tokens": "totalTokenCount",
         "thoughts_tokens": "thoughtsTokenCount",
         "thoughts_token_count": "thoughtsTokenCount",

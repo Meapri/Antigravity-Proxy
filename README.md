@@ -827,7 +827,8 @@ proxy `{"file": ...}` form remains available as a compatibility alias. File
 `state` and `source` values are normalized to Gemini-style enum names such as
 `ACTIVE`, `FAILED`, `UPLOADED`, and `REGISTERED` across create, list, and get
 responses. Metadata-only registered files receive a deterministic base64
-`sha256Hash` when one is not supplied.
+`sha256Hash` when one is not supplied. SDK-style `video_metadata.video_duration`
+is normalized to Gemini REST `videoMetadata.videoDuration`.
 
 Then pass the returned `file.uri` in `fileData.fileUri`:
 
@@ -1093,6 +1094,9 @@ Notes:
   `generateContentRequest` wrappers, string `contents`, and local
   `cachedContent` / `file_search` context are expanded before counting. Tool
   declarations and `toolConfig` are also included in the local prompt estimate.
+- Upstream Gemini usage metadata aliases such as `prompt_token_count`,
+  `candidates_token_count`, and `total_token_count` are normalized to
+  `promptTokenCount`, `candidatesTokenCount`, and `totalTokenCount`.
 - Files are stored locally under `data/gemini_files` by default; override with
   `ANTIGRAVITY_GEMINI_FILES_DIR`. File resources include Gemini-style
   `downloadUri`, `source`, base64 `sha256Hash`, and video metadata fields when
