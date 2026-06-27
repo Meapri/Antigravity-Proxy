@@ -1441,6 +1441,13 @@ def test_gemini_generate_content_normalizes_safety_and_tool_config_shortcuts(mon
             "harm_category": "HARM_CATEGORY_DANGEROUS_CONTENT",
             "harm_block_threshold": "BLOCK_ONLY_HIGH",
         },
+        "generation_config": {
+            "thinking_config": {
+                "thinking_budget": "128",
+                "include_thoughts": "true",
+                "thinking_level": "HIGH",
+            },
+        },
         "tool_config": {
             "mode": "any",
             "allowed_function_names": "lookup",
@@ -1460,6 +1467,11 @@ def test_gemini_generate_content_normalizes_safety_and_tool_config_shortcuts(mon
         "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
         "threshold": "BLOCK_ONLY_HIGH",
     }]
+    assert seen["request"]["generationConfig"]["thinkingConfig"] == {
+        "thinkingBudget": 128,
+        "includeThoughts": True,
+        "thinkingLevel": "HIGH",
+    }
     assert seen["request"]["toolConfig"] == {
         "functionCallingConfig": {
             "mode": "ANY",
@@ -1519,6 +1531,24 @@ def test_gemini_generate_content_rejects_unsupported_builtin_tools():
         "contents": [{"role": "user", "parts": [{"text": "read url"}]}],
         "tools": [{"url_context": {}}],
     })
+    google_maps = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "map it",
+        "tools": [{"google_maps": {"enable_widget": "true"}}],
+    })
+    computer_use = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "use browser",
+        "tools": [{
+            "computer_use": {
+                "enable_prompt_injection_detection": "true",
+                "disabled_safety_policies": ["policy"],
+                "excluded_predefined_functions": ["navigate"],
+            }
+        }],
+    })
+    mcp_servers = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "call mcp",
+        "tools": [{"mcp_servers": [{"name": "local", "streamable_http_transport": {"url": "http://example.test"}}]}],
+    })
 
     assert url_context.status_code == 501
     assert url_context.json()["error"]["status"] == "UNIMPLEMENTED"
@@ -1533,6 +1563,12 @@ def test_gemini_generate_content_rejects_unsupported_builtin_tools():
     assert "code_execution" in code_execution.json()["error"]["message"]
     assert url_context_snake.status_code == 501
     assert "url_context" in url_context_snake.json()["error"]["message"]
+    assert google_maps.status_code == 501
+    assert "google_maps" in google_maps.json()["error"]["message"]
+    assert computer_use.status_code == 501
+    assert "computer_use" in computer_use.json()["error"]["message"]
+    assert mcp_servers.status_code == 501
+    assert "mcp_servers" in mcp_servers.json()["error"]["message"]
 
     single_url_context = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
         "contents": "read url",

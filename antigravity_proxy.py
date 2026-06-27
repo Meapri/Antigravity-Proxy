@@ -423,6 +423,7 @@ _GEMINI_KEY_ALIASES = {
     "thinking_config": "thinkingConfig",
     "thinking_budget": "thinkingBudget",
     "include_thoughts": "includeThoughts",
+    "thinking_level": "thinkingLevel",
     "response_modalities": "responseModalities",
     "media_resolution": "mediaResolution",
     "audio_timestamp": "audioTimestamp",
@@ -501,6 +502,17 @@ _GEMINI_KEY_ALIASES = {
     "allowed_function_names": "allowedFunctionNames",
     "code_execution": "codeExecution",
     "codeExecution": "codeExecution",
+    "computer_use": "computerUse",
+    "computerUse": "computerUse",
+    "enable_prompt_injection_detection": "enablePromptInjectionDetection",
+    "disabled_safety_policies": "disabledSafetyPolicies",
+    "excluded_predefined_functions": "excludedPredefinedFunctions",
+    "google_maps": "googleMaps",
+    "googleMaps": "googleMaps",
+    "enable_widget": "enableWidget",
+    "mcp_servers": "mcpServers",
+    "mcpServers": "mcpServers",
+    "streamable_http_transport": "streamableHttpTransport",
     "google_search": "google_search",
     "googleSearch": "google_search",
     "google_search_retrieval": "googleSearchRetrieval",
@@ -1278,7 +1290,17 @@ def _gemini_normalize_tools_value(value: Any) -> list[dict[str, Any]]:
         if "googleSearch" in item:
             item = dict(item)
             item["google_search"] = item.pop("googleSearch")
-        if any(key in item for key in ("google_search", "codeExecution", "urlContext", "file_search", "fileSearchRetrieval")):
+        if any(key in item for key in (
+            "google_search",
+            "codeExecution",
+            "computerUse",
+            "googleMaps",
+            "mcpServers",
+            "urlContext",
+            "url_context",
+            "file_search",
+            "fileSearchRetrieval",
+        )):
             item = _gemini_normalize_builtin_tool_options(item)
             tools.append(item)
             continue
@@ -4433,6 +4455,10 @@ def _gemini_reject_unsupported_builtin_tools(body: dict[str, Any]) -> None:
     tools = body.get("tools") if isinstance(body.get("tools"), list) else []
     unsupported = {
         "codeExecution": "code_execution",
+        "computerUse": "computer_use",
+        "googleMaps": "google_maps",
+        "mcpServers": "mcp_servers",
+        "urlContext": "url_context",
         "url_context": "url_context",
     }
     for tool in tools:

@@ -678,8 +678,9 @@ aliases are normalized too, including `google_search.search_types`,
 `google_search.time_range_filter`,
 `google_search_retrieval.dynamic_retrieval_config.dynamic_threshold`,
 `file_search.file_search_store_names`, `file_search.metadata_filter`, and
-`file_search.top_k`. `urlContext` and
-`codeExecution` are recognized but return
+`file_search.top_k`, and `thinking_config.thinking_level`. `urlContext`,
+`codeExecution`, `computerUse`, `googleMaps`, and `mcpServers` are recognized
+but return
 `UNIMPLEMENTED` because the current Antigravity backend does not expose those
 hosted tools. `toolConfig.functionCallingConfig.mode` and
 `allowedFunctionNames` are normalized from common SDK spellings. Function
