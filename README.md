@@ -725,6 +725,8 @@ Generation config aliases include `responseSchema` / `response_schema`,
 `translation_config`. Speech config aliases such as `speech_config`,
 `language_code`, `voice_config`, `prebuilt_voice_config`, and `voice_name` are
 also normalized.
+`speechConfig.voiceConfig` and `speechConfig.multiSpeakerVoiceConfig` are
+validated as mutually exclusive, matching Gemini's REST schema.
 Thinking config `thinking_level` accepts common spellings such as
 `thinking level high` and normalizes them to Gemini enum values such as `HIGH`.
 Response modality aliases such as `text`, `image`, and `audio` are normalized

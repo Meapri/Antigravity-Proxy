@@ -1062,9 +1062,6 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
             },
             "speech_config": {
                 "language_code": "ko-KR",
-                "voice_config": {
-                    "prebuilt_voice_config": {"voice_name": "Kore"},
-                },
                 "multi_speaker_voice_config": {
                     "speaker_voice_configs": [{
                         "speaker": "narrator",
@@ -1124,9 +1121,6 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
     }
     assert seen["request"]["generationConfig"]["speechConfig"] == {
         "languageCode": "ko-KR",
-        "voiceConfig": {
-            "prebuiltVoiceConfig": {"voiceName": "Kore"},
-        },
         "multiSpeakerVoiceConfig": {
             "speakerVoiceConfigs": [{
                 "speaker": "narrator",
@@ -1136,6 +1130,23 @@ def test_gemini_generate_content_accepts_sdk_config(monkeypatch):
             }],
         },
     }
+    invalid_speech = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "hi",
+        "generation_config": {
+            "speech_config": {
+                "voice_config": {"prebuilt_voice_config": {"voice_name": "Kore"}},
+                "multi_speaker_voice_config": {
+                    "speaker_voice_configs": [{
+                        "speaker": "narrator",
+                        "voice_config": {"prebuilt_voice_config": {"voice_name": "Puck"}},
+                    }],
+                },
+            },
+        },
+    })
+    assert invalid_speech.status_code == 400
+    assert invalid_speech.json()["error"]["status"] == "INVALID_ARGUMENT"
+    assert "mutually exclusive" in invalid_speech.json()["error"]["message"]
     assert seen["request"]["generationConfig"]["responseMimeType"] == "application/json"
     schema = seen["request"]["generationConfig"]["responseSchema"]
     assert schema["type"] == "object"

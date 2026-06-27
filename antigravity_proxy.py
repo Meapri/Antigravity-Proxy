@@ -857,6 +857,14 @@ def _gemini_normalize_generation_config(value: Any) -> Any:
         if "echoTargetLanguage" in translation:
             translation["echoTargetLanguage"] = _gemini_bool_value(translation["echoTargetLanguage"])
         out["translationConfig"] = translation
+    if isinstance(out.get("speechConfig"), dict):
+        speech = _gemini_normalize_request(out["speechConfig"])
+        if speech.get("voiceConfig") is not None and speech.get("multiSpeakerVoiceConfig") is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="generationConfig.speechConfig.voiceConfig and multiSpeakerVoiceConfig are mutually exclusive.",
+            )
+        out["speechConfig"] = speech
     return out
 
 
