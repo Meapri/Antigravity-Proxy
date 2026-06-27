@@ -2838,6 +2838,65 @@ def test_gemini_interactions_accept_content_item_aliases_and_image_model(tmp_pat
     assert client.get(f"/v1beta/{body['name']}").status_code == 404
 
 
+def test_gemini_agents_crud_and_interaction_binding(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_AGENTS_DIR", str(tmp_path / "agents"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", str(tmp_path / "interactions"))
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            seen["model"] = model
+            return {"response": {"candidates": [{"content": {"role": "model", "parts": [{"text": "agent ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    created = client.post("/v1beta/agents", json={
+        "agent": {
+            "display_name": "Research Agent",
+            "description": "Uses stored defaults.",
+            "model": "models/gemini-3-flash-agent",
+            "system_instruction": "Answer as the saved agent.",
+            "tools": [{"function_declarations": [{"name": "lookup", "parameters": {"type": "object"}}]}],
+            "tool_config": {"function_calling_config": {"mode": "auto"}},
+            "base_environment": {"timezone": "Asia/Seoul"},
+        }
+    })
+    body = created.json()
+    fetched = client.get(f"/v1beta/{body['name']}")
+    listed = client.get("/v1beta/agents?page_size=1")
+    interacted = client.post("/v1beta/interactions", json={
+        "agent": body["name"],
+        "input": "hello",
+        "store": False,
+    })
+    deleted = client.delete(f"/v1beta/{body['name']}")
+    missing = client.get(f"/v1beta/{body['name']}")
+
+    assert created.status_code == 200
+    assert body["name"].startswith("agents/")
+    assert body["id"] == body["name"].split("/", 1)[1]
+    assert body["displayName"] == "Research Agent"
+    assert body["display_name"] == "Research Agent"
+    assert body["systemInstruction"]["parts"] == [{"text": "Answer as the saved agent."}]
+    assert body["baseEnvironment"] == {"timezone": "Asia/Seoul"}
+    assert fetched.status_code == 200
+    assert fetched.json()["name"] == body["name"]
+    assert listed.status_code == 200
+    assert listed.json()["agents"][0]["name"] == body["name"]
+    assert interacted.status_code == 200
+    assert interacted.json()["agent"] == body["name"]
+    assert seen["model"] == "gemini-3-flash-agent"
+    assert seen["request"]["systemInstruction"]["parts"] == [{"text": "Answer as the saved agent."}]
+    assert seen["request"]["tools"][0]["functionDeclarations"][0]["name"] == "lookup"
+    assert seen["request"]["toolConfig"]["functionCallingConfig"]["mode"] == "AUTO"
+    assert seen["request"]["environment"] == {"timezone": "Asia/Seoul"}
+    assert deleted.status_code == 200
+    assert deleted.json() == {}
+    assert missing.status_code == 404
+
+
 def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_WEBHOOKS_DIR", str(tmp_path / "webhooks"))
     client = TestClient(proxy.app)

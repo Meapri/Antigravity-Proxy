@@ -350,12 +350,22 @@ Implemented Gemini-compatible routes:
 - `POST /v1beta/models/{model}:generateVideos`
 - `POST /v1beta/models/{model}:predict`
 - `POST /v1beta/models/{model}:predictLongRunning`
+- `POST /v1/agents`
+- `GET /v1/agents`
+- `GET /v1/agents/{agent}`
+- `DELETE /v1/agents/{agent}`
+- `POST /v1beta/agents`
+- `GET /v1beta/agents`
+- `GET /v1beta/agents/{agent}`
+- `DELETE /v1beta/agents/{agent}`
 - `POST /v1/interactions`
+- `GET /v1/interactions`
 - `GET /v1/interactions/{interaction}`
 - `POST /v1/interactions/{interaction}/cancel`
 - `POST /v1/interactions/{interaction}:cancel`
 - `DELETE /v1/interactions/{interaction}`
 - `POST /v1beta/interactions`
+- `GET /v1beta/interactions`
 - `GET /v1beta/interactions/{interaction}`
 - `POST /v1beta/interactions/{interaction}/cancel`
 - `POST /v1beta/interactions/{interaction}:cancel`
@@ -1077,6 +1087,10 @@ Notes:
   `returnPartialSuccess` / `return_partial_success`.
 - Batch resources are stored locally under `data/gemini_batches` by default;
   override with `ANTIGRAVITY_GEMINI_BATCHES_DIR`.
+- Agents are stored locally under `data/gemini_agents` by default; override
+  with `ANTIGRAVITY_GEMINI_AGENTS_DIR`. Agents support `displayName`,
+  `description`, `model`, `systemInstruction`, `tools`, `toolConfig`,
+  `baseEnvironment`, and SDK-style snake_case aliases.
 - Interactions are stored locally under `data/gemini_interactions` by default;
   override with `ANTIGRAVITY_GEMINI_INTERACTIONS_DIR`.
 - Interactions accept Gemini-style content items such as `{"type":"text"}`,
@@ -1091,6 +1105,9 @@ Notes:
   snake_case token usage fields such as `totalTokens` / `total_tokens`,
   `total_input_tokens`, `total_output_tokens`, and
   `input_tokens_by_modality` / `output_tokens_by_modality`.
+- Interaction create can reference a stored `agent`; the proxy merges the
+  agent's model, system instruction, tools, tool config, and base environment
+  into the generated request unless the interaction overrides them.
 - `background=true` creates a stored `in_progress` interaction resource without
   starting generation; it can be retrieved or cancelled by name.
 - Interaction cancel endpoints return the updated interaction resource.

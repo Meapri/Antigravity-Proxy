@@ -3486,6 +3486,176 @@ def _gemini_get_interaction(name: str) -> dict[str, Any] | None:
     return _gemini_interaction_resource(interaction) if isinstance(interaction, dict) else None
 
 
+def _gemini_agents_root() -> Path:
+    return Path(os.getenv("ANTIGRAVITY_GEMINI_AGENTS_DIR", "data/gemini_agents")).expanduser()
+
+
+def _gemini_agents_index_path() -> Path:
+    return _gemini_agents_root() / "index.json"
+
+
+def _gemini_load_agents_index() -> dict[str, dict[str, Any]]:
+    path = _gemini_agents_index_path()
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        log.warning("Failed to read Gemini agents index; starting empty.")
+        return {}
+
+
+def _gemini_save_agents_index(index: dict[str, dict[str, Any]]) -> None:
+    root = _gemini_agents_root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = _gemini_agents_index_path()
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _gemini_agent_name(name: str) -> str:
+    key = name.strip().strip("/")
+    for prefix in ("v1beta/", "v1/"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+            break
+    if key.startswith("agents/"):
+        return key
+    return "agents/" + key
+
+
+def _gemini_agent_body(body: Any) -> dict[str, Any]:
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+    normalized = _gemini_normalize_request(body)
+    agent = normalized.get("agent") if isinstance(normalized.get("agent"), dict) else normalized
+    if not isinstance(agent, dict):
+        raise HTTPException(status_code=400, detail="agents.create requires an agent object.")
+    agent = _gemini_normalize_request(agent)
+    config = normalized.get("config") if isinstance(normalized.get("config"), dict) else {}
+    if config:
+        config = _gemini_normalize_request(config)
+        for key in (
+            "displayName",
+            "description",
+            "model",
+            "systemInstruction",
+            "tools",
+            "toolConfig",
+            "baseEnvironment",
+            "environment",
+            "metadata",
+        ):
+            if key in config and key not in agent:
+                agent[key] = config[key]
+    return agent
+
+
+def _gemini_agent_system_instruction(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return {"parts": [{"text": value}]}
+    if isinstance(value, dict):
+        normalized = _gemini_normalize_request(value)
+        if "text" in normalized and "parts" not in normalized:
+            return {"parts": [{"text": str(normalized["text"])}]}
+        if isinstance(normalized.get("parts"), list):
+            return normalized
+        return normalized
+    if isinstance(value, list):
+        return {"parts": [_gemini_part_from_any(item) for item in value]}
+    return {"parts": [{"text": str(value)}]}
+
+
+def _gemini_agent_tool_config(value: Any) -> Any:
+    if isinstance(value, dict):
+        return _gemini_normalize_tool_config(value)
+    return value
+
+
+def _gemini_agent_resource(agent: dict[str, Any]) -> dict[str, Any]:
+    now = _gemini_now_iso()
+    name = _gemini_agent_name(str(agent.get("name") or "agent_" + uuid.uuid4().hex))
+    display_name = (
+        agent.get("displayName")
+        or agent.get("display_name")
+        or agent.get("name")
+        or name.rsplit("/", 1)[-1]
+    )
+    system_instruction = _gemini_agent_system_instruction(
+        agent.get("systemInstruction") if "systemInstruction" in agent else agent.get("system_instruction")
+    )
+    tools = agent.get("tools")
+    if tools is not None:
+        tools = _gemini_normalize_tools_value(tools)
+    tool_config = agent.get("toolConfig") if "toolConfig" in agent else agent.get("tool_config")
+    tool_config = _gemini_agent_tool_config(tool_config)
+    base_environment = agent.get("baseEnvironment") if "baseEnvironment" in agent else agent.get("base_environment")
+    resource = {
+        "name": name,
+        "id": name.rsplit("/", 1)[-1],
+        "object": "agent",
+        "displayName": str(display_name),
+        "display_name": str(display_name),
+        "description": agent.get("description") or "",
+        "model": agent.get("model") or "models/gemini-3-flash-agent",
+        "createTime": agent.get("createTime") or agent.get("created") or now,
+        "updateTime": agent.get("updateTime") or agent.get("updated") or now,
+        "created": agent.get("created") or agent.get("createTime") or now,
+        "updated": agent.get("updated") or agent.get("updateTime") or now,
+        "metadata": agent.get("metadata") if isinstance(agent.get("metadata"), dict) else {},
+    }
+    if system_instruction is not None:
+        resource["systemInstruction"] = system_instruction
+        resource["system_instruction"] = system_instruction
+    if tools is not None:
+        resource["tools"] = tools
+    if tool_config is not None:
+        resource["toolConfig"] = tool_config
+        resource["tool_config"] = tool_config
+    if base_environment is not None:
+        resource["baseEnvironment"] = base_environment
+        resource["base_environment"] = base_environment
+    if agent.get("environment") is not None:
+        resource["environment"] = agent["environment"]
+    return resource
+
+
+def _gemini_store_agent(agent: dict[str, Any]) -> dict[str, Any]:
+    resource = _gemini_agent_resource(agent)
+    index = _gemini_load_agents_index()
+    index[resource["name"]] = resource
+    _gemini_save_agents_index(index)
+    return resource
+
+
+def _gemini_get_agent(name: str) -> dict[str, Any] | None:
+    agent = _gemini_load_agents_index().get(_gemini_agent_name(name))
+    return _gemini_agent_resource(agent) if isinstance(agent, dict) else None
+
+
+def _gemini_merge_agent_into_interaction(body: dict[str, Any]) -> dict[str, Any]:
+    agent_ref = body.get("agent")
+    if not isinstance(agent_ref, str) or not agent_ref.strip():
+        return body
+    agent = _gemini_get_agent(agent_ref)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_ref}' not found.")
+    merged = dict(body)
+    merged["agent"] = agent["name"]
+    for key in ("model", "systemInstruction", "tools", "toolConfig", "environment"):
+        if key in agent and key not in merged:
+            merged[key] = agent[key]
+    if "baseEnvironment" in agent and "environment" not in merged:
+        merged["environment"] = agent["baseEnvironment"]
+    return merged
+
+
 def _gemini_webhooks_root() -> Path:
     return Path(os.getenv("ANTIGRAVITY_GEMINI_WEBHOOKS_DIR", "data/gemini_webhooks")).expanduser()
 
@@ -10237,6 +10407,67 @@ async def gemini_rotate_webhook_signing_secret(webhook_id: str):
     return _gemini_webhook_public_resource(webhook, include_new_secret=True)
 
 
+@app.post("/v1/agents")
+@app.post("/v1beta/agents")
+async def gemini_create_agent(request: Request):
+    try:
+        body = _gemini_agent_body(await request.json())
+        return _gemini_store_agent(body)
+    except HTTPException as exc:
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT")
+    except Exception as exc:
+        log.exception("Gemini agents create failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.get("/v1/agents")
+@app.get("/v1beta/agents")
+async def gemini_list_agents(request: Request):
+    query = request.query_params
+    page_size_raw = query.get("pageSize") or query.get("page_size") or "100"
+    try:
+        page_size = max(1, min(1000, int(page_size_raw)))
+    except (TypeError, ValueError):
+        return _gemini_error_response("pageSize must be an integer.", status_code=400, status="INVALID_ARGUMENT", field="pageSize")
+    page_token = query.get("pageToken") or query.get("page_token") or "0"
+    try:
+        start = max(0, int(page_token))
+    except (TypeError, ValueError):
+        return _gemini_error_response("pageToken must be an integer offset.", status_code=400, status="INVALID_ARGUMENT", field="pageToken")
+    agents = [
+        _gemini_agent_resource(agent)
+        for agent in _gemini_load_agents_index().values()
+        if isinstance(agent, dict)
+    ]
+    agents.sort(key=lambda item: item.get("createTime") or item.get("name") or "")
+    end = start + page_size
+    return {
+        "agents": agents[start:end],
+        "nextPageToken": str(end) if end < len(agents) else "",
+    }
+
+
+@app.get("/v1/agents/{agent_id:path}")
+@app.get("/v1beta/agents/{agent_id:path}")
+async def gemini_get_agent_route(agent_id: str):
+    agent = _gemini_get_agent(agent_id)
+    if not agent:
+        return _gemini_error_response(f"Agent '{agent_id}' not found.", status_code=404, status="NOT_FOUND")
+    return agent
+
+
+@app.delete("/v1/agents/{agent_id:path}")
+@app.delete("/v1beta/agents/{agent_id:path}")
+async def gemini_delete_agent(agent_id: str):
+    name = _gemini_agent_name(agent_id)
+    index = _gemini_load_agents_index()
+    if name not in index:
+        return _gemini_error_response(f"Agent '{agent_id}' not found.", status_code=404, status="NOT_FOUND")
+    index.pop(name, None)
+    _gemini_save_agents_index(index)
+    return JSONResponse({})
+
+
 def _gemini_interaction_model_output_step(text: str, response: dict[str, Any] | None = None) -> dict[str, Any]:
     content: list[dict[str, Any]] = []
     if text:
@@ -10256,6 +10487,7 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
     body = _gemini_apply_generate_config(body)
     body = _gemini_apply_response_format(body)
     body = _gemini_normalize_generate_body(body)
+    body = _gemini_merge_agent_into_interaction(body)
     model_name = body.get("model") or body.get("modelName") or body.get("model_name") or "models/gemini-3-flash-agent"
     model = _resolve_gemini_model(str(model_name))
     contents = _gemini_interaction_contents(body)
