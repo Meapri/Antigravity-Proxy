@@ -968,7 +968,8 @@ def test_gemini_async_batch_embed_and_batch_update(tmp_path, monkeypatch):
     assert operation["response"]["embeddings"][0]["values"]
     assert operation["metadata"]["batchResource"]["displayName"] == "embed job"
     assert operation["metadata"]["state"] == "BATCH_STATE_SUCCEEDED"
-    assert operation["metadata"]["operation"] == operation["name"]
+    assert operation["name"].startswith("batches/")
+    assert operation["metadata"]["operation"].startswith("operations/asyncBatchEmbedContent-")
     assert wrapped_created.status_code == 200
     wrapped_operation = wrapped_created.json()
     assert wrapped_operation["metadata"]["batchResource"]["displayName"] == "wrapped embed job"
@@ -988,11 +989,11 @@ def test_gemini_async_batch_embed_and_batch_update(tmp_path, monkeypatch):
     assert updated.json()["name"] == batch_name
     assert updated.json()["metadata"]["batchResource"]["displayName"] == "renamed"
     assert fetched.json()["name"] == batch_name
-    assert fetched.json()["metadata"]["operation"] == operation["name"]
+    assert fetched.json()["metadata"]["operation"] == operation["metadata"]["operation"]
     assert fetched.json()["metadata"]["batchResource"]["displayName"] == "renamed"
     assert fetched.json()["metadata"]["batchStats"]["requestCount"] == "2"
     assert filtered_operations.status_code == 200
-    assert operation["name"] in {item["name"] for item in filtered_operations.json()["operations"]}
+    assert operation["metadata"]["operation"] in {item["name"] for item in filtered_operations.json()["operations"]}
 
 
 def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
@@ -2663,10 +2664,18 @@ def test_google_genai_sdk_developer_batch_create_from_uploaded_file(tmp_path, mo
         config={"mime_type": "application/jsonl", "display_name": "batch.jsonl"},
     )
     job = sdk.batches.create(model="gemini-3-flash-agent", src=uploaded.name)
+    fetched = sdk.batches.get(name=job.name)
+    listed = list(sdk.batches.list(config={"page_size": 10}))
+    sdk.batches.cancel(name=job.name)
+    deleted = sdk.batches.delete(name=job.name)
 
-    assert job.name.startswith("operations/batchGenerateContent-")
+    assert job.name.startswith("batches/")
     assert job.state == types.JobState.JOB_STATE_SUCCEEDED
     assert job.model == "models/gemini-3-flash-agent"
+    assert fetched.name == job.name
+    assert {item.name for item in listed} == {job.name}
+    assert deleted.sdk_http_response.headers["content-type"].startswith("application/json")
+    assert app_client.get(f"/v1beta/{job.name}").status_code == 404
 
 
 def test_google_genai_sdk_developer_embeddings_batch_with_standard_model(tmp_path, monkeypatch):
@@ -2693,10 +2702,15 @@ def test_google_genai_sdk_developer_embeddings_batch_with_standard_model(tmp_pat
         model="text-embedding-004",
         src={"file_name": uploaded.name},
     )
+    fetched = sdk.batches.get(name=job.name)
+    sdk.batches.cancel(name=job.name)
+    deleted = sdk.batches.delete(name=job.name)
 
-    assert job.name.startswith("operations/asyncBatchEmbedContent-")
+    assert job.name.startswith("batches/")
     assert job.state == types.JobState.JOB_STATE_SUCCEEDED
     assert job.model == "models/text-embedding-004"
+    assert fetched.name == job.name
+    assert deleted.sdk_http_response.headers["content-type"].startswith("application/json")
 
 
 def test_google_genai_sdk_vertex_batch_prediction_jobs(tmp_path, monkeypatch):
@@ -3098,23 +3112,26 @@ def test_gemini_batch_generate_content_operation(tmp_path, monkeypatch):
     assert vertex_created.status_code == 200
     operation = created.json()
     assert operation["done"] is True
+    assert operation["name"].startswith("batches/")
+    assert operation["metadata"]["operation"].startswith("operations/batchGenerateContent-")
     assert len(operation["response"]["responses"]) == 2
     assert len(vertex_created.json()["response"]["responses"]) == 2
 
-    fetched = client.get(f"/v1beta/{operation['name']}")
+    operation_name = operation["metadata"]["operation"]
+    fetched = client.get(f"/v1beta/{operation_name}")
     listed = client.get("/v1beta/operations")
-    waited = client.post(f"/v1beta/{operation['name']}:wait")
+    waited = client.post(f"/v1beta/{operation_name}:wait")
     batch_name = operation["metadata"]["batch"]
     batch = client.get(f"/v1beta/{batch_name}")
     batches = client.get("/v1beta/batches")
-    deleted = client.delete(f"/v1beta/{operation['name']}")
+    deleted = client.delete(f"/v1beta/{operation_name}")
 
     assert fetched.status_code == 200
-    assert fetched.json()["name"] == operation["name"]
+    assert fetched.json()["name"] == operation_name
     assert listed.status_code == 200
-    assert operation["name"] in {item["name"] for item in listed.json()["operations"]}
+    assert operation_name in {item["name"] for item in listed.json()["operations"]}
     assert waited.status_code == 200
-    assert waited.json()["name"] == operation["name"]
+    assert waited.json()["name"] == operation_name
     assert batch.status_code == 200
     assert batch.json()["name"] == batch_name
     assert batch.json()["done"] is True
@@ -3124,7 +3141,7 @@ def test_gemini_batch_generate_content_operation(tmp_path, monkeypatch):
     assert operation["metadata"]["stats"]["successfulRequestCount"] == "2"
     assert batches.status_code == 200
     assert batch_name in {item["name"] for item in batches.json()["operations"]}
-    assert operation["name"] in {item["operation"] for item in batches.json()["batches"]}
+    assert operation_name in {item["operation"] for item in batches.json()["batches"]}
     assert deleted.status_code == 200
 
 

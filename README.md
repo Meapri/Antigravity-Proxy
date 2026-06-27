@@ -972,20 +972,27 @@ Embeddings and batch operations:
   `{"embedContentRequest": {...}}`, and `providerOptions.google` /
   `provider_options.google` embedding config.
 - `asyncBatchEmbedContent` stores the deterministic batch embedding result as
-  an immediately completed local operation and batch resource. It accepts raw
-  `requests` plus SDK wrappers such as `embedContentBatch` /
+  an immediately completed local operation and batch resource. The create
+  response exposes the reusable `batches/*` resource as top-level `name` for
+  `google-genai` `client.batches.get/cancel/delete` compatibility, while the
+  stored operation remains available under `metadata.operation`. It accepts
+  raw `requests` plus SDK wrappers such as `embedContentBatch` /
   `embed_content_batch`, including shared `config` embedding options.
 - `batchGenerateContent` runs requests synchronously through Antigravity and
   stores immediately completed operation and `batches/*` results with Gemini
-  status values and `stats` counters. Inline batch items may be plain request
+  status values and `stats` counters. The create response uses top-level
+  `name: "batches/..."` and preserves the operation name in
+  `metadata.operation`, so both SDK batch lifecycle calls and direct
+  operation polling are supported. Inline batch items may be plain request
   objects or SDK/REST wrapper items such as `{"request": {...}}` /
   `{"generateContentRequest": {...}}`. Python SDK inline source wrappers such
   as `batch.inputConfig.requests.requests[]` are also accepted, and Developer
   SDK file sources such as `batch.inputConfig.fileName: "files/..."` are read
   from the local Files API as JSON or JSONL batch input.
-- `batches.create` accepts inline `requests` plus `model` and returns a
-  completed Gemini batch operation; the local `batches/*` resource is preserved
-  under `metadata.batchResource`. It also accepts common SDK wrapper bodies
+- `batches.create` accepts inline `requests` plus `model` and returns the
+  completed `batches/*` operation view; the original operation is preserved
+  under `metadata.operation` and the local batch resource is preserved under
+  `metadata.batchResource`. It also accepts common SDK wrapper bodies
   such as `{"batch": {...}}`, `{"generateContentBatch": {...}}`,
   `{"generate_content_batch": {...}}`, `{"embedContentBatch": {...}}`, and
   `{"embed_content_batch": {...}}`. Top-level `inputConfig` / `input_config`,

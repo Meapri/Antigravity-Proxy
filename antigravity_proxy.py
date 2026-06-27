@@ -10423,7 +10423,7 @@ def _gemini_create_completed_embed_batch(model: dict[str, Any], body: dict[str, 
         },
     }
     operation = {
-        "name": operation_name,
+        "name": batch_name,
         "metadata": {
             "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.AsyncBatchEmbedContentMetadata",
             "model": model_resource,
@@ -10443,8 +10443,8 @@ def _gemini_create_completed_embed_batch(model: dict[str, Any], body: dict[str, 
         "response": response_payload,
     }
     stored_batch = _gemini_store_batch(batch)
-    stored_operation = _gemini_store_operation(operation)
-    return stored_operation, stored_batch
+    _gemini_store_operation({**operation, "name": operation_name})
+    return operation, stored_batch
 
 
 async def _gemini_predict_payload(model_name: str, body: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -10960,7 +10960,7 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
         },
     }
     operation = {
-        "name": operation_name,
+        "name": batch_name,
         "metadata": {
             "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.BatchGenerateContentMetadata",
             "model": model_resource,
@@ -10979,10 +10979,10 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
         "done": True,
         "response": response_payload,
     }
-    stored_operation = _gemini_store_operation(operation)
+    _gemini_store_operation({**operation, "name": operation_name})
     stored_batch = _gemini_store_batch(batch)
     await _gemini_emit_webhook_event("batch.succeeded", stored_batch)
-    return stored_operation, stored_batch
+    return operation, stored_batch
 
 
 @app.post("/v1/batches")
