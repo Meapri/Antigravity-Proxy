@@ -3106,6 +3106,37 @@ def _gemini_embedding_from_request(body: dict[str, Any]) -> dict[str, Any]:
     return {"embeddings": embeddings, "embedding": embeddings[0], "usageMetadata": usage}
 
 
+def _gemini_embedding_predict_response(model_name: str, body: dict[str, Any]) -> dict[str, Any]:
+    normalized = _gemini_normalize_request(body)
+    if not isinstance(normalized, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+    instances = normalized.get("instances")
+    if instances is None:
+        instances = normalized.get("contents") if normalized.get("contents") is not None else normalized.get("content")
+    if not isinstance(instances, list):
+        instances = [instances]
+    embed_body: dict[str, Any] = {"contents": []}
+    parameters = normalized.get("parameters")
+    if isinstance(parameters, dict):
+        embed_body["config"] = parameters
+    for instance in instances:
+        if isinstance(instance, dict):
+            content = instance.get("content")
+            if content is None:
+                content = instance.get("text")
+            if content is None:
+                content = instance
+        else:
+            content = instance
+        embed_body["contents"].append(content)
+    embedded = _gemini_embedding_from_request(embed_body)
+    return {
+        "predictions": [{"embeddings": embedding} for embedding in embedded.get("embeddings", [])],
+        "deployedModelId": "models/" + _gemini_resource_model_id(model_name),
+        "metadata": {"usageMetadata": embedded.get("usageMetadata", {})},
+    }
+
+
 def _gemini_batch_request_item(item: dict[str, Any], *wrapper_keys: str) -> dict[str, Any]:
     for key in wrapper_keys:
         wrapped = item.get(key)
@@ -3208,6 +3239,19 @@ def _gemini_store_operation(operation: dict[str, Any]) -> dict[str, Any]:
     index[operation["name"]] = operation
     _gemini_save_operations_index(index)
     return operation
+
+
+def _gemini_operation_scope_from_request(request: Request) -> str | None:
+    path = str(request.scope.get("path") or request.url.path).strip("/")
+    for prefix in ("v1alpha/", "v1beta/", "v1/"):
+        if path.startswith(prefix):
+            path = path[len(prefix):]
+            break
+    if ":" in path:
+        path = path.split(":", 1)[0]
+    if path.startswith(("models/", "publishers/", "projects/")):
+        return path
+    return None
 
 
 def _gemini_get_operation(name: str) -> dict[str, Any] | None:
@@ -10692,10 +10736,16 @@ def _gemini_create_completed_embed_batch(model: dict[str, Any], body: dict[str, 
 
 
 async def _gemini_predict_payload(model_name: str, body: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    model = _resolve_gemini_model(model_name)
     body = _gemini_normalize_request(body)
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+    try:
+        model = _resolve_gemini_model(model_name)
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        _resolve_gemini_embedding_model(model_name)
+        return _gemini_embedding_predict_response(model_name, body), body
     body = _gemini_apply_generate_config(body)
     body = _gemini_apply_response_format(body)
     body = _gemini_normalize_generate_body(body)
@@ -10780,11 +10830,19 @@ async def gemini_generate_images(model_name: str, request: Request, project: str
         return _gemini_error_response(f"Antigravity image generation error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
-def _gemini_video_unimplemented_operation(model_name: str, body: dict[str, Any]) -> dict[str, Any]:
+def _gemini_video_unimplemented_operation(
+    model_name: str,
+    body: dict[str, Any],
+    *,
+    operation_kind: str = "generateVideos",
+    operation_scope: str | None = None,
+) -> dict[str, Any]:
     model_id = _gemini_resource_model_id(model_name)
     now = _gemini_now_iso()
+    operation_id = operation_kind + "-" + uuid.uuid4().hex
+    operation_name = f"{operation_scope.strip('/')}/operations/{operation_id}" if operation_scope else f"operations/{operation_id}"
     return _gemini_store_operation({
-        "name": "operations/generateVideos-" + uuid.uuid4().hex,
+        "name": operation_name,
         "metadata": {
             "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.GenerateVideosOperationMetadata",
             "model": "models/" + model_id,
@@ -10837,7 +10895,12 @@ async def gemini_predict_long_running(model_name: str, request: Request, project
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
         if _is_gemini_video_model_id(model_name):
-            return _gemini_video_unimplemented_operation(model_name, body)
+            return _gemini_video_unimplemented_operation(
+                model_name,
+                body,
+                operation_kind="predictLongRunning",
+                operation_scope=_gemini_operation_scope_from_request(request),
+            )
         prediction, request_body = await _gemini_predict_payload(model_name, body)
         model = _resolve_gemini_model(model_name)
         now = _gemini_now_iso()
@@ -12852,6 +12915,31 @@ async def gemini_get_operation(operation_id: str):
     operation = _gemini_get_operation(operation_id)
     if not operation:
         return _gemini_error_response(f"Operation '{operation_id}' not found.", status_code=404, status="NOT_FOUND")
+    return operation
+
+
+@app.post("/v1/models/{resource_name:path}:fetchPredictOperation")
+@app.post("/v1/publishers/google/models/{resource_name:path}:fetchPredictOperation")
+@app.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{resource_name:path}:fetchPredictOperation")
+@app.post("/v1beta/models/{resource_name:path}:fetchPredictOperation")
+@app.post("/v1beta/publishers/google/models/{resource_name:path}:fetchPredictOperation")
+@app.post("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{resource_name:path}:fetchPredictOperation")
+async def gemini_fetch_predict_operation(
+    resource_name: str,
+    request: Request,
+    project: str | None = None,
+    location: str | None = None,
+):
+    body = _gemini_normalize_request(await request.json())
+    operation_name = body.get("operationName") if isinstance(body, dict) else None
+    operation = _gemini_get_operation(str(operation_name or ""))
+    if operation is None:
+        scope = _gemini_operation_scope_from_request(request)
+        if operation_name:
+            operation = _gemini_get_operation(f"{scope or resource_name}/operations/{str(operation_name).rsplit('/', 1)[-1]}")
+    if not operation:
+        target = str(operation_name or resource_name)
+        return _gemini_error_response(f"Operation '{target}' not found.", status_code=404, status="NOT_FOUND")
     return operation
 
 

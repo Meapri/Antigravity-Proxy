@@ -523,6 +523,63 @@ def test_gemini_video_model_and_generate_videos_operation(tmp_path, monkeypatch)
     assert vertex_predicted.json()["error"]["status"] == "UNIMPLEMENTED"
 
 
+def test_google_genai_sdk_generate_videos_custom_base_url_paths(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    app_client = TestClient(proxy.app)
+    mldev_http = httpx.Client(transport=_FastApiTransport(app_client))
+    mldev_sdk = genai.Client(
+        api_key="test-key",
+        http_options=types.HttpOptions(
+            base_url="http://testserver/v1beta",
+            api_version=None,
+            base_url_resource_scope=types.ResourceScope.COLLECTION,
+            httpx_client=mldev_http,
+        ),
+    )
+    vertex_http = httpx.Client(transport=_FastApiTransport(app_client))
+    vertex_sdk = genai.Client(
+        vertexai=True,
+        project="proj",
+        location="global",
+        credentials=StaticCredentials(),
+        http_options=types.HttpOptions(
+            base_url="http://testserver/v1beta",
+            api_version=None,
+            base_url_resource_scope=types.ResourceScope.COLLECTION,
+            httpx_client=vertex_http,
+        ),
+    )
+
+    mldev_operation = mldev_sdk.models.generate_videos(
+        model="veo-3.1-generate-preview",
+        prompt="make a short sdk clip",
+        config={"number_of_videos": 1},
+    )
+    vertex_operation = vertex_sdk.models.generate_videos(
+        model="veo-3.1-generate-preview",
+        prompt="make a short vertex sdk clip",
+        config={"number_of_videos": 1},
+    )
+
+    mldev_error_status = mldev_operation.error.get("status") if isinstance(mldev_operation.error, dict) else mldev_operation.error.status
+    vertex_error_status = vertex_operation.error.get("status") if isinstance(vertex_operation.error, dict) else vertex_operation.error.status
+
+    assert "/operations/" in mldev_operation.name or mldev_operation.name.startswith("operations/")
+    assert mldev_operation.done is True
+    assert mldev_error_status == "UNIMPLEMENTED"
+    assert mldev_operation.metadata["model"] == "models/veo-3.1-generate-preview"
+    assert "/operations/predictLongRunning-" in vertex_operation.name
+    assert vertex_operation.done is True
+    assert vertex_error_status == "UNIMPLEMENTED"
+    assert vertex_operation.metadata["model"] == "models/veo-3.1-generate-preview"
+    fetched_mldev_operation = mldev_sdk.operations.get(mldev_operation)
+    fetched_vertex_operation = vertex_sdk.operations.get(vertex_operation)
+    assert fetched_mldev_operation.name == mldev_operation.name
+    assert fetched_mldev_operation.done is True
+    assert fetched_vertex_operation.name == vertex_operation.name
+    assert fetched_vertex_operation.done is True
+
+
 def test_gemini_model_aliases_resolve_for_public_style_names(monkeypatch):
     seen = {}
 
@@ -558,6 +615,44 @@ def test_gemini_model_aliases_resolve_for_public_style_names(monkeypatch):
     assert pro_preview.json()["name"] == "models/gemini-pro-agent"
     assert lite_latest.status_code == 200
     assert lite_latest.json()["name"] == "models/gemini-3.1-flash-lite"
+
+
+def test_gemini_public_model_update_delete_return_unimplemented():
+    client = TestClient(proxy.app)
+
+    updated = client.patch("/v1beta/models/gemini-3-flash-agent", json={"displayName": "new name"})
+    deleted = client.delete("/v1beta/models/gemini-3-flash-agent")
+
+    assert updated.status_code == 405
+    assert updated.json()["error"]["status"] == "UNIMPLEMENTED"
+    assert deleted.status_code == 405
+    assert deleted.json()["error"]["status"] == "UNIMPLEMENTED"
+
+
+def test_google_genai_sdk_vertex_embed_content_standard_models_via_predict():
+    app_client = TestClient(proxy.app)
+    sdk_http = httpx.Client(transport=_FastApiTransport(app_client))
+    sdk = genai.Client(
+        vertexai=True,
+        project="proj",
+        location="global",
+        credentials=StaticCredentials(),
+        http_options=types.HttpOptions(
+            base_url="http://testserver/v1beta",
+            api_version=None,
+            base_url_resource_scope=types.ResourceScope.COLLECTION,
+            httpx_client=sdk_http,
+        ),
+    )
+
+    response = sdk.models.embed_content(
+        model="text-embedding-004",
+        contents="vertex sdk embedding",
+        config={"output_dimensionality": 8},
+    )
+
+    assert response.embeddings
+    assert len(response.embeddings[0].values) == 8
 
 
 def test_gemini_generate_content_normalizes_content_roles(monkeypatch):

@@ -1184,10 +1184,19 @@ Video generation:
 - Veo-style model names such as `veo-*` are recognized as Gemini video model
   resources and expose `generateVideos` plus `predictLongRunning`.
 - Video generation requests are stored as Gemini long-running `operations/*`
-  and can be retrieved through the normal operations endpoints.
+  and can be retrieved through the normal operations endpoints. Vertex-style
+  `google-genai` polling through `:fetchPredictOperation` is also supported for
+  custom base URL clients.
 - Because the current Antigravity backend does not expose native video
   generation, video operations currently complete with an explicit
   `UNIMPLEMENTED` error instead of returning a 404 or silently mapping to text.
+
+Vertex embeddings:
+
+- Standard embedding model names such as `text-embedding-004` and
+  `gemini-embedding-001` work through both Developer `:batchEmbedContents` and
+  Vertex `:predict` SDK paths. Embeddings are deterministic local vectors
+  because Antigravity does not expose a public embedding RPC.
 
 Live API:
 
