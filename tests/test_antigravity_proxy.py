@@ -592,6 +592,11 @@ def test_gemini_google_host_prefixed_gateway_paths(monkeypatch):
         headers={"x-goog-api-key": "secret"},
         json={"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
     )
+    alpha_generated = client.post(
+        "/generativelanguage.googleapis.com/v1alpha/models/gemini-3-flash-agent:generateContent",
+        headers={"x-goog-api-key": "secret"},
+        json={"contents": [{"role": "user", "parts": [{"text": "preview hi"}]}]},
+    )
 
     assert listed.status_code == 200
     assert "models" in listed.json()
@@ -599,8 +604,10 @@ def test_gemini_google_host_prefixed_gateway_paths(monkeypatch):
     assert fetched.json()["name"] == "models/gemini-3-flash-agent"
     assert generated.status_code == 200
     assert generated.json()["candidates"][0]["content"]["parts"][0]["text"] == "prefixed ok"
+    assert alpha_generated.status_code == 200
+    assert alpha_generated.json()["candidates"][0]["content"]["parts"][0]["text"] == "prefixed ok"
     assert seen["model"] == "gemini-3-flash-agent"
-    assert seen["request"]["contents"][0]["parts"][0]["text"] == "hi"
+    assert seen["request"]["contents"][0]["parts"][0]["text"] == "preview hi"
 
 
 def test_gemini_unmatched_routes_use_gemini_error_shape():
@@ -669,6 +676,44 @@ def test_gemini_v1_model_routes_do_not_break_openai_models(monkeypatch, tmp_path
     assert registered.json()["file"]["uri"] == "gs://bucket/stable.txt"
     assert uploaded.status_code == 200
     assert uploaded.json()["file"]["displayName"] == "stable-upload.txt"
+
+
+def test_gemini_v1alpha_gateway_aliases_to_v1beta(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "files"))
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            seen["model"] = model
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "alpha ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    listed = client.get("/v1alpha/models?page_size=1")
+    generated = client.post("/v1alpha/models/gemini-3-flash-agent:generateContent", json={
+        "contents": [{"role": "user", "parts": [{"text": "alpha direct"}]}],
+    })
+    counted = client.post("/v1alpha/models/gemini-3-flash-agent:countTokens", json={
+        "contents": [{"role": "user", "parts": [{"text": "alpha count"}]}],
+    })
+    uploaded = client.post(
+        "/upload/v1alpha/files?upload_type=media&display_name=alpha-note.txt",
+        content=b"alpha upload",
+        headers={"Content-Type": "text/plain"},
+    )
+
+    assert listed.status_code == 200
+    assert len(listed.json()["models"]) == 1
+    assert generated.status_code == 200
+    assert generated.json()["candidates"][0]["content"]["parts"][0]["text"] == "alpha ok"
+    assert counted.status_code == 200
+    assert counted.json()["totalTokens"] > 0
+    assert uploaded.status_code == 200
+    assert uploaded.json()["file"]["displayName"] == "alpha-note.txt"
+    assert seen["model"] == "gemini-3-flash-agent"
+    assert seen["request"]["contents"][0]["parts"][0]["text"] == "alpha direct"
 
 
 def test_gemini_embeddings_are_deterministic():
@@ -3594,6 +3639,25 @@ def test_gemini_files_register_metadata_only(tmp_path, monkeypatch):
     assert [item["state"] for item in official_registered_files] == ["FAILED", "ACTIVE"]
     assert official_registered_files[0]["customMetadata"][0]["stringValue"] == "uris"
 
+    config_registered = client.post("/v1beta/files:register", json={
+        "config": {
+            "uris": ["gs://bucket/config-one.txt", "gs://bucket/config-two.txt"],
+            "mime_type": "text/plain",
+            "files": [
+                {"display_name": "config-one.txt"},
+                {"display_name": "config-two.txt", "state": "file_state_processing"},
+            ],
+        },
+    })
+    assert config_registered.status_code == 200
+    config_registered_files = config_registered.json()["files"]
+    assert [item["uri"] for item in config_registered_files] == [
+        "gs://bucket/config-one.txt",
+        "gs://bucket/config-two.txt",
+    ]
+    assert [item["displayName"] for item in config_registered_files] == ["config-one.txt", "config-two.txt"]
+    assert [item["state"] for item in config_registered_files] == ["ACTIVE", "PROCESSING"]
+
     video = client.post("/v1beta/files:register", json={
         "file": {
             "displayName": "clip.mp4",
@@ -4159,6 +4223,32 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     assert client.delete(f"/v1/corpora/{corpus_id}/documents/{doc_id}").status_code == 200
     assert client.delete(f"/v1/{wrapped_doc.json()['name']}").status_code == 200
     assert client.delete(f"/v1/{corpus_name}").status_code == 200
+
+
+def test_gemini_corpus_accepts_resource_wrappers(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_CORPORA_DIR", str(tmp_path / "corpora"))
+    client = TestClient(proxy.app)
+
+    created = client.post("/v1beta/corpora", json={
+        "corpus": {
+            "display_name": "Wrapped Knowledge",
+        }
+    })
+    assert created.status_code == 200
+    corpus_name = created.json()["name"]
+    assert created.json()["displayName"] == "Wrapped Knowledge"
+
+    patched = client.patch(f"/v1beta/{corpus_name}?update_mask=corpus.display_name", json={
+        "corpus": {
+            "display_name": "Wrapped Knowledge Updated",
+        }
+    })
+    fetched = client.get(f"/v1beta/{corpus_name}")
+
+    assert patched.status_code == 200
+    assert patched.json()["displayName"] == "Wrapped Knowledge Updated"
+    assert fetched.status_code == 200
+    assert fetched.json()["displayName"] == "Wrapped Knowledge Updated"
 
 
 def test_gemini_corpus_delete_requires_force_for_documents(tmp_path, monkeypatch):

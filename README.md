@@ -277,9 +277,11 @@ http://your-host.ts.net:8765/generativelanguage.googleapis.com/v1beta
 
 Gemini stable-version aliases are also accepted for Gemini-specific routes,
 such as `/v1/models/{model}:generateContent`, `/v1/files:register`,
-`/v1/cachedContents`, `/v1/batches`, and `/v1/live`. OpenAI-compatible routes
-under `/v1`, including `/v1/chat/completions`, `/v1/responses`, and
-`/v1/images/generations`, are intentionally removed.
+`/v1/cachedContents`, `/v1/batches`, and `/v1/live`. Preview `/v1alpha`
+gateway paths are normalized to the same `/v1beta` handlers for Gemini REST
+and upload routes. OpenAI-compatible routes under `/v1`, including
+`/v1/chat/completions`, `/v1/responses`, and `/v1/images/generations`, are
+intentionally removed.
 
 Common SDK spelling variants are accepted for query parameters: `page_size`,
 `page_token`, `update_mask`, `upload_type`, `display_name`, and
@@ -1019,6 +1021,7 @@ Corpora and semantic retriever:
 - Corpus and document `:query` perform local lexical chunk matching. They return
   Gemini-shaped `relevantChunks`, but they are not semantic Google retriever
   scores because Antigravity does not expose that service.
+- Corpus create and patch calls accept SDK-style `corpus` wrapper bodies.
 - Corpus, document, and chunk patch calls honor `updateMask` / `update_mask`
   for supported mutable fields, including wrapper paths such as
   `corpus.displayName`, `document.customMetadata`, and `chunk.data`.
@@ -1131,8 +1134,9 @@ Notes:
   `downloadUri`, `source`, base64 `sha256Hash`, and video metadata fields when
   available. `POST /v1beta/files` supports official metadata-only File
   creation, the same Files API surface is also available under `/v1`, and
-  `files:register` supports Gemini's `uris` array shape. `files.list` uses
-  Gemini's default page size of 10 and maximum page size of 100.
+  `files:register` supports Gemini's `uris` array shape both top-level and
+  under `config`. `files.list` uses Gemini's default page size of 10 and
+  maximum page size of 100.
 - Cached contents are stored locally under `data/gemini_cached_contents` by
   default; override with `ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR`.
   `cachedContents` is available under both `/v1` and `/v1beta`;

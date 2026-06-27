@@ -4296,11 +4296,15 @@ def _gemini_register_file(body: dict[str, Any]) -> dict[str, Any]:
 
 def _gemini_register_files_from_uris(body: dict[str, Any]) -> list[dict[str, Any]]:
     normalized = _gemini_normalize_request(body)
+    config = normalized.get("config") if isinstance(normalized.get("config"), dict) else {}
     uris = normalized.get("uris")
+    if not isinstance(uris, list):
+        uris = config.get("uris")
     if not isinstance(uris, list) or not uris:
         raise HTTPException(status_code=400, detail="files.register requires a non-empty uris array.")
-    config = normalized.get("config") if isinstance(normalized.get("config"), dict) else {}
     files_config = normalized.get("files") if isinstance(normalized.get("files"), list) else []
+    if not files_config and isinstance(config.get("files"), list):
+        files_config = config.get("files") or []
     files = []
     for idx, uri in enumerate(uris):
         if not isinstance(uri, str) or not uri.strip():
@@ -6174,9 +6178,13 @@ def _websocket_api_key_valid(websocket: WebSocket) -> bool:
 
 
 def _is_gemini_http_path(path: str) -> bool:
-    if path.startswith(("/generativelanguage.googleapis.com/v1beta/", "/generativelanguage.googleapis.com/v1/")):
+    if path.startswith((
+        "/generativelanguage.googleapis.com/v1alpha/",
+        "/generativelanguage.googleapis.com/v1beta/",
+        "/generativelanguage.googleapis.com/v1/",
+    )):
         return True
-    if path.startswith(("/v1beta/", "/upload/v1beta/", "/upload/v1/")):
+    if path.startswith(("/v1alpha/", "/v1beta/", "/upload/v1alpha/", "/upload/v1beta/", "/upload/v1/")):
         return True
     if not path.startswith("/v1/"):
         return False
@@ -6199,8 +6207,11 @@ def _is_gemini_http_path(path: str) -> bool:
 
 def _gemini_stable_alias_path(path: str) -> str:
     for prefix, target in (
+        ("/generativelanguage.googleapis.com/v1alpha", "/v1beta"),
         ("/generativelanguage.googleapis.com/v1beta", "/v1beta"),
         ("/generativelanguage.googleapis.com/v1", "/v1"),
+        ("/upload/v1alpha", "/upload/v1beta"),
+        ("/v1alpha", "/v1beta"),
     ):
         if path == prefix:
             return target
@@ -7786,7 +7797,8 @@ async def gemini_register_file(request: Request):
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
-        if "uris" in body:
+        config = body.get("config") if isinstance(body.get("config"), dict) else {}
+        if "uris" in body or "uris" in config:
             return {"files": _gemini_register_files_from_uris(body)}
         return {"file": _gemini_register_file(body)}
     except HTTPException as exc:
@@ -8065,6 +8077,8 @@ async def gemini_create_corpus(request: Request):
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        if isinstance(body.get("corpus"), dict):
+            body = {**body.get("corpus", {}), **{k: v for k, v in body.items() if k != "corpus"}}
         return _gemini_create_corpus(body)
     except HTTPException as exc:
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT")
@@ -8122,6 +8136,8 @@ async def gemini_patch_corpus(corpus_id: str, request: Request, updateMask: str 
     body = _gemini_normalize_request(await request.json())
     if isinstance(body, dict):
         updateMask = updateMask or body.pop("updateMask", None)
+        if isinstance(body.get("corpus"), dict):
+            body = {**body.get("corpus", {}), **{k: v for k, v in body.items() if k != "corpus"}}
         fields = _gemini_simple_update_fields(
             update_mask=updateMask,
             body=body,
