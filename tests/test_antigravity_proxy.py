@@ -4560,6 +4560,8 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     upload_operation = client.get(f"/v1/fileSearchStores/{store_id}/upload/operations/{uploaded_op_id}")
     waited_upload_operation = client.post(f"/v1/fileSearchStores/{store_id}/upload/operations/{uploaded_op_id}:wait")
     cancelled_upload_operation = client.post(f"/v1/fileSearchStores/{store_id}/upload/operations/{uploaded_op_id}:cancel")
+    v1beta_upload_operation = client.get(f"/v1beta/fileSearchStores/{store_id}/upload/operations/{uploaded_op_id}")
+    v1beta_waited_upload_operation = client.post(f"/v1beta/fileSearchStores/{store_id}/upload/operations/{uploaded_op_id}:wait")
     media = client.get(f"/v1/fileSearchStores/{store_id}/media/{imported_doc['name'].rsplit('/', 1)[-1]}")
     assert nested_operation.status_code == 200
     assert nested_operation.json()["name"] == imported.json()["name"]
@@ -4575,6 +4577,13 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     assert waited_upload_operation.json()["name"] == uploaded_doc.json()["name"]
     assert cancelled_upload_operation.status_code == 200
     assert cancelled_upload_operation.json() == {}
+    assert v1beta_upload_operation.status_code == 200
+    assert v1beta_upload_operation.json()["name"] == uploaded_doc.json()["name"]
+    assert v1beta_upload_operation.json()["done"] is True
+    assert v1beta_upload_operation.json()["metadata"]["fileSearchStore"] == store_name
+    assert v1beta_upload_operation.json()["response"]["document"]["name"] == uploaded_doc_resource["name"]
+    assert v1beta_waited_upload_operation.status_code == 200
+    assert v1beta_waited_upload_operation.json()["name"] == uploaded_doc.json()["name"]
     assert media.status_code == 200
     assert media.content == b"source document"
 
@@ -5029,6 +5038,45 @@ def test_gemini_image_model_generate_content_predict_and_generate_images(tmp_pat
     listed = client.get("/v1beta/generatedFiles")
     assert listed.status_code == 200
     assert len(listed.json()["generatedFiles"]) == 5
+
+    generated_file_name = generated_image["generatedFile"]["name"]
+    fetched_file = client.get(f"/v1beta/{generated_file_name}")
+    downloaded_file = client.get(f"/v1beta/{generated_file_name}:download")
+    listed_operations = client.get("/v1beta/generatedFiles/operations")
+    assert fetched_file.status_code == 200
+    assert fetched_file.json()["name"] == generated_file_name
+    assert fetched_file.json()["downloadUri"].endswith(":download")
+    assert downloaded_file.status_code == 200
+    assert downloaded_file.content == b"gemini-image"
+    assert downloaded_file.headers["content-type"].startswith("image/png")
+    assert listed_operations.status_code == 200
+    operations = listed_operations.json()["operations"]
+    operation = next(item for item in operations if item["metadata"]["generatedFile"] == generated_file_name)
+    operation_id = operation["name"].split("/", 1)[1]
+
+    fetched_operation = client.get(f"/v1beta/generatedFiles/operations/{operation_id}")
+    fetched_scoped_operation = client.get(f"/v1beta/{generated_file_name}/operations/{operation_id}")
+    waited_operation = client.post(f"/v1beta/generatedFiles/operations/{operation_id}:wait")
+    cancelled_operation = client.post(f"/v1beta/generatedFiles/operations/{operation_id}:cancel")
+    deleted_operation = client.delete(f"/v1beta/generatedFiles/operations/{operation_id}")
+    missing_operation = client.get(f"/v1beta/generatedFiles/operations/{operation_id}")
+    deleted_file = client.delete(f"/v1beta/{generated_file_name}")
+    missing_file = client.get(f"/v1beta/{generated_file_name}")
+
+    assert fetched_operation.status_code == 200
+    assert fetched_operation.json()["name"] == operation["name"]
+    assert fetched_operation.json()["done"] is True
+    assert fetched_operation.json()["response"]["name"] == generated_file_name
+    assert fetched_scoped_operation.status_code == 200
+    assert fetched_scoped_operation.json()["name"] == operation["name"]
+    assert waited_operation.status_code == 200
+    assert waited_operation.json()["name"] == operation["name"]
+    assert cancelled_operation.status_code == 200
+    assert cancelled_operation.json() == {}
+    assert deleted_operation.status_code == 200
+    assert missing_operation.status_code == 404
+    assert deleted_file.status_code == 200
+    assert missing_file.status_code == 404
 
 
 def test_admin_refresh_requires_configured_api_key(monkeypatch):

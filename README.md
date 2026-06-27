@@ -978,6 +978,8 @@ Embeddings and batch operations:
   and tuned models validate that the operation belongs to the requested parent.
   `:cancel` on scoped routes stores a Gemini-style `CANCELLED` operation state
   for pending operations before returning the empty cancel response.
+  Generated-file and file-search upload operation response shapes are covered
+  by contract tests for get, scoped get, wait, cancel, and delete routes.
 - `predict` and `predictLongRunning` are mapped to Gemini `generateContent`
   requests and return prediction/operation-shaped compatibility responses.
   Vertex-style `instances` requests preserve the same SDK `config`,
@@ -1086,6 +1088,8 @@ Generated files:
   override with `ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR`. Generated file
   resources expose Gemini File-like metadata including `downloadUri`,
   base64-encoded `sha256Hash`, `state: ACTIVE`, and `source: GENERATED`.
+  Generated file get, download, list, scoped operation, wait, cancel, and
+  delete routes are tested against files produced by image generation calls.
 
 Video generation:
 
