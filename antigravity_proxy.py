@@ -3550,7 +3550,7 @@ def _gemini_apply_cached_content(body: dict[str, Any]) -> dict[str, Any]:
     current_contents = merged.get("contents") if isinstance(merged.get("contents"), list) else []
     if cached_contents:
         merged["contents"] = cached_contents + current_contents
-    for key in ("systemInstruction", "tools", "toolConfig"):
+    for key in ("systemInstruction", "tools", "toolConfig", "safetySettings"):
         if key not in merged and key in payload:
             merged[key] = payload[key]
     merged.pop("cachedContent", None)

@@ -2836,6 +2836,21 @@ def test_gemini_cached_contents_merge_into_generate_request(tmp_path, monkeypatc
     assert seen["request"]["contents"][1]["parts"][0]["text"] == "new prompt"
     assert "cachedContent" not in seen["request"]
 
+    wrapped_response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "cached_content": wrapped_created.json()["name"],
+        "contents": [{"role": "user", "parts": [{"text": "wrapped prompt"}]}],
+    })
+
+    assert wrapped_response.status_code == 200
+    assert seen["request"]["systemInstruction"]["parts"][0]["text"] == "wrapped cached system"
+    assert seen["request"]["toolConfig"] == {"functionCallingConfig": {"mode": "NONE"}}
+    assert seen["request"]["safetySettings"] == [{
+        "category": "HARM_CATEGORY_HARASSMENT",
+        "threshold": "BLOCK_ONLY_HIGH",
+    }]
+    assert seen["request"]["contents"][0]["parts"][0]["text"] == "wrapped cached context"
+    assert seen["request"]["contents"][1]["parts"][0]["text"] == "wrapped prompt"
+
     deleted = client.delete(f"/v1beta/{cache_name}")
     assert deleted.status_code == 200
     missing = client.get(f"/v1beta/{cache_name}")
