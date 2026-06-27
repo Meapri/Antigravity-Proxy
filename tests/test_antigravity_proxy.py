@@ -817,9 +817,11 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
                         "total_token_count": 14,
                         "tool_use_prompt_tokens": 3,
                         "thoughts_tokens": 5,
-                        "prompt_tokens_details": [{"modality": "TEXT", "tokenCount": 4}],
-                        "tool_use_prompt_tokens_details": [{"modality": "TEXT", "tokenCount": 3}],
-                        "thoughts_tokens_details": [{"modality": "TEXT", "tokenCount": 5}],
+                        "prompt_tokens_details": [{"modality": "TEXT", "token_count": 4}],
+                        "tool_use_prompt_tokens_details": [{"modality": "TEXT", "token_count": 3}],
+                        "thoughts_tokens_details": [{"modality": "TEXT", "token_count": 5}],
+                        "cache_tokens_details": [{"modality": "DOCUMENT", "token_count": 1}],
+                        "service_tier": "standard",
                         "traffic_type": "ON_DEMAND",
                     },
                 }
@@ -872,8 +874,11 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
     assert body["usageMetadata"]["toolUsePromptTokenCount"] == 3
     assert body["usageMetadata"]["thoughtsTokenCount"] == 5
     assert body["usageMetadata"]["promptTokensDetails"][0]["modality"] == "TEXT"
+    assert body["usageMetadata"]["promptTokensDetails"][0]["tokenCount"] == 4
     assert body["usageMetadata"]["toolUsePromptTokensDetails"][0]["tokenCount"] == 3
     assert body["usageMetadata"]["thoughtsTokensDetails"][0]["tokenCount"] == 5
+    assert body["usageMetadata"]["cacheTokensDetails"][0]["tokenCount"] == 1
+    assert body["usageMetadata"]["serviceTier"] == "standard"
     assert body["usageMetadata"]["trafficType"] == "ON_DEMAND"
     assert body["usageMetadata"]["totalTokenCount"] == 14
     assert "usage_metadata" not in body

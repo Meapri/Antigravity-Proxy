@@ -1101,8 +1101,10 @@ Notes:
   `cachedContent` / `file_search` context are expanded before counting. Tool
   declarations and `toolConfig` are also included in the local prompt estimate.
 - Upstream Gemini usage metadata aliases such as `prompt_token_count`,
-  `candidates_token_count`, and `total_token_count` are normalized to
-  `promptTokenCount`, `candidatesTokenCount`, and `totalTokenCount`.
+  `candidates_token_count`, `total_token_count`, and `service_tier` are
+  normalized to `promptTokenCount`, `candidatesTokenCount`,
+  `totalTokenCount`, and `serviceTier`; nested modality entries normalize
+  `token_count` to `tokenCount`.
 - Files are stored locally under `data/gemini_files` by default; override with
   `ANTIGRAVITY_GEMINI_FILES_DIR`. File resources include Gemini-style
   `downloadUri`, `source`, base64 `sha256Hash`, and video metadata fields when

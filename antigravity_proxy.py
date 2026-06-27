@@ -1639,12 +1639,22 @@ def _gemini_normalize_usage_metadata(value: Any, *, request_body: dict[str, Any]
         "thoughts_tokens_details": "thoughtsTokensDetails",
         "cache_tokens_details": "cacheTokensDetails",
         "cached_content_token_count": "cachedContentTokenCount",
+        "service_tier": "serviceTier",
         "traffic_type": "trafficType",
     }
     for old, new in aliases.items():
         if usage.get(new) is None and usage.get(old) is not None:
             usage[new] = usage[old]
         usage.pop(old, None)
+    for key in (
+        "promptTokensDetails",
+        "candidatesTokensDetails",
+        "toolUsePromptTokensDetails",
+        "thoughtsTokensDetails",
+        "cacheTokensDetails",
+    ):
+        if isinstance(usage.get(key), list):
+            usage[key] = [_gemini_normalize_response_object(item) if isinstance(item, dict) else item for item in usage[key]]
     if usage.get("promptTokenCount") is None:
         usage["promptTokenCount"] = _estimate_tokens(request_body or {})
     if usage.get("candidatesTokenCount") is None:
