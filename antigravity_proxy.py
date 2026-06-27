@@ -5421,7 +5421,12 @@ def _gemini_apply_url_context(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _gemini_strip_internal_request_metadata(body: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in body.items() if not str(key).startswith("_")}
+    proxy_only = {"agent", "agentConfig", "environment", "webhookConfig"}
+    return {
+        key: value
+        for key, value in body.items()
+        if not str(key).startswith("_") and key not in proxy_only
+    }
 
 
 def _gemini_apply_file_search(body: dict[str, Any]) -> dict[str, Any]:

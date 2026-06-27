@@ -2891,7 +2891,7 @@ def test_gemini_agents_crud_and_interaction_binding(tmp_path, monkeypatch):
     assert seen["request"]["systemInstruction"]["parts"] == [{"text": "Answer as the saved agent."}]
     assert seen["request"]["tools"][0]["functionDeclarations"][0]["name"] == "lookup"
     assert seen["request"]["toolConfig"]["functionCallingConfig"]["mode"] == "AUTO"
-    assert seen["request"]["environment"] == {"timezone": "Asia/Seoul"}
+    assert "environment" not in seen["request"]
     assert deleted.status_code == 200
     assert deleted.json() == {}
     assert missing.status_code == 404
