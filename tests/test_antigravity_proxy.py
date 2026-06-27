@@ -791,6 +791,13 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
                             "google_maps_widget_context_token": "maps-token",
                             "retrieval_metadata": {"google_search_dynamic_retrieval_score": 0.42},
                         },
+                        "grounding_attributions": [{
+                            "source_id": {
+                                "grounding_passage": {"passage_id": "passage-1", "part_index": 0},
+                                "semantic_retriever_chunk": {"source": "corpora/demo", "chunk": "chunks/1"},
+                            },
+                            "content": {"role": "model", "parts": [{"text": "attributed"}]},
+                        }],
                         "url_context_metadata": {
                             "url_metadata": [{
                                 "retrieved_url": "https://example.test",
@@ -850,6 +857,9 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
     assert body["candidates"][0]["groundingMetadata"]["groundingSupports"][0]["segment"]["partIndex"] == 0
     assert body["candidates"][0]["groundingMetadata"]["groundingSupports"][0]["groundingChunkIndices"] == [0, 1]
     assert body["candidates"][0]["groundingMetadata"]["groundingSupports"][0]["confidenceScores"] == [0.9, 0.8]
+    assert body["candidates"][0]["groundingAttributions"][0]["sourceId"]["groundingPassage"]["passageId"] == "passage-1"
+    assert body["candidates"][0]["groundingAttributions"][0]["sourceId"]["groundingPassage"]["partIndex"] == 0
+    assert body["candidates"][0]["groundingAttributions"][0]["sourceId"]["semanticRetrieverChunk"]["chunk"] == "chunks/1"
     assert body["candidates"][0]["citationMetadata"]["citationSources"][0]["startIndex"] == 0
     assert body["candidates"][0]["citationMetadata"]["citationSources"][0]["endIndex"] == 5
     assert body["candidates"][0]["urlContextMetadata"]["urlMetadata"][0]["retrievedUrl"] == "https://example.test"

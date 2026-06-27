@@ -1745,6 +1745,7 @@ def _gemini_normalize_candidate(candidate: dict[str, Any], index: int) -> dict[s
         "safety_ratings": "safetyRatings",
         "citation_metadata": "citationMetadata",
         "grounding_metadata": "groundingMetadata",
+        "grounding_attributions": "groundingAttributions",
         "url_context_metadata": "urlContextMetadata",
         "avg_logprobs": "avgLogprobs",
         "logprobs_result": "logprobsResult",
@@ -1768,7 +1769,7 @@ def _gemini_normalize_candidate(candidate: dict[str, Any], index: int) -> dict[s
         else:
             content["parts"] = [_gemini_content_part(part) for part in parts]
         out["content"] = content
-    for key in ("safetyRatings", "citationMetadata", "groundingMetadata", "urlContextMetadata", "logprobsResult"):
+    for key in ("safetyRatings", "citationMetadata", "groundingMetadata", "groundingAttributions", "urlContextMetadata", "logprobsResult"):
         if key in out:
             out[key] = _gemini_normalize_response_object(out[key])
     return out
@@ -1785,7 +1786,12 @@ def _gemini_normalize_response_object(value: Any) -> Any:
         "block_reason_message": "blockReasonMessage",
         "citation_metadata": "citationMetadata",
         "grounding_metadata": "groundingMetadata",
+        "grounding_attributions": "groundingAttributions",
         "url_context_metadata": "urlContextMetadata",
+        "source_id": "sourceId",
+        "grounding_passage": "groundingPassage",
+        "passage_id": "passageId",
+        "semantic_retriever_chunk": "semanticRetrieverChunk",
         "search_entry_point": "searchEntryPoint",
         "rendered_content": "renderedContent",
         "sdk_blob": "sdkBlob",
