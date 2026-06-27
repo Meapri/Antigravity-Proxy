@@ -22,7 +22,9 @@ import mimetypes
 import os
 import re
 import secrets
+import ipaddress
 import sqlite3
+import socket
 import time
 import tempfile
 import uuid
@@ -1003,6 +1005,52 @@ def _gemini_tool_type_value(value: Any) -> Any:
     return aliases.get(normalized, value)
 
 
+def _gemini_dynamic_retrieval_mode_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "MODE_UNSPECIFIED",
+        "mode_unspecified": "MODE_UNSPECIFIED",
+        "dynamic": "MODE_DYNAMIC",
+        "mode_dynamic": "MODE_DYNAMIC",
+    }
+    return aliases.get(normalized, value)
+
+
+def _gemini_url_retrieval_status_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "URL_RETRIEVAL_STATUS_UNSPECIFIED",
+        "url_retrieval_status_unspecified": "URL_RETRIEVAL_STATUS_UNSPECIFIED",
+        "success": "URL_RETRIEVAL_STATUS_SUCCESS",
+        "succeeded": "URL_RETRIEVAL_STATUS_SUCCESS",
+        "url_retrieval_status_success": "URL_RETRIEVAL_STATUS_SUCCESS",
+        "error": "URL_RETRIEVAL_STATUS_ERROR",
+        "failed": "URL_RETRIEVAL_STATUS_ERROR",
+        "failure": "URL_RETRIEVAL_STATUS_ERROR",
+        "url_retrieval_status_error": "URL_RETRIEVAL_STATUS_ERROR",
+    }
+    return aliases.get(normalized, value)
+
+
+def _gemini_model_stage_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "unspecified": "MODEL_STAGE_UNSPECIFIED",
+        "model_stage_unspecified": "MODEL_STAGE_UNSPECIFIED",
+        "preview": "PREVIEW",
+        "stable": "STABLE",
+        "experimental": "EXPERIMENTAL",
+        "deprecated": "DEPRECATED",
+    }
+    return aliases.get(normalized, value)
+
+
 def _gemini_executable_language_value(value: Any) -> Any:
     if not isinstance(value, str):
         return value
@@ -1690,11 +1738,26 @@ def _gemini_normalize_builtin_tool_options(tool: dict[str, Any]) -> dict[str, An
     if isinstance(google_search, dict):
         normalized_search = dict(google_search)
         dynamic = normalized_search.get("dynamicRetrievalConfig")
-        if isinstance(dynamic, dict) and "dynamicThreshold" in dynamic:
+        if isinstance(dynamic, dict) and ("dynamicThreshold" in dynamic or "mode" in dynamic):
             dynamic = dict(dynamic)
-            dynamic["dynamicThreshold"] = _gemini_float_value(dynamic["dynamicThreshold"])
+            if "dynamicThreshold" in dynamic:
+                dynamic["dynamicThreshold"] = _gemini_float_value(dynamic["dynamicThreshold"])
+            if "mode" in dynamic:
+                dynamic["mode"] = _gemini_dynamic_retrieval_mode_value(dynamic["mode"])
             normalized_search["dynamicRetrievalConfig"] = dynamic
         out["google_search"] = normalized_search
+    google_search_retrieval = out.get("googleSearchRetrieval")
+    if isinstance(google_search_retrieval, dict):
+        retrieval = dict(google_search_retrieval)
+        dynamic = retrieval.get("dynamicRetrievalConfig")
+        if isinstance(dynamic, dict):
+            dynamic = dict(dynamic)
+            if "dynamicThreshold" in dynamic:
+                dynamic["dynamicThreshold"] = _gemini_float_value(dynamic["dynamicThreshold"])
+            if "mode" in dynamic:
+                dynamic["mode"] = _gemini_dynamic_retrieval_mode_value(dynamic["mode"])
+            retrieval["dynamicRetrievalConfig"] = dynamic
+        out["googleSearchRetrieval"] = retrieval
     file_search = out.get("file_search")
     if isinstance(file_search, dict):
         normalized_file_search = dict(file_search)
@@ -1832,7 +1895,7 @@ def _gemini_count_tokens_request(body: dict[str, Any]) -> list[ChatMessage]:
         payload = _gemini_apply_generate_config(payload)
         payload = _gemini_normalize_generate_body(payload)
         payload = _gemini_apply_cached_content(payload)
-        payload = _gemini_apply_file_search(payload)
+        payload = _gemini_apply_url_context(_gemini_apply_file_search(payload))
     contents = payload.get("contents") or []
     if isinstance(contents, str):
         contents = [{"role": "user", "parts": [{"text": contents}]}]
@@ -2042,6 +2105,8 @@ def _gemini_normalize_usage_metadata(value: Any, *, request_body: dict[str, Any]
                 else:
                     normalized_items.append(item)
             usage[key] = normalized_items
+    if "serviceTier" in usage:
+        usage["serviceTier"] = _gemini_service_tier_value(usage["serviceTier"])
     if usage.get("promptTokenCount") is None:
         usage["promptTokenCount"] = _estimate_tokens(request_body or {})
     if usage.get("candidatesTokenCount") is None:
@@ -2185,9 +2250,15 @@ def _gemini_normalize_candidate(candidate: dict[str, Any], index: int) -> dict[s
         else:
             content["parts"] = [_gemini_content_part(part) for part in parts]
         out["content"] = content
-    for key in ("safetyRatings", "citationMetadata", "groundingMetadata", "groundingAttributions", "urlContextMetadata", "logprobsResult"):
+    for key in ("safetyRatings", "citationMetadata", "groundingMetadata", "groundingAttributions", "urlContextMetadata", "logprobsResult", "modelStatus"):
         if key in out:
             out[key] = _gemini_normalize_response_object(out[key])
+    if isinstance(out.get("urlContextMetadata"), dict):
+        for item in out["urlContextMetadata"].get("urlMetadata") or []:
+            if isinstance(item, dict) and "urlRetrievalStatus" in item:
+                item["urlRetrievalStatus"] = _gemini_url_retrieval_status_value(item["urlRetrievalStatus"])
+    if isinstance(out.get("modelStatus"), dict) and "modelStage" in out["modelStatus"]:
+        out["modelStatus"]["modelStage"] = _gemini_model_stage_value(out["modelStatus"]["modelStage"])
     if isinstance(out.get("safetyRatings"), list):
         out["safetyRatings"] = [_gemini_normalize_safety_rating(item) for item in out["safetyRatings"]]
     return out
@@ -2266,6 +2337,7 @@ def _gemini_finalize_generate_response(response: dict[str, Any], *, model_name: 
         "response_id": "responseId",
         "prompt_feedback": "promptFeedback",
         "automatic_function_calling_history": "automaticFunctionCallingHistory",
+        "model_status": "modelStatus",
     }.items():
         if out.get(new) is None and out.get(old) is not None:
             out[new] = out[old]
@@ -2283,12 +2355,21 @@ def _gemini_finalize_generate_response(response: dict[str, Any], *, model_name: 
             ]
     if isinstance(out.get("automaticFunctionCallingHistory"), list):
         out["automaticFunctionCallingHistory"] = _gemini_normalize_contents(out["automaticFunctionCallingHistory"])
+    if isinstance(out.get("modelStatus"), dict):
+        out["modelStatus"] = _gemini_normalize_response_object(out["modelStatus"])
+        if "modelStage" in out["modelStatus"]:
+            out["modelStatus"]["modelStage"] = _gemini_model_stage_value(out["modelStatus"]["modelStage"])
     candidates = out.get("candidates")
     if isinstance(candidates, list):
         finalized_candidates: list[Any] = []
+        url_context_metadata = None
+        if isinstance(request_body, dict) and isinstance(request_body.get("_urlContextMetadata"), dict):
+            url_context_metadata = request_body["_urlContextMetadata"]
         for idx, candidate in enumerate(candidates):
             if isinstance(candidate, dict):
                 candidate = _gemini_normalize_candidate(candidate, idx)
+                if url_context_metadata and not candidate.get("urlContextMetadata"):
+                    candidate["urlContextMetadata"] = _gemini_normalize_response_object(url_context_metadata)
             finalized_candidates.append(candidate)
         out["candidates"] = finalized_candidates
     out["usageMetadata"] = _gemini_normalize_usage_metadata(
@@ -2582,10 +2663,10 @@ async def _gemini_live_generate(
     for key in ("systemInstruction", "generationConfig", "safetySettings", "tools", "toolConfig"):
         if key in setup:
             body[key] = setup[key]
-    body = _gemini_apply_file_search(_gemini_inline_local_files(body))
+    body = _gemini_apply_url_context(_gemini_apply_file_search(_gemini_inline_local_files(body)))
     data = await asyncio.to_thread(
         _get_client().generate_raw,
-        request=body,
+        request=_gemini_strip_internal_request_metadata(body),
         model=str(model["antigravity_model"]),
     )
     response = _gemini_finalize_generate_response(
@@ -2706,12 +2787,12 @@ async def _gemini_legacy_generate(model_name: str, body: dict[str, Any]) -> dict
     request_body = _gemini_apply_response_format(request_body)
     request_body = _gemini_normalize_generate_body(request_body)
     request_body = _gemini_apply_cached_content(request_body)
-    request_body = _gemini_apply_file_search(request_body)
+    request_body = _gemini_apply_url_context(_gemini_apply_file_search(request_body))
     _gemini_reject_unsupported_builtin_tools(request_body)
     request_body = _gemini_inline_local_files(request_body)
     data = await asyncio.to_thread(
         _get_client().generate_raw,
-        request=request_body,
+        request=_gemini_strip_internal_request_metadata(request_body),
         model=str(model["antigravity_model"]),
     )
     return _gemini_unwrap_response(data)
@@ -2723,12 +2804,12 @@ async def _gemini_tuned_legacy_generate(tuned_model_id: str, body: dict[str, Any
     request_body = _gemini_apply_response_format(request_body)
     request_body = _gemini_normalize_generate_body(request_body)
     request_body = _gemini_apply_cached_content(request_body)
-    request_body = _gemini_apply_file_search(request_body)
+    request_body = _gemini_apply_url_context(_gemini_apply_file_search(request_body))
     _gemini_reject_unsupported_builtin_tools(request_body)
     request_body = _gemini_inline_local_files(request_body)
     data = await asyncio.to_thread(
         _get_client().generate_raw,
-        request=request_body,
+        request=_gemini_strip_internal_request_metadata(request_body),
         model=str(model["antigravity_model"]),
     )
     return _gemini_finalize_generate_response(
@@ -4982,6 +5063,188 @@ def _gemini_file_search_context(body: dict[str, Any]) -> str:
     return "Local Gemini file_search results:\n\n" + "\n\n".join(blocks)
 
 
+def _gemini_url_context_enabled(body: dict[str, Any]) -> bool:
+    tools = body.get("tools") if isinstance(body.get("tools"), list) else []
+    return any(
+        isinstance(tool, dict) and any(key in tool for key in ("url_context", "urlContext"))
+        for tool in tools
+    )
+
+
+def _gemini_urls_from_body(body: dict[str, Any]) -> list[str]:
+    text = "\n".join(
+        _gemini_content_text(turn)
+        for turn in body.get("contents", [])
+        if isinstance(turn, dict)
+    )
+    urls: list[str] = []
+    seen: set[str] = set()
+    try:
+        max_urls = max(1, min(20, int(os.getenv("ANTIGRAVITY_GEMINI_URL_CONTEXT_MAX_URLS", "5"))))
+    except ValueError:
+        max_urls = 5
+    for match in re.findall(r"https?://[^\s<>'\")\]]+", text):
+        url = match.rstrip(".,;:")
+        if url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls[:max_urls]
+
+
+def _gemini_url_context_host_allowed(hostname: str | None) -> bool:
+    if not hostname:
+        return False
+    host = hostname.strip().lower().rstrip(".")
+    if host in {"localhost", "localhost.localdomain"} or host.endswith(".localhost"):
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+        return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved)
+    except ValueError:
+        pass
+    if os.getenv("ANTIGRAVITY_GEMINI_URL_CONTEXT_ALLOW_PRIVATE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return True
+    for info in infos:
+        address = info[4][0]
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError:
+            continue
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
+            return False
+    return True
+
+
+def _gemini_url_context_url_allowed(url: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    return _gemini_url_context_host_allowed(parsed.hostname)
+
+
+def _gemini_text_from_html_or_text(raw: str) -> str:
+    text = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", raw)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _gemini_fetch_url_context_url(url: str) -> str:
+    if not _gemini_url_context_url_allowed(url):
+        return ""
+    import httpx
+
+    current_url = url
+    response = None
+    try:
+        timeout = max(1.0, min(60.0, float(os.getenv("ANTIGRAVITY_GEMINI_URL_CONTEXT_TIMEOUT_SECONDS", "10"))))
+    except ValueError:
+        timeout = 10.0
+    try:
+        max_bytes = max(1024, min(2_000_000, int(os.getenv("ANTIGRAVITY_GEMINI_URL_CONTEXT_MAX_BYTES", "20000"))))
+    except ValueError:
+        max_bytes = 20000
+    with httpx.Client(
+        timeout=timeout,
+        follow_redirects=False,
+        headers={"User-Agent": "Antigravity-Proxy-Gemini-urlContext/1.0"},
+    ) as client:
+        for _ in range(5):
+            if not _gemini_url_context_url_allowed(current_url):
+                return ""
+            response = client.get(current_url)
+            if response.status_code not in {301, 302, 303, 307, 308}:
+                break
+            location = response.headers.get("location")
+            if not location:
+                break
+            current_url = str(response.url.join(location))
+        else:
+            return ""
+    if response is None:
+        return ""
+    response.raise_for_status()
+    content_type = (response.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    if content_type and not (
+        content_type.startswith("text/")
+        or content_type in {"application/json", "application/xml", "application/xhtml+xml"}
+    ):
+        return ""
+    raw = response.content[:max_bytes].decode(response.encoding or "utf-8", errors="replace")
+    return _gemini_text_from_html_or_text(raw)[:6000]
+
+
+def _gemini_url_context_context(body: dict[str, Any]) -> str:
+    if not _gemini_url_context_enabled(body):
+        return ""
+    blocks: list[str] = []
+    for index, url in enumerate(_gemini_urls_from_body(body), start=1):
+        try:
+            text = _gemini_fetch_url_context_url(url)
+        except Exception as exc:
+            log.info("Gemini urlContext fetch skipped for %s: %s", url[:200], exc)
+            text = ""
+        if text:
+            blocks.append(f"[{index}] {url}\n{text}")
+    if not blocks:
+        return ""
+    return "Local Gemini urlContext results:\n\n" + "\n\n".join(blocks)
+
+
+def _gemini_url_context_metadata(body: dict[str, Any]) -> dict[str, Any] | None:
+    if not _gemini_url_context_enabled(body):
+        return None
+    items = []
+    for url in _gemini_urls_from_body(body):
+        status = "URL_RETRIEVAL_STATUS_ERROR"
+        if _gemini_url_context_url_allowed(url):
+            status = "URL_RETRIEVAL_STATUS_SUCCESS"
+        items.append({"retrievedUrl": url, "urlRetrievalStatus": status})
+    return {"urlMetadata": items} if items else None
+
+
+def _gemini_apply_url_context(body: dict[str, Any]) -> dict[str, Any]:
+    if not _gemini_url_context_enabled(body):
+        return body
+    merged = dict(body)
+    blocks: list[str] = []
+    metadata_items: list[dict[str, Any]] = []
+    for index, url in enumerate(_gemini_urls_from_body(body), start=1):
+        text = ""
+        try:
+            text = _gemini_fetch_url_context_url(url)
+        except Exception as exc:
+            log.info("Gemini urlContext fetch skipped for %s: %s", url[:200], exc)
+        status = "URL_RETRIEVAL_STATUS_SUCCESS" if text else "URL_RETRIEVAL_STATUS_ERROR"
+        metadata_items.append({"retrievedUrl": url, "urlRetrievalStatus": status})
+        if text:
+            blocks.append(f"[{index}] {url}\n{text}")
+    if metadata_items:
+        merged["_urlContextMetadata"] = {"urlMetadata": metadata_items}
+    context = "Local Gemini urlContext results:\n\n" + "\n\n".join(blocks) if blocks else ""
+    if context:
+        contents = merged.get("contents") if isinstance(merged.get("contents"), list) else []
+        merged["contents"] = [{"role": "user", "parts": [{"text": context}]}] + contents
+    tools = merged.get("tools") if isinstance(merged.get("tools"), list) else []
+    remaining_tools = [
+        tool for tool in tools
+        if not (isinstance(tool, dict) and any(key in tool for key in ("url_context", "urlContext")))
+    ]
+    if remaining_tools:
+        merged["tools"] = remaining_tools
+    else:
+        merged.pop("tools", None)
+    return merged
+
+
+def _gemini_strip_internal_request_metadata(body: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in body.items() if not str(key).startswith("_")}
+
+
 def _gemini_apply_file_search(body: dict[str, Any]) -> dict[str, Any]:
     context = _gemini_file_search_context(body)
     if not context:
@@ -5011,8 +5274,6 @@ def _gemini_reject_unsupported_builtin_tools(body: dict[str, Any]) -> None:
         "computerUse": "computer_use",
         "googleMaps": "google_maps",
         "mcpServers": "mcp_servers",
-        "urlContext": "url_context",
-        "url_context": "url_context",
     }
     for tool in tools:
         if not isinstance(tool, dict):
@@ -8594,11 +8855,15 @@ async def gemini_tuned_generate_content(tuned_model_id: str, request: Request):
         body = _gemini_apply_response_format(body)
         body = _gemini_normalize_generate_body(body)
         body = _gemini_apply_cached_content(body)
-        body = _gemini_apply_file_search(body)
+        body = _gemini_apply_url_context(_gemini_apply_file_search(body))
         _gemini_reject_unsupported_builtin_tools(body)
         body = _gemini_inline_local_files(body)
         body.pop("model", None)
-        data = await asyncio.to_thread(_get_client().generate_raw, request=body, model=str(model["antigravity_model"]))
+        data = await asyncio.to_thread(
+            _get_client().generate_raw,
+            request=_gemini_strip_internal_request_metadata(body),
+            model=str(model["antigravity_model"]),
+        )
         return JSONResponse(_gemini_finalize_generate_response(
             _gemini_unwrap_response(data),
             model_name=str(model.get("name") or tuned_model_id),
@@ -8640,7 +8905,7 @@ async def gemini_tuned_stream_generate_content(tuned_model_id: str, request: Req
         body = _gemini_apply_response_format(body)
         body = _gemini_normalize_generate_body(body)
         body = _gemini_apply_cached_content(body)
-        body = _gemini_apply_file_search(body)
+        body = _gemini_apply_url_context(_gemini_apply_file_search(body))
         _gemini_reject_unsupported_builtin_tools(body)
         body = _gemini_inline_local_files(body)
         body.pop("model", None)
@@ -8683,7 +8948,7 @@ async def gemini_tuned_count_tokens(tuned_model_id: str, request: Request):
         body = _gemini_normalize_request(await request.json())
         cached_tokens = _gemini_cached_content_tokens(body if isinstance(body, dict) else {})
         if isinstance(body, dict):
-            body = _gemini_apply_file_search(_gemini_apply_cached_content(body))
+            body = _gemini_apply_url_context(_gemini_apply_file_search(_gemini_apply_cached_content(body)))
         return _gemini_count_tokens_response(
             _gemini_count_tokens_request(body if isinstance(body, dict) else {}),
             cached_tokens=cached_tokens,
@@ -8700,7 +8965,7 @@ async def gemini_tuned_compute_tokens(tuned_model_id: str, request: Request):
         _gemini_tuned_base_model(tuned_model_id)
         body = _gemini_normalize_request(await request.json())
         if isinstance(body, dict):
-            body = _gemini_apply_file_search(_gemini_apply_cached_content(body))
+            body = _gemini_apply_url_context(_gemini_apply_file_search(_gemini_apply_cached_content(body)))
         return _gemini_compute_tokens_response(_gemini_count_tokens_request(body if isinstance(body, dict) else {}))
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
@@ -8915,7 +9180,7 @@ async def gemini_count_tokens(model_name: str, request: Request):
         if isinstance(body, dict):
             cached_tokens = _gemini_cached_content_tokens(body)
             body = _gemini_apply_cached_content(body)
-            body = _gemini_apply_file_search(body)
+            body = _gemini_apply_url_context(_gemini_apply_file_search(body))
         else:
             cached_tokens = 0
         messages = _gemini_count_tokens_request(body if isinstance(body, dict) else {})
@@ -8936,7 +9201,7 @@ async def gemini_compute_tokens(model_name: str, request: Request):
         body = _gemini_normalize_request(await request.json())
         if isinstance(body, dict):
             body = _gemini_apply_cached_content(body)
-            body = _gemini_apply_file_search(body)
+            body = _gemini_apply_url_context(_gemini_apply_file_search(body))
         messages = _gemini_count_tokens_request(body if isinstance(body, dict) else {})
         return _gemini_compute_tokens_response(messages)
     except HTTPException as exc:
@@ -9144,11 +9409,11 @@ async def _gemini_predict_payload(model_name: str, body: dict[str, Any]) -> tupl
     request_body = _gemini_predict_to_generate_body(body)
     request_body = _gemini_apply_response_format(request_body)
     request_body = _gemini_apply_cached_content(request_body)
-    request_body = _gemini_apply_file_search(request_body)
+    request_body = _gemini_apply_url_context(_gemini_apply_file_search(request_body))
     request_body = _gemini_inline_local_files(request_body)
     data = await asyncio.to_thread(
         _get_client().generate_raw,
-        request=request_body,
+        request=_gemini_strip_internal_request_metadata(request_body),
         model=str(model["antigravity_model"]),
     )
     response = _gemini_finalize_generate_response(
@@ -9413,7 +9678,7 @@ async def gemini_generate_content(model_name: str, request: Request):
                 "generatedFile": image["generatedFile"]["name"],
             }, model_name=model_name, request_body=body))
         body = _gemini_apply_cached_content(body)
-        body = _gemini_apply_file_search(body)
+        body = _gemini_apply_url_context(_gemini_apply_file_search(body))
         _gemini_reject_unsupported_builtin_tools(body)
         body = _gemini_inline_local_files(body)
         body.pop("model", None)
@@ -9425,7 +9690,7 @@ async def gemini_generate_content(model_name: str, request: Request):
             )
         data = await asyncio.to_thread(
             _get_client().generate_raw,
-            request=body,
+            request=_gemini_strip_internal_request_metadata(body),
             model=str(model["antigravity_model"]),
         )
         return JSONResponse(_gemini_finalize_generate_response(
@@ -9454,7 +9719,7 @@ def _gemini_streaming_response(*, body: dict[str, Any], model_name: str, antigra
         got_any = False
         try:
             async for chunk in _get_client().generate_raw_stream_async(
-                request=body,
+                request=_gemini_strip_internal_request_metadata(body),
                 model=antigravity_model,
             ):
                 payload = _gemini_unwrap_response(chunk)
@@ -9467,7 +9732,7 @@ def _gemini_streaming_response(*, body: dict[str, Any], model_name: str, antigra
             try:
                 data = await asyncio.to_thread(
                     _get_client().generate_raw,
-                    request=body,
+                    request=_gemini_strip_internal_request_metadata(body),
                     model=antigravity_model,
                 )
                 payload = _gemini_finalize_generate_response(
@@ -9525,12 +9790,12 @@ async def _gemini_create_completed_batch(model_name: str, body: dict[str, Any]) 
         req_body = _gemini_apply_response_format(req_body)
         req_body = _gemini_normalize_generate_body(req_body)
         req_body = _gemini_apply_cached_content(req_body)
-        req_body = _gemini_apply_file_search(req_body)
+        req_body = _gemini_apply_url_context(_gemini_apply_file_search(req_body))
         req_body = _gemini_inline_local_files(req_body)
         req_body.pop("model", None)
         data = await asyncio.to_thread(
             _get_client().generate_raw,
-            request=req_body,
+            request=_gemini_strip_internal_request_metadata(req_body),
             model=str(model["antigravity_model"]),
         )
         responses.append(_gemini_finalize_generate_response(
@@ -10067,11 +10332,11 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
         return _gemini_interaction_resource(interaction)
 
     request_body = _gemini_apply_cached_content(request_body)
-    request_body = _gemini_apply_file_search(request_body)
+    request_body = _gemini_apply_url_context(_gemini_apply_file_search(request_body))
     request_body = _gemini_inline_local_files(request_body)
     data = await asyncio.to_thread(
         _get_client().generate_raw,
-        request=request_body,
+        request=_gemini_strip_internal_request_metadata(request_body),
         model=str(model["antigravity_model"]),
     )
     response = _gemini_finalize_generate_response(
@@ -10333,7 +10598,7 @@ async def gemini_stream_generate_content(model_name: str, request: Request):
         body = _gemini_apply_response_format(body)
         body = _gemini_normalize_generate_body(body)
         body = _gemini_apply_cached_content(body)
-        body = _gemini_apply_file_search(body)
+        body = _gemini_apply_url_context(_gemini_apply_file_search(body))
         _gemini_reject_unsupported_builtin_tools(body)
         body = _gemini_inline_local_files(body)
         body.pop("model", None)

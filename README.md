@@ -678,11 +678,13 @@ aliases are normalized too, including `google_search.search_types`,
 `google_search.time_range_filter`,
 `google_search_retrieval.dynamic_retrieval_config.dynamic_threshold`,
 `file_search.file_search_store_names`, `file_search.metadata_filter`, and
-`file_search.top_k`, and `thinking_config.thinking_level`. `urlContext`,
+`file_search.top_k`, and `thinking_config.thinking_level`. `urlContext` is
+implemented as a safe local fetch-and-inject shim: URLs found in the prompt are
+fetched as bounded text context, private/loopback/link-local addresses are
+blocked by default, and `urlContextMetadata` is attached to candidates.
 `codeExecution`, `computerUse`, `googleMaps`, and `mcpServers` are recognized
-but return
-`UNIMPLEMENTED` because the current Antigravity backend does not expose those
-hosted tools. `toolConfig.functionCallingConfig.mode` and
+but return `UNIMPLEMENTED` because the current Antigravity backend does not
+expose those hosted tools. `toolConfig.functionCallingConfig.mode` and
 `allowedFunctionNames` are normalized from common SDK spellings. Function
 calling mode aliases such as `required`, `forced`, and `force` are treated as
 Gemini `ANY`, and OpenAI-style `tool_choice` / `toolChoice` on Gemini requests
@@ -1285,18 +1287,25 @@ This endpoint is disabled unless `ANTIGRAVITY_PROXY_API_KEY` is configured.
 
 ## Run As A User Service
 
+The repository includes `antigravity-proxy.service` as a starting point. Edit
+its `WorkingDirectory`, `ANTIGRAVITY_PROXY_ENV_FILE`, and `ExecStart` paths to
+match your install directory before copying it into systemd.
+
 Example systemd user unit:
 
 ```ini
 [Unit]
-Description=Antigravity OpenAI Proxy
+Description=Antigravity Proxy
 After=network-online.target
+Wants=network-online.target
 
 [Service]
-WorkingDirectory=/opt/Antigravity-Proxy
-ExecStart=/opt/Antigravity-Proxy/.venv/bin/python antigravity_proxy.py
+Type=simple
+WorkingDirectory=%h/workspace/Antigravity-Proxy
+Environment=ANTIGRAVITY_PROXY_ENV_FILE=%h/workspace/Antigravity-Proxy/.env
+ExecStart=%h/workspace/Antigravity-Proxy/.venv/bin/python %h/workspace/Antigravity-Proxy/antigravity_proxy.py
 Restart=always
-Environment=ANTIGRAVITY_PROXY_ENV_FILE=/opt/Antigravity-Proxy/.env
+RestartSec=3
 
 [Install]
 WantedBy=default.target

@@ -4,8 +4,135 @@ import json
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from starlette.routing import Match
 
 import antigravity_proxy as proxy
+
+
+GEMINI_V1BETA_DISCOVERY_REVISION = "20260626"
+
+GEMINI_V1BETA_DISCOVERY_ROUTES_20260626 = (
+    ("DELETE", "v1beta/batches/{batchesId}"),
+    ("DELETE", "v1beta/cachedContents/{cachedContentsId}"),
+    ("DELETE", "v1beta/corpora/{corporaId}"),
+    ("DELETE", "v1beta/corpora/{corporaId}/permissions/{permissionsId}"),
+    ("DELETE", "v1beta/fileSearchStores/{fileSearchStoresId}"),
+    ("DELETE", "v1beta/fileSearchStores/{fileSearchStoresId}/documents/{documentsId}"),
+    ("DELETE", "v1beta/files/{filesId}"),
+    ("DELETE", "v1beta/tunedModels/{tunedModelsId}"),
+    ("DELETE", "v1beta/tunedModels/{tunedModelsId}/permissions/{permissionsId}"),
+    ("GET", "v1beta/batches"),
+    ("GET", "v1beta/batches/{batchesId}"),
+    ("GET", "v1beta/cachedContents"),
+    ("GET", "v1beta/cachedContents/{cachedContentsId}"),
+    ("GET", "v1beta/corpora"),
+    ("GET", "v1beta/corpora/{corporaId}"),
+    ("GET", "v1beta/corpora/{corporaId}/operations/{operationsId}"),
+    ("GET", "v1beta/corpora/{corporaId}/permissions"),
+    ("GET", "v1beta/corpora/{corporaId}/permissions/{permissionsId}"),
+    ("GET", "v1beta/fileSearchStores"),
+    ("GET", "v1beta/fileSearchStores/{fileSearchStoresId}"),
+    ("GET", "v1beta/fileSearchStores/{fileSearchStoresId}/documents"),
+    ("GET", "v1beta/fileSearchStores/{fileSearchStoresId}/documents/{documentsId}"),
+    ("GET", "v1beta/fileSearchStores/{fileSearchStoresId}/operations/{operationsId}"),
+    ("GET", "v1beta/fileSearchStores/{fileSearchStoresId}/upload/operations/{operationsId}"),
+    ("GET", "v1beta/files"),
+    ("GET", "v1beta/files/{filesId}"),
+    ("GET", "v1beta/generatedFiles"),
+    ("GET", "v1beta/generatedFiles/{generatedFilesId}/operations/{operationsId}"),
+    ("GET", "v1beta/models"),
+    ("GET", "v1beta/models/{modelsId}"),
+    ("GET", "v1beta/models/{modelsId}/operations"),
+    ("GET", "v1beta/models/{modelsId}/operations/{operationsId}"),
+    ("GET", "v1beta/tunedModels"),
+    ("GET", "v1beta/tunedModels/{tunedModelsId}"),
+    ("GET", "v1beta/tunedModels/{tunedModelsId}/operations"),
+    ("GET", "v1beta/tunedModels/{tunedModelsId}/operations/{operationsId}"),
+    ("GET", "v1beta/tunedModels/{tunedModelsId}/permissions"),
+    ("GET", "v1beta/tunedModels/{tunedModelsId}/permissions/{permissionsId}"),
+    ("PATCH", "v1beta/batches/{batchesId}:updateEmbedContentBatch"),
+    ("PATCH", "v1beta/batches/{batchesId}:updateGenerateContentBatch"),
+    ("PATCH", "v1beta/cachedContents/{cachedContentsId}"),
+    ("PATCH", "v1beta/corpora/{corporaId}/permissions/{permissionsId}"),
+    ("PATCH", "v1beta/tunedModels/{tunedModelsId}"),
+    ("PATCH", "v1beta/tunedModels/{tunedModelsId}/permissions/{permissionsId}"),
+    ("POST", "v1beta/batches/{batchesId}:cancel"),
+    ("POST", "v1beta/cachedContents"),
+    ("POST", "v1beta/corpora"),
+    ("POST", "v1beta/corpora/{corporaId}/permissions"),
+    ("POST", "v1beta/dynamic/{dynamicId}:generateContent"),
+    ("POST", "v1beta/dynamic/{dynamicId}:streamGenerateContent"),
+    ("POST", "v1beta/fileSearchStores"),
+    ("POST", "v1beta/fileSearchStores/{fileSearchStoresId}:importFile"),
+    ("POST", "v1beta/fileSearchStores/{fileSearchStoresId}:uploadToFileSearchStore"),
+    ("POST", "v1beta/files"),
+    ("POST", "v1beta/files:register"),
+    ("POST", "v1beta/models/{modelsId}:asyncBatchEmbedContent"),
+    ("POST", "v1beta/models/{modelsId}:batchEmbedContents"),
+    ("POST", "v1beta/models/{modelsId}:batchEmbedText"),
+    ("POST", "v1beta/models/{modelsId}:batchGenerateContent"),
+    ("POST", "v1beta/models/{modelsId}:countMessageTokens"),
+    ("POST", "v1beta/models/{modelsId}:countTextTokens"),
+    ("POST", "v1beta/models/{modelsId}:countTokens"),
+    ("POST", "v1beta/models/{modelsId}:embedContent"),
+    ("POST", "v1beta/models/{modelsId}:embedText"),
+    ("POST", "v1beta/models/{modelsId}:generateAnswer"),
+    ("POST", "v1beta/models/{modelsId}:generateContent"),
+    ("POST", "v1beta/models/{modelsId}:generateMessage"),
+    ("POST", "v1beta/models/{modelsId}:generateText"),
+    ("POST", "v1beta/models/{modelsId}:predict"),
+    ("POST", "v1beta/models/{modelsId}:predictLongRunning"),
+    ("POST", "v1beta/models/{modelsId}:streamGenerateContent"),
+    ("POST", "v1beta/tunedModels"),
+    ("POST", "v1beta/tunedModels/{tunedModelsId}/permissions"),
+    ("POST", "v1beta/tunedModels/{tunedModelsId}:asyncBatchEmbedContent"),
+    ("POST", "v1beta/tunedModels/{tunedModelsId}:batchGenerateContent"),
+    ("POST", "v1beta/tunedModels/{tunedModelsId}:generateContent"),
+    ("POST", "v1beta/tunedModels/{tunedModelsId}:generateText"),
+    ("POST", "v1beta/tunedModels/{tunedModelsId}:streamGenerateContent"),
+    ("POST", "v1beta/tunedModels/{tunedModelsId}:transferOwnership"),
+)
+
+
+def _sample_discovery_path(flat_path):
+    path = "/" + flat_path
+    samples = {
+        "batchesId": "batch-1",
+        "cachedContentsId": "cache-1",
+        "corporaId": "corpus-1",
+        "documentsId": "documents/doc-1",
+        "dynamicId": "gemini-3-flash-agent",
+        "fileSearchStoresId": "store-1",
+        "filesId": "file-1",
+        "generatedFilesId": "gen-1",
+        "modelsId": "gemini-3-flash-agent",
+        "operationsId": "op-1",
+        "permissionsId": "perm-1",
+        "tunedModelsId": "tuned-1",
+    }
+    for key, value in samples.items():
+        path = path.replace("{" + key + "}", value)
+    return path
+
+
+def _matched_route_paths(method, path):
+    scope = {"type": "http", "method": method, "path": path, "root_path": "", "path_params": {}}
+    return [
+        route.path
+        for route in proxy.app.routes
+        if hasattr(route, "matches") and route.matches(scope)[0] is Match.FULL
+    ]
+
+
+def test_gemini_v1beta_discovery_20260626_flatpaths_match_fastapi_routes():
+    assert GEMINI_V1BETA_DISCOVERY_REVISION == "20260626"
+    missing = []
+    for method, flat_path in GEMINI_V1BETA_DISCOVERY_ROUTES_20260626:
+        path = _sample_discovery_path(flat_path)
+        if not _matched_route_paths(method, path):
+            missing.append(f"{method} {flat_path} -> {path}")
+
+    assert missing == []
 
 
 def test_model_normalization_adds_capabilities_and_hides_internal(monkeypatch):
@@ -762,6 +889,7 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
                 "response": {
                     "model_version": "gemini-upstream-version",
                     "response_id": "upstream-response-id",
+                    "model_status": {"model_stage": "preview"},
                     "prompt_feedback": {
                         "block_reason": "SAFETY",
                         "block_reason_message": "blocked by policy",
@@ -801,7 +929,7 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
                         "url_context_metadata": {
                             "url_metadata": [{
                                 "retrieved_url": "https://example.test",
-                                "url_retrieval_status": "URL_RETRIEVAL_STATUS_SUCCESS",
+                                "url_retrieval_status": "success",
                             }],
                         },
                         "logprobs_result": {
@@ -821,7 +949,7 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
                         "tool_use_prompt_tokens_details": [{"modality": "TEXT", "token_count": 3}],
                         "thoughts_tokens_details": [{"modality": "TEXT", "token_count": 5}],
                         "cache_tokens_details": [{"modality": "document", "token_count": 1}],
-                        "service_tier": "standard",
+                        "service_tier": "SERVICE_TIER_PRIORITY",
                         "traffic_type": "ON_DEMAND",
                     },
                 }
@@ -836,6 +964,7 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
     body = response.json()
     assert body["modelVersion"] == "gemini-upstream-version"
     assert body["responseId"] == "upstream-response-id"
+    assert body["modelStatus"]["modelStage"] == "PREVIEW"
     assert body["promptFeedback"]["blockReason"] == "SAFETY"
     assert body["promptFeedback"]["blockReasonMessage"] == "blocked by policy"
     assert body["promptFeedback"]["safetyRatings"][0]["category"] == "HARM_CATEGORY_DANGEROUS_CONTENT"
@@ -885,7 +1014,7 @@ def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypat
     assert body["usageMetadata"]["thoughtsTokensDetails"][0]["tokenCount"] == 5
     assert body["usageMetadata"]["cacheTokensDetails"][0]["modality"] == "DOCUMENT"
     assert body["usageMetadata"]["cacheTokensDetails"][0]["tokenCount"] == 1
-    assert body["usageMetadata"]["serviceTier"] == "standard"
+    assert body["usageMetadata"]["serviceTier"] == "priority"
     assert body["usageMetadata"]["trafficType"] == "ON_DEMAND"
     assert body["usageMetadata"]["totalTokenCount"] == 14
     assert "usage_metadata" not in body
@@ -1469,7 +1598,7 @@ def test_gemini_generate_content_normalizes_tools_unions(monkeypatch):
         "tools": [{
             "google_search_retrieval": {
                 "dynamic_retrieval_config": {
-                    "mode": "MODE_DYNAMIC",
+                    "mode": "dynamic",
                     "dynamic_threshold": "0.35",
                 }
             }
@@ -1690,17 +1819,9 @@ def test_gemini_generate_content_normalizes_safety_and_tool_config_shortcuts(mon
 def test_gemini_generate_content_rejects_unsupported_builtin_tools():
     client = TestClient(proxy.app)
 
-    url_context = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
-        "contents": [{"role": "user", "parts": [{"text": "read url"}]}],
-        "tools": [{"urlContext": {}}],
-    })
     code_execution = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
         "contents": [{"role": "user", "parts": [{"text": "run code"}]}],
         "tools": [{"code_execution": {}}],
-    })
-    url_context_snake = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
-        "contents": [{"role": "user", "parts": [{"text": "read url"}]}],
-        "tools": [{"url_context": {}}],
     })
     google_maps = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
         "contents": "map it",
@@ -1721,19 +1842,9 @@ def test_gemini_generate_content_rejects_unsupported_builtin_tools():
         "tools": [{"mcp_servers": [{"name": "local", "streamable_http_transport": {"url": "http://example.test"}}]}],
     })
 
-    assert url_context.status_code == 501
-    assert url_context.json()["error"]["status"] == "UNIMPLEMENTED"
-    assert "url_context" in url_context.json()["error"]["message"]
-    assert url_context.json()["error"]["details"] == [{
-        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-        "reason": "UNIMPLEMENTED",
-        "domain": "generativelanguage.googleapis.com",
-    }]
     assert code_execution.status_code == 501
     assert code_execution.json()["error"]["status"] == "UNIMPLEMENTED"
     assert "code_execution" in code_execution.json()["error"]["message"]
-    assert url_context_snake.status_code == 501
-    assert "url_context" in url_context_snake.json()["error"]["message"]
     assert google_maps.status_code == 501
     assert "google_maps" in google_maps.json()["error"]["message"]
     assert computer_use.status_code == 501
@@ -1741,12 +1852,40 @@ def test_gemini_generate_content_rejects_unsupported_builtin_tools():
     assert mcp_servers.status_code == 501
     assert "mcp_servers" in mcp_servers.json()["error"]["message"]
 
-    single_url_context = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
-        "contents": "read url",
-        "tools": {"urlContext": {}},
+
+def test_gemini_url_context_fetches_and_injects_local_context(monkeypatch):
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen["request"] = request
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    monkeypatch.setattr(proxy, "_gemini_fetch_url_context_url", lambda url: "Fetched page text for " + url)
+    client = TestClient(proxy.app)
+
+    response = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": [{"role": "user", "parts": [{"text": "read https://example.com/page"}]}],
+        "tools": [{"urlContext": {}}],
     })
-    assert single_url_context.status_code == 501
-    assert single_url_context.json()["error"]["status"] == "UNIMPLEMENTED"
+
+    assert response.status_code == 200
+    assert seen["request"]["contents"][0]["parts"][0]["text"].startswith("Local Gemini urlContext results:")
+    assert "Fetched page text for https://example.com/page" in seen["request"]["contents"][0]["parts"][0]["text"]
+    assert seen["request"]["contents"][1]["parts"][0]["text"] == "read https://example.com/page"
+    assert "tools" not in seen["request"]
+    assert "_urlContextMetadata" not in seen["request"]
+    metadata = response.json()["candidates"][0]["urlContextMetadata"]["urlMetadata"][0]
+    assert metadata["retrievedUrl"] == "https://example.com/page"
+    assert metadata["urlRetrievalStatus"] == "URL_RETRIEVAL_STATUS_SUCCESS"
+
+    snake = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "contents": "read https://example.com/snake",
+        "tools": {"url_context": {}},
+    })
+    assert snake.status_code == 200
+    assert "urlContextMetadata" in snake.json()["candidates"][0]
 
 
 def test_gemini_generate_content_alt_sse(monkeypatch):

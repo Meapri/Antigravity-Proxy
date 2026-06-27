@@ -1,7 +1,7 @@
 [project]
 name = "antigravity-proxy"
 version = "0.1.0"
-description = "OpenAI-compatible FastAPI proxy for Antigravity / Cloud Code models"
+description = "OpenAI- and Gemini-compatible FastAPI proxy for Antigravity / Cloud Code models"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
