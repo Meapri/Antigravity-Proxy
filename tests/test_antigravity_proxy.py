@@ -1538,11 +1538,17 @@ def test_gemini_predict_and_predict_long_running(tmp_path, monkeypatch):
     op_id = long_running.json()["name"].split("/", 1)[1]
     model_operation = client.get(f"/v1beta/models/gemini-3-flash-agent/operations/{op_id}")
     model_operations = client.get("/v1beta/models/gemini-3-flash-agent/operations")
+    filtered_model_operations = client.get(
+        f"/v1beta/models/gemini-3-flash-agent/operations?filter=operation.name:{op_id}&returnPartialSuccess=true"
+    )
     waited_operation = client.post(f"/v1beta/models/gemini-3-flash-agent/operations/{op_id}:wait")
     assert model_operation.status_code == 200
     assert model_operation.json()["name"] == long_running.json()["name"]
     assert model_operations.status_code == 200
     assert model_operations.json()["operations"][0]["name"] == long_running.json()["name"]
+    assert filtered_model_operations.status_code == 200
+    assert filtered_model_operations.json()["operations"][0]["name"] == long_running.json()["name"]
+    assert filtered_model_operations.json()["unreachable"] == []
     assert waited_operation.status_code == 200
     assert waited_operation.json()["name"] == long_running.json()["name"]
 
@@ -3683,8 +3689,13 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     })
 
     listed = client.get("/v1/tunedModels")
+    filtered = client.get('/v1beta/tunedModels?filter=displayName:"Query"')
+    filtered_description = client.get('/v1beta/tunedModels?filter=description:"updated"')
     fetched = client.get("/v1/tunedModels/my_tuned")
     listed_operations = client.get("/v1/tunedModels/my_tuned/operations")
+    filtered_operations = client.get(
+        f"/v1beta/tunedModels/my_tuned/operations?filter=operation.name:{created_op_id}&return_partial_success=true"
+    )
     fetched_operation = client.get(f"/v1/tunedModels/my_tuned/operations/{created_op_id}")
     waited_operation = client.post(f"/v1/tunedModels/my_tuned/operations/{created_op_id}:wait")
     cancelled_operation = client.post(f"/v1/tunedModels/my_tuned/operations/{created_op_id}:cancel")
@@ -3697,6 +3708,10 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert listed.status_code == 200
     assert query_created.status_code == 200
     assert query_created.json()["response"]["name"] == "tunedModels/query_tuned"
+    assert filtered.status_code == 200
+    assert [item["name"] for item in filtered.json()["tunedModels"]] == ["tunedModels/query_tuned"]
+    assert filtered_description.status_code == 200
+    assert filtered_description.json()["tunedModels"] == []
     assert fetched.json()["displayName"] == "My tuned"
     assert fetched.json()["supportedGenerationMethods"] == [
         "generateContent",
@@ -3711,6 +3726,9 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     ]
     assert listed_operations.status_code == 200
     assert listed_operations.json()["operations"][0]["name"] == created.json()["name"]
+    assert filtered_operations.status_code == 200
+    assert filtered_operations.json()["operations"][0]["name"] == created.json()["name"]
+    assert filtered_operations.json()["unreachable"] == []
     assert fetched_operation.status_code == 200
     assert fetched_operation.json()["name"] == created.json()["name"]
     assert waited_operation.status_code == 200

@@ -980,6 +980,8 @@ Tuned models and permissions:
 - `tunedModels.patch` honors `updateMask` / `update_mask` from either the query
   string or SDK wrapper body for mutable metadata fields such as `displayName`,
   `description`, `baseModel`, `tuningTask`, and `readerProjectNumbers`.
+- `tunedModels.list` supports Gemini `filter` expressions over name,
+  `displayName`, description, state, and base model metadata.
 - `tunedModels/{id}:generateContent`, `:streamGenerateContent`,
   `:generateText`, `:batchGenerateContent`, `:countTokens`,
   `:computeTokens`, `:embedContent`, `:batchEmbedContents`, and
@@ -1052,7 +1054,7 @@ Notes:
   `{"models": ...}` shape when Gemini pagination query parameters are present.
 - Gemini list-style routes accept both REST-style `pageSize` / `pageToken` and
   SDK-style `page_size` / `page_token` query aliases. Batch and operation list
-  routes also accept `return_partial_success` as an alias for
+  routes also accept `filter`, `return_partial_success`, and
   `returnPartialSuccess`.
 - `countTokens` and `computeTokens` are approximate because Antigravity's internal endpoint does not
   expose a separate Gemini token-count RPC. Responses include `totalTokens`,

@@ -2625,6 +2625,51 @@ def _gemini_operation_filter_matches(operation: dict[str, Any], filter_expr: str
     return True
 
 
+def _gemini_tuned_model_filter_matches(model: dict[str, Any], filter_expr: str | None) -> bool:
+    if not filter_expr:
+        return True
+    aliases = {
+        "display_name": "displayName",
+        "tuned_model.display_name": "displayName",
+        "tunedModel.displayName": "displayName",
+        "description": "description",
+        "tuned_model.description": "description",
+        "tunedModel.description": "description",
+        "name": "name",
+        "tuned_model.name": "name",
+        "tunedModel.name": "name",
+        "state": "state",
+        "tuned_model.state": "state",
+        "tunedModel.state": "state",
+        "base_model": "baseModel",
+        "baseModel": "baseModel",
+        "tuned_model.base_model": "baseModel",
+        "tunedModel.baseModel": "baseModel",
+    }
+    terms = re.split(r"\s+(?:AND|and)\s+", filter_expr.strip())
+    for term in terms:
+        term = term.strip()
+        if not term:
+            continue
+        match = re.match(r"^([\w.]+)\s*(!=|=|:)\s*(.+)$", term)
+        if not match:
+            needle = term.strip().strip("\"'").lower()
+            if needle and needle not in str(model.get("displayName") or "").lower() and needle not in str(model.get("description") or "").lower():
+                return False
+            continue
+        field, operator, expected_raw = match.groups()
+        expected = expected_raw.strip().strip("\"'")
+        actual = _gemini_get_path_value(model, aliases.get(field, field))
+        actual_text = str(actual or "")
+        if operator == "=" and actual_text != expected:
+            return False
+        if operator == "!=" and actual_text == expected:
+            return False
+        if operator == ":" and expected.lower() not in actual_text.lower():
+            return False
+    return True
+
+
 def _gemini_interactions_root() -> Path:
     return Path(os.getenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", "data/gemini_interactions")).expanduser()
 
@@ -6422,16 +6467,25 @@ async def gemini_list_models(request: Request):
 @app.get("/v1beta/models/{model_name:path}/operations")
 async def gemini_list_model_operations(model_name: str, request: Request):
     pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
+    filter_expr = request.query_params.get("filter")
+    return_partial_success = _gemini_query_bool(request, "returnPartialSuccess", "return_partial_success")
     if _is_gemini_video_model_id(model_name):
         model_resource = "models/" + _gemini_resource_model_id(model_name)
     else:
         model = _resolve_gemini_model(model_name)
         model_resource = _gemini_model_name(model)
-    return _gemini_operation_list_response(
-        _gemini_operations_for_scope("model", model_resource),
+    response = _gemini_operation_list_response(
+        [
+            operation
+            for operation in _gemini_operations_for_scope("model", model_resource)
+            if _gemini_operation_filter_matches(operation, filter_expr)
+        ],
         pageSize,
         pageToken,
     )
+    if return_partial_success:
+        response["unreachable"] = []
+    return response
 
 
 @app.get("/v1/models/{model_name:path}/operations/{operation_id:path}")
@@ -7728,7 +7782,9 @@ async def gemini_create_tuned_model(request: Request):
 @app.get("/v1beta/tunedModels")
 async def gemini_list_tuned_models(request: Request):
     pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
+    filter_expr = request.query_params.get("filter")
     models = [_gemini_tuned_resource(meta) for meta in _gemini_load_tuned_index().values()]
+    models = [model for model in models if _gemini_tuned_model_filter_matches(model, filter_expr)]
     models.sort(key=lambda item: item.get("createTime") or "")
     start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
     end = start + pageSize
@@ -7739,12 +7795,21 @@ async def gemini_list_tuned_models(request: Request):
 @app.get("/v1beta/tunedModels/{tuned_model_id:path}/operations")
 async def gemini_list_tuned_model_operations(tuned_model_id: str, request: Request):
     pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
+    filter_expr = request.query_params.get("filter")
+    return_partial_success = _gemini_query_bool(request, "returnPartialSuccess", "return_partial_success")
     tuned_name = _gemini_tuned_name(tuned_model_id)
-    return _gemini_operation_list_response(
-        _gemini_operations_for_scope("tunedModel", tuned_name),
+    response = _gemini_operation_list_response(
+        [
+            operation
+            for operation in _gemini_operations_for_scope("tunedModel", tuned_name)
+            if _gemini_operation_filter_matches(operation, filter_expr)
+        ],
         pageSize,
         pageToken,
     )
+    if return_partial_success:
+        response["unreachable"] = []
+    return response
 
 
 @app.get("/v1/tunedModels/{tuned_model_id:path}/operations/{operation_id:path}")
