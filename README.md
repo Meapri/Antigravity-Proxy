@@ -1057,7 +1057,8 @@ Tuned models and permissions:
   string or SDK wrapper body for mutable metadata fields such as `displayName`,
   `description`, `baseModel`, `tuningTask`, and `readerProjectNumbers`.
 - `tunedModels.list` supports Gemini `filter` expressions over name,
-  `displayName`, description, state, and base model metadata.
+  `displayName`, description, state, and base model metadata. `pageSize`
+  values above 1000 are clamped to 1000 for SDK paginator compatibility.
 - `tunedModels/{id}:generateContent`, `:streamGenerateContent`,
   `:generateText`, `:batchGenerateContent`, `:countTokens`,
   `:computeTokens`, `:embedContent`, `:batchEmbedContents`, and

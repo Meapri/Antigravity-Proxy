@@ -9141,7 +9141,12 @@ async def gemini_create_tuned_model(request: Request):
 @app.get("/v1/tunedModels")
 @app.get("/v1beta/tunedModels")
 async def gemini_list_tuned_models(request: Request):
-    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
+    pageSize, pageToken = _gemini_list_query_params(
+        request,
+        default_page_size=100,
+        max_page_size=1000,
+        clamp_page_size=True,
+    )
     filter_expr = request.query_params.get("filter")
     models = [_gemini_tuned_resource(meta) for meta in _gemini_load_tuned_index().values()]
     models = [model for model in models if _gemini_tuned_model_filter_matches(model, filter_expr)]

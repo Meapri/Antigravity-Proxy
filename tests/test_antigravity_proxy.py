@@ -4819,6 +4819,7 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     })
 
     listed = client.get("/v1/tunedModels")
+    oversized_page = client.get("/v1beta/tunedModels?pageSize=1001")
     filtered = client.get('/v1beta/tunedModels?filter=displayName:"Query"')
     filtered_description = client.get('/v1beta/tunedModels?filter=description:"updated"')
     fetched = client.get("/v1/tunedModels/my_tuned")
@@ -4836,6 +4837,11 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
         }
     })
     assert listed.status_code == 200
+    assert oversized_page.status_code == 200
+    assert {item["name"] for item in oversized_page.json()["tunedModels"]} == {
+        "tunedModels/my_tuned",
+        "tunedModels/query_tuned",
+    }
     assert query_created.status_code == 200
     assert query_created.json()["response"]["name"] == "tunedModels/query_tuned"
     assert filtered.status_code == 200
