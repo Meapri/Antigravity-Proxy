@@ -974,7 +974,8 @@ Notes:
   fields for Gemini SDK compatibility. `computeTokens` returns deterministic
   `tokensInfo` with stable local token IDs and base64-encoded token bytes.
   `generateContentRequest` wrappers, string `contents`, and local
-  `cachedContent` / `file_search` context are expanded before counting.
+  `cachedContent` / `file_search` context are expanded before counting. Tool
+  declarations and `toolConfig` are also included in the local prompt estimate.
 - Files are stored locally under `data/gemini_files` by default; override with
   `ANTIGRAVITY_GEMINI_FILES_DIR`. File resources include Gemini-style
   `downloadUri`, `source`, base64 `sha256Hash`, and video metadata fields when

@@ -240,6 +240,20 @@ def test_gemini_models_and_count_tokens():
     assert counted_media.status_code == 200
     assert {item["modality"] for item in counted_media.json()["promptTokensDetails"]} >= {"TEXT", "IMAGE"}
 
+    counted_tools = client.post("/v1beta/models/gemini-3-flash-agent:countTokens", json={
+        "contents": "use a tool",
+        "tools": [{
+            "function_declarations": [{
+                "name": "lookup",
+                "description": "Look up a record by query",
+                "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+            }]
+        }],
+        "tool_config": {"function_calling_config": {"mode": "auto"}},
+    })
+    assert counted_tools.status_code == 200
+    assert counted_tools.json()["totalTokens"] > counted_string.json()["totalTokens"]
+
 
 def test_gemini_compute_tokens_accepts_wrappers_and_media():
     client = TestClient(proxy.app)
@@ -267,6 +281,13 @@ def test_gemini_compute_tokens_accepts_wrappers_and_media():
     assert v1_response.status_code == 200
     assert v1_response.json()["tokensInfo"][0]["role"] == "user"
     assert "computeTokens" in client.get("/v1beta/models/gemini-3-flash-agent").json()["supportedGenerationMethods"]
+
+    tools_response = client.post("/v1beta/models/gemini-3-flash-agent:computeTokens", json={
+        "contents": "tool tokenization",
+        "tools": [{"function_declarations": [{"name": "lookup", "description": "Lookup by query"}]}],
+    })
+    assert tools_response.status_code == 200
+    assert tools_response.json()["tokensInfo"][0]["role"] == "system"
 
 
 def test_gemini_count_tokens_applies_generate_content_request_cache(tmp_path, monkeypatch):

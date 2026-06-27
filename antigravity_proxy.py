@@ -1162,6 +1162,16 @@ def _gemini_count_tokens_request(body: dict[str, Any]) -> list[ChatMessage]:
     system_instruction = payload.get("systemInstruction")
     if isinstance(system_instruction, dict):
         messages.insert(0, ChatMessage(role="system", content=system_instruction.get("parts") or []))
+    tool_context = {
+        key: payload[key]
+        for key in ("tools", "toolConfig")
+        if payload.get(key) is not None
+    }
+    if tool_context:
+        messages.insert(0, ChatMessage(
+            role="system",
+            content=[{"text": json.dumps(tool_context, ensure_ascii=False, sort_keys=True)}],
+        ))
     return messages
 
 
