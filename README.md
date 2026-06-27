@@ -1212,6 +1212,9 @@ Notes:
   `new_signing_secret`. Public responses expose `subscribed_events`,
   `signing_secrets`, `new_signing_secret`, and snake_case timestamps; ping
   returns an empty response and `rotateSigningSecret` returns `{ "secret": ... }`.
+  Webhooks and interactions list responses also expose SDK-style
+  `object/data/next_page_token` aliases while retaining their original
+  resource-specific list fields.
 - Interactions streaming uses Gemini's `event_type` SSE discriminator with
   `step.start`, `step.delta`, `step.stop`, and `interaction.completed` events.
 - File Search Store int64 counters, including `activeDocumentsCount`,

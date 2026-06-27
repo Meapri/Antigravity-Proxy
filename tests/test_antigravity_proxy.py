@@ -3284,8 +3284,12 @@ def test_gemini_interactions_create_previous_store_and_stream(tmp_path, monkeypa
 
     assert fetched.status_code == 200
     assert listed.status_code == 200
+    assert listed.json()["object"] == "list"
     assert listed.json()["interactions"][0]["object"] == "interaction"
+    assert listed.json()["data"][0]["object"] == "interaction"
     assert first_body["name"] in {item["name"] for item in listed.json()["interactions"]}
+    assert first_body["name"] in {item["name"] for item in listed.json()["data"]}
+    assert listed.json()["next_page_token"] == ""
     assert listed.json()["nextPageToken"] == ""
     assert missing.status_code == 404
     assert cancelled.status_code == 200
@@ -3435,7 +3439,9 @@ def test_gemini_interactions_v1_aliases(tmp_path, monkeypatch):
     assert fetched_with_version_prefix.status_code == 200
     assert fetched_with_version_prefix.json()["name"] == body["name"]
     assert listed.status_code == 200
+    assert listed.json()["object"] == "list"
     assert {item["name"] for item in listed.json()["interactions"]} >= {body["name"], background.json()["name"]}
+    assert {item["name"] for item in listed.json()["data"]} >= {body["name"], background.json()["name"]}
     assert colon_cancelled.status_code == 200
     assert rest_cancelled.status_code == 200
     assert background_cancelled.status_code == 200
@@ -3712,7 +3718,10 @@ def test_gemini_webhooks_crud_and_v1_alias(tmp_path, monkeypatch):
     assert fetched.status_code == 200
     assert fetched.json()["name"] == webhook["name"]
     assert listed.status_code == 200
+    assert listed.json()["object"] == "list"
     assert webhook["name"] in {item["name"] for item in listed.json()["webhooks"]}
+    assert webhook["name"] in {item["name"] for item in listed.json()["data"]}
+    assert listed.json()["next_page_token"] == ""
     assert "newSigningSecret" not in fetched.json()
     assert patched.status_code == 200
     assert patched.json()["displayName"] == "Renamed"

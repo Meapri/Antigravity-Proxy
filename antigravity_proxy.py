@@ -11446,9 +11446,14 @@ async def gemini_list_webhooks(request: Request):
     webhooks.sort(key=lambda item: item.get("name") or "")
     start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
     end = start + pageSize
+    page = [_gemini_webhook_public_resource(item) for item in webhooks[start:end]]
+    next_token = str(end) if end < len(webhooks) else ""
     return {
-        "webhooks": [_gemini_webhook_public_resource(item) for item in webhooks[start:end]],
-        "nextPageToken": str(end) if end < len(webhooks) else "",
+        "object": "list",
+        "data": page,
+        "webhooks": page,
+        "next_page_token": next_token,
+        "nextPageToken": next_token,
     }
 
 
@@ -12013,9 +12018,14 @@ async def gemini_list_interactions(request: Request):
     ]
     interactions.sort(key=lambda item: item.get("createTime") or item.get("created") or item.get("name") or "")
     end = start + page_size
+    page = interactions[start:end]
+    next_token = str(end) if end < len(interactions) else ""
     return {
-        "interactions": interactions[start:end],
-        "nextPageToken": str(end) if end < len(interactions) else "",
+        "object": "list",
+        "data": page,
+        "interactions": page,
+        "next_page_token": next_token,
+        "nextPageToken": next_token,
     }
 
 
