@@ -17,6 +17,26 @@ Antigravity proxy. It only handles the `/interactions` result-submission turn
 for native Computer Use by converting submitted `functionResponse` parts into a
 completed interaction.
 
+## Functional Integration
+
+`gemini-native-cua` is not just a transport shim. A single run can combine:
+
+- Gemini native Computer Use tool calls, such as `open_web_browser`.
+- Hermes/cua-driver GUI actions for windows, keys, clicks, and scrolling.
+- `xdotool` text-input fallback when AT-SPI text entry hangs.
+- DOM link fallback when browser accessibility does not expose page content.
+
+The CLI records these actions into a hybrid session trace under:
+
+```text
+~/.local/share/gemini-native-cua/logs/hybrid-session-*.json
+```
+
+Each trace keeps the user prompt, browser target, current URL, native actions,
+Hermes GUI actions, and DOM fallback actions in one ordered event stream. This
+makes native Computer Use and Hermes Computer Use behave as one cooperative
+workflow rather than two isolated tools.
+
 ## Files
 
 - `bin/gemini-native-cua`: CLI bridge from Gemini native Computer Use actions to
@@ -54,6 +74,8 @@ gemini-native-cua --max-actions 6 run "Open https://example.com"
 gemini-native-cua --max-actions 6 run --planner-steps 3 \
   "Open https://example.com and open the More information link"
 ```
+
+Use `--no-hybrid-trace` if you do not want a session trace for a run.
 
 ## Notes
 

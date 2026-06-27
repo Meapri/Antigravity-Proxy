@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from datetime import datetime, timezone
 from html.parser import HTMLParser
 import json
 import os
@@ -33,6 +34,43 @@ DEFAULT_STATE_DIR = Path.home() / ".local" / "share" / "gemini-native-cua"
 
 class BridgeError(RuntimeError):
     pass
+
+
+class HybridSession:
+    def __init__(self, log_dir: Path, prompt: str) -> None:
+        self.id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        self.path = log_dir / f"hybrid-session-{self.id}.json"
+        self.data: dict[str, Any] = {
+            "id": self.id,
+            "prompt": prompt,
+            "current_url": None,
+            "browser": {},
+            "events": [],
+        }
+
+    def event(self, source: str, action: str, payload: dict[str, Any] | None = None) -> None:
+        payload = payload or {}
+        if isinstance(payload.get("url"), str):
+            self.data["current_url"] = payload["url"]
+        if isinstance(payload.get("href"), str):
+            self.data["current_url"] = payload["href"]
+        self.data["events"].append(
+            {
+                "time": datetime.now(timezone.utc).isoformat(),
+                "source": source,
+                "action": action,
+                "payload": payload,
+            }
+        )
+        self.save()
+
+    def set_browser(self, browser: dict[str, Any]) -> None:
+        self.data["browser"] = browser
+        self.save()
+
+    def save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(self.data, ensure_ascii=False, indent=2))
 
 
 def eprint(*parts: Any) -> None:
@@ -617,6 +655,88 @@ def try_dom_link_fallback(prompt: str, current_url: str | None, executor: CuaExe
     }
 
 
+def observe_hybrid_state(executor: CuaExecutor, current_url: str | None, *, include_capture: bool = False) -> dict[str, Any]:
+    browser = executor.ensure_browser()
+    observation: dict[str, Any] = {
+        "browser": browser,
+        "current_url": current_url,
+        "dom": {"available": False, "links": []},
+    }
+    if current_url:
+        links = fetch_page_links(current_url)
+        observation["dom"] = {
+            "available": bool(links),
+            "links": links[:40],
+            "link_count": len(links),
+        }
+    if include_capture:
+        observation["capture"] = executor.best_effort_capture()
+    return observation
+
+
+def execute_internal_action(
+    action: dict[str, Any],
+    executor: CuaExecutor,
+    session: HybridSession | None = None,
+) -> dict[str, Any]:
+    action_type = str(action.get("type") or action.get("action") or "").strip()
+    source = str(action.get("source") or "hybrid")
+    if not action_type:
+        raise BridgeError(f"internal action missing type: {action}")
+
+    if action_type == "browser.open":
+        result = executor.execute("open_web_browser", {})
+    elif action_type == "browser.navigate":
+        url = str(action.get("url") or "")
+        if not url:
+            raise BridgeError(f"browser.navigate missing url: {action}")
+        result = navigate_to_url(executor, url)
+    elif action_type == "browser.follow_link":
+        current_url = str(action.get("current_url") or (session.data.get("current_url") if session else "") or "")
+        text = str(action.get("text") or "")
+        if not current_url or not text:
+            raise BridgeError(f"browser.follow_link missing current_url/text: {action}")
+        links = fetch_page_links(current_url)
+        link = choose_link(links, text)
+        if not link:
+            result = {"ok": False, "reason": f"no matching link for {text!r}", "dom_links_seen": len(links)}
+        else:
+            result = navigate_to_url(executor, link["href"])
+            result["matched_link"] = link
+    elif action_type == "gui.key":
+        key = str(action.get("key") or "")
+        executor.send_key_no_capture(key)
+        result = {"key": key}
+    elif action_type == "gui.type":
+        text = str(action.get("text") or "")
+        executor.type_text_no_capture(text)
+        result = {"typed_chars": len(text)}
+    elif action_type == "gui.click":
+        result = executor.execute("click", dict(action.get("args") or action))
+    elif action_type == "gui.scroll":
+        result = executor.execute("scroll", dict(action.get("args") or action))
+    elif action_type == "observe":
+        result = observe_hybrid_state(
+            executor,
+            str(action.get("current_url") or (session.data.get("current_url") if session else "") or "") or None,
+            include_capture=bool(action.get("include_capture")),
+        )
+    else:
+        raise BridgeError(f"unsupported internal action: {action_type}")
+
+    if session:
+        session.event(source, action_type, {**action, **({"result": result} if isinstance(result, dict) else {})})
+        if action_type == "browser.open" and isinstance(result, dict):
+            session.set_browser({k: result.get(k) for k in ("pid", "window_id", "browser")})
+        if action_type == "browser.navigate" and isinstance(result, dict):
+            session.data["current_url"] = result.get("url")
+            session.save()
+        if action_type == "browser.follow_link" and isinstance(result, dict) and isinstance(result.get("url"), str):
+            session.data["current_url"] = result["url"]
+            session.save()
+    return result
+
+
 def safety_check_text(text: str) -> None:
     for pattern in SECRET_PATTERNS + DANGEROUS_TYPED_PATTERNS:
         if pattern.search(text):
@@ -747,7 +867,12 @@ def extract_tool_calls(interaction: dict[str, Any]) -> list[dict[str, Any]]:
     return [call for call in out if call["id"] and call["name"]]
 
 
-def build_call_result(call: dict[str, Any], executor: CuaExecutor, dry_run: bool) -> dict[str, Any]:
+def build_call_result(
+    call: dict[str, Any],
+    executor: CuaExecutor,
+    dry_run: bool,
+    session: HybridSession | None = None,
+) -> dict[str, Any]:
     name = call["name"]
     args = call.get("args") or {}
     if dry_run:
@@ -755,6 +880,10 @@ def build_call_result(call: dict[str, Any], executor: CuaExecutor, dry_run: bool
         return {"id": call["id"], "name": name, "response": response}
     try:
         execution = executor.execute(name, args)
+        if session:
+            session.event("native", name, {"args": args, "result": execution})
+            if name == "open_web_browser" and isinstance(execution, dict):
+                session.set_browser({k: execution.get(k) for k in ("pid", "window_id", "browser")})
         capture = execution.get("capture") if isinstance(execution, dict) else None
         screenshot_path = capture.get("screenshot_path") if isinstance(capture, dict) else None
         screenshot_mime = capture.get("screenshot_mime") if isinstance(capture, dict) else None
@@ -852,12 +981,43 @@ def run_planner_steps(
     steps: int,
     *,
     current_url: str | None = None,
+    session: HybridSession | None = None,
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     previous_actions: list[str] = []
     for step_num in range(1, max(0, steps) + 1):
         if step_num == 1:
-            dom_result = try_dom_link_fallback(prompt, current_url, executor)
+            requested_link = extract_requested_link_text(prompt)
+            dom_result = None
+            if requested_link and current_url:
+                internal_result = execute_internal_action(
+                    {
+                        "type": "browser.follow_link",
+                        "text": requested_link,
+                        "current_url": current_url,
+                        "source": "dom",
+                    },
+                    executor,
+                    session,
+                )
+                if internal_result.get("ok") is False:
+                    dom_result = {
+                        "step": 1,
+                        "decision": {"action": "done", "reason": str(internal_result.get("reason"))},
+                        "dom_links_seen": internal_result.get("dom_links_seen"),
+                    }
+                else:
+                    matched_link = internal_result.get("matched_link") if isinstance(internal_result, dict) else {}
+                    dom_result = {
+                        "step": 1,
+                        "decision": {
+                            "action": "navigate_link",
+                            "text": matched_link.get("text") if isinstance(matched_link, dict) else requested_link,
+                            "href": internal_result.get("url") if isinstance(internal_result, dict) else None,
+                            "reason": "used hybrid DOM action because browser accessibility did not expose page content",
+                        },
+                        "execution": internal_result,
+                    }
             if dom_result:
                 results.append(dom_result)
                 break
@@ -913,18 +1073,25 @@ def run_planner_steps(
     return results
 
 
-def run_navigation_followup(prompt: str, executor: CuaExecutor, *, dry_run: bool) -> dict[str, Any] | None:
+def run_navigation_followup(
+    prompt: str,
+    executor: CuaExecutor,
+    *,
+    dry_run: bool,
+    session: HybridSession | None = None,
+) -> dict[str, Any] | None:
     navigation_text = infer_navigation_text(prompt)
     if not navigation_text:
         return None
     safety_check_text(navigation_text)
     if dry_run:
         return {"ok": True, "dry_run": True, "navigation_text": navigation_text}
-    executor.send_key_no_capture("ctrl+l")
-    executor.type_text_no_capture(navigation_text)
-    executor.send_key_no_capture("return")
-    time.sleep(2.0)
-    capture = {"summary": navigation_text, "capture_skipped": "navigation path avoids flaky AT-SPI capture"}
+    execution = execute_internal_action(
+        {"type": "browser.navigate", "url": navigation_text, "source": "hermes"},
+        executor,
+        session,
+    )
+    capture = execution.get("capture") if isinstance(execution, dict) else {}
     summary = str(capture.get("summary") or "") if isinstance(capture, dict) else ""
     verification_terms = [navigation_text]
     if navigation_text.startswith("https://"):
@@ -1008,12 +1175,15 @@ def command_run(args: argparse.Namespace) -> int:
     log_dir.mkdir(parents=True, exist_ok=True)
     client = InteractionClient(config["base_url"], config["api_key"], config["model"])
     executor = CuaExecutor(log_dir, config["browser"])
+    session = HybridSession(log_dir, args.prompt) if args.hybrid_trace else None
+    if session:
+        session.event("user", "prompt", {"text": args.prompt})
     interaction = client.create(args.prompt, config["environment"])
     action_count = 0
     while True:
         status = interaction.get("status")
         if status == "completed":
-            followup = run_navigation_followup(args.prompt, executor, dry_run=args.dry_run)
+            followup = run_navigation_followup(args.prompt, executor, dry_run=args.dry_run, session=session)
             planner_prompt_text = args.prompt
             planner_current_url = None
             if followup:
@@ -1033,11 +1203,14 @@ def command_run(args: argparse.Namespace) -> int:
                     executor,
                     args.planner_steps,
                     current_url=planner_current_url,
+                    session=session,
                 )
                 for item in planner_results:
                     print(f"Planner step {item['step']}: {json_compact(item['decision'])}")
             text = interaction.get("outputText") or interaction.get("output_text") or ""
             print(text)
+            if session:
+                print(f"Hybrid session trace: {session.path}")
             return 0
         calls = extract_tool_calls(interaction)
         if not calls:
@@ -1049,7 +1222,7 @@ def command_run(args: argparse.Namespace) -> int:
             if action_count > config["max_actions"]:
                 raise BridgeError(f"stopped after max-actions={config['max_actions']}")
             eprint(f"[{action_count}] {call['name']} {json_compact(call.get('args') or {})}")
-            results.append(build_call_result(call, executor, args.dry_run))
+            results.append(build_call_result(call, executor, args.dry_run, session=session))
         if args.dry_run:
             print(json.dumps({"dry_run_results": results}, ensure_ascii=False, indent=2))
             return 0
@@ -1084,6 +1257,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("prompt")
     run.add_argument("--dry-run", action="store_true")
     run.add_argument("--planner-steps", type=int, default=0)
+    run.add_argument("--no-hybrid-trace", dest="hybrid_trace", action="store_false")
+    run.set_defaults(hybrid_trace=True)
     run.set_defaults(func=command_run)
     return parser
 
