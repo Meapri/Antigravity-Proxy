@@ -294,6 +294,11 @@ def _gemini_model_name(model: dict[str, Any]) -> str:
 
 def _gemini_resource_model_id(model_name: str) -> str:
     key = model_name.strip().strip("/")
+    key = re.sub(r"^projects/[^/]+/locations/[^/]+/", "", key)
+    if key.startswith("publishers/google/models/"):
+        key = key[len("publishers/google/models/"):]
+    elif key.startswith("google/"):
+        key = key[len("google/"):]
     if key.startswith("models/"):
         key = key[len("models/"):]
     return key.replace("%20", " ")
@@ -7652,7 +7657,8 @@ def _gemini_models_list_response(page_size: int, page_token: str | None) -> dict
 
 @app.get("/v1/models")
 @app.get("/v1/publishers/google/models")
-async def list_models(request: Request):
+@app.get("/v1/projects/{project}/locations/{location}/publishers/google/models")
+async def list_models(request: Request, project: str | None = None, location: str | None = None):
     """Return the list of supported models (Gemini stable-compatible)."""
     try:
         page_size, page_token = _gemini_list_query_params(request, default_page_size=50, max_page_size=1000)
@@ -7663,7 +7669,8 @@ async def list_models(request: Request):
 
 @app.get("/v1beta/models")
 @app.get("/v1beta/publishers/google/models")
-async def gemini_list_models(request: Request):
+@app.get("/v1beta/projects/{project}/locations/{location}/publishers/google/models")
+async def gemini_list_models(request: Request, project: str | None = None, location: str | None = None):
     """Gemini-compatible model listing."""
     pageSize, pageToken = _gemini_list_query_params(request, default_page_size=50, max_page_size=1000)
     return _gemini_models_list_response(pageSize, pageToken)
@@ -7740,9 +7747,11 @@ async def gemini_delete_model_operation(model_name: str, operation_id: str):
 
 @app.get("/v1/models/{model_name:path}")
 @app.get("/v1/publishers/google/models/{model_name:path}")
+@app.get("/v1/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}")
 @app.get("/v1beta/models/{model_name:path}")
 @app.get("/v1beta/publishers/google/models/{model_name:path}")
-async def gemini_get_model(model_name: str):
+@app.get("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}")
+async def gemini_get_model(model_name: str, project: str | None = None, location: str | None = None):
     """Gemini-compatible model retrieval."""
     try:
         model = _resolve_gemini_model(model_name)
@@ -9444,9 +9453,11 @@ async def gemini_delete_tuned_model_permission(tuned_model_id: str, permission_i
 
 @app.post("/v1/models/{model_name:path}:countTokens")
 @app.post("/v1/publishers/google/models/{model_name:path}:countTokens")
+@app.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:countTokens")
 @app.post("/v1beta/models/{model_name:path}:countTokens")
 @app.post("/v1beta/publishers/google/models/{model_name:path}:countTokens")
-async def gemini_count_tokens(model_name: str, request: Request):
+@app.post("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:countTokens")
+async def gemini_count_tokens(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Gemini-compatible approximate countTokens endpoint."""
     try:
         _resolve_gemini_model(model_name)
@@ -9487,9 +9498,11 @@ async def gemini_compute_tokens(model_name: str, request: Request):
 
 @app.post("/v1/models/{model_name:path}:embedContent")
 @app.post("/v1/publishers/google/models/{model_name:path}:embedContent")
+@app.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:embedContent")
 @app.post("/v1beta/models/{model_name:path}:embedContent")
 @app.post("/v1beta/publishers/google/models/{model_name:path}:embedContent")
-async def gemini_embed_content(model_name: str, request: Request):
+@app.post("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:embedContent")
+async def gemini_embed_content(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Gemini-compatible embedContent endpoint with deterministic local vectors."""
     try:
         _resolve_gemini_model(model_name)
@@ -9507,9 +9520,11 @@ async def gemini_embed_content(model_name: str, request: Request):
 
 @app.post("/v1/models/{model_name:path}:batchEmbedContents")
 @app.post("/v1/publishers/google/models/{model_name:path}:batchEmbedContents")
+@app.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:batchEmbedContents")
 @app.post("/v1beta/models/{model_name:path}:batchEmbedContents")
 @app.post("/v1beta/publishers/google/models/{model_name:path}:batchEmbedContents")
-async def gemini_batch_embed_contents(model_name: str, request: Request):
+@app.post("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:batchEmbedContents")
+async def gemini_batch_embed_contents(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Gemini-compatible batchEmbedContents endpoint with deterministic local vectors."""
     try:
         _resolve_gemini_model(model_name)
@@ -9704,9 +9719,11 @@ async def _gemini_predict_payload(model_name: str, body: dict[str, Any]) -> tupl
 
 @app.post("/v1/models/{model_name:path}:predict")
 @app.post("/v1/publishers/google/models/{model_name:path}:predict")
+@app.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:predict")
 @app.post("/v1beta/models/{model_name:path}:predict")
 @app.post("/v1beta/publishers/google/models/{model_name:path}:predict")
-async def gemini_predict(model_name: str, request: Request):
+@app.post("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:predict")
+async def gemini_predict(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Gemini/Vertex-compatible predict endpoint mapped to generateContent."""
     try:
         prediction, _request_body = await _gemini_predict_payload(model_name, await request.json())
@@ -9928,11 +9945,13 @@ async def gemini_generate_answer(model_name: str, request: Request):
 
 @app.post("/v1/models/{model_name:path}:generateContent")
 @app.post("/v1/publishers/google/models/{model_name:path}:generateContent")
+@app.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:generateContent")
 @app.post("/v1beta/models/{model_name:path}:generateContent")
 @app.post("/v1beta/publishers/google/models/{model_name:path}:generateContent")
+@app.post("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:generateContent")
 @app.post("/v1/dynamic/{model_name:path}:generateContent")
 @app.post("/v1beta/dynamic/{model_name:path}:generateContent")
-async def gemini_generate_content(model_name: str, request: Request):
+async def gemini_generate_content(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Gemini REST-compatible generateContent endpoint backed by Antigravity."""
     try:
         model = _resolve_gemini_model(model_name)
@@ -10928,11 +10947,13 @@ async def gemini_live_websocket(websocket: WebSocket):
 
 @app.post("/v1/models/{model_name:path}:streamGenerateContent")
 @app.post("/v1/publishers/google/models/{model_name:path}:streamGenerateContent")
+@app.post("/v1/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:streamGenerateContent")
 @app.post("/v1beta/models/{model_name:path}:streamGenerateContent")
 @app.post("/v1beta/publishers/google/models/{model_name:path}:streamGenerateContent")
+@app.post("/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model_name:path}:streamGenerateContent")
 @app.post("/v1/dynamic/{model_name:path}:streamGenerateContent")
 @app.post("/v1beta/dynamic/{model_name:path}:streamGenerateContent")
-async def gemini_stream_generate_content(model_name: str, request: Request):
+async def gemini_stream_generate_content(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Gemini REST-compatible SSE streamGenerateContent endpoint."""
     try:
         model = _resolve_gemini_model(model_name)

@@ -318,10 +318,38 @@ response = client.models.generate_content(
 )
 ```
 
+JavaScript `@google/genai` clients can use the same collection-scoped Vertex
+Express style:
+
+```js
+import {GoogleGenAI} from "@google/genai";
+
+const ai = new GoogleGenAI({
+  vertexai: true,
+  apiKey: "your-proxy-key",
+  httpOptions: {
+    baseUrl: "http://127.0.0.1:8765/v1beta",
+    apiVersion: "",
+    baseUrlResourceScope: "collection",
+  },
+});
+
+const response = await ai.models.generateContent({
+  model: "gemini-3-flash-agent",
+  contents: "Say hello.",
+});
+```
+
 For that SDK mode, the proxy accepts Vertex collection aliases such as
 `/v1beta/publishers/google/models/{model}:generateContent`,
 `:streamGenerateContent`, `:countTokens`, `:embedContent`,
-`:batchEmbedContents`, and `:predict`, plus model list/get aliases.
+`:batchEmbedContents`, and `:predict`, plus model list/get aliases. Full
+Vertex resource paths such as
+`/v1beta/projects/{project}/locations/{location}/publishers/google/models/{model}:generateContent`
+are also accepted for the same model methods. Model names may be passed as a
+plain model ID, `models/{model}`, `publishers/google/models/{model}`,
+`projects/{project}/locations/{location}/publishers/google/models/{model}`, or
+`google/{model}`.
 
 Implemented Gemini-compatible routes:
 

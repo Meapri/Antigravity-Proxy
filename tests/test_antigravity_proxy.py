@@ -287,6 +287,23 @@ def test_gemini_models_and_count_tokens():
     one = client.get("/v1beta/models/gemini-3-flash-agent")
     assert one.status_code == 200
     assert one.json()["name"] == "models/gemini-3-flash-agent"
+    for resource_name in (
+        "models/gemini-3-flash-agent",
+        "publishers/google/models/gemini-3-flash-agent",
+        "projects/proj/locations/global/publishers/google/models/gemini-3-flash-agent",
+        "google/gemini-3-flash-agent",
+    ):
+        assert proxy._gemini_resource_model_id(resource_name) == "gemini-3-flash-agent"
+        assert proxy._resolve_gemini_model(resource_name)["antigravity_model"] == "gemini-3-flash-agent"
+
+    vertex_models = client.get("/v1beta/projects/proj/locations/global/publishers/google/models?pageSize=1")
+    vertex_model = client.get(
+        "/v1beta/projects/proj/locations/global/publishers/google/models/gemini-3-flash-agent"
+    )
+    assert vertex_models.status_code == 200
+    assert len(vertex_models.json()["models"]) == 1
+    assert vertex_model.status_code == 200
+    assert vertex_model.json()["name"] == "models/gemini-3-flash-agent"
 
     image = client.get("/v1beta/models/gemini-3.1-flash-image")
     assert image.status_code == 200
@@ -301,6 +318,10 @@ def test_gemini_models_and_count_tokens():
     counted_string = client.post("/v1/models/gemini-3-flash-agent:countTokens", json={
         "contents": "hello from sdk string"
     })
+    counted_vertex = client.post(
+        "/v1beta/projects/proj/locations/global/publishers/google/models/gemini-3-flash-agent:countTokens",
+        json={"contents": "hello from vertex sdk"},
+    )
     assert counted.status_code == 200
     assert counted.json()["totalTokens"] > 0
     assert counted.json()["promptTokensDetails"][0]["modality"] == "TEXT"
@@ -309,6 +330,8 @@ def test_gemini_models_and_count_tokens():
     assert counted_string.status_code == 200
     assert counted_string.json()["totalTokens"] > 0
     assert counted_string.json()["promptTokensDetails"][0]["modality"] == "TEXT"
+    assert counted_vertex.status_code == 200
+    assert counted_vertex.json()["totalTokens"] > 0
 
     counted_media = client.post("/v1beta/models/gemini-3-flash-agent:countTokens", json={
         "contents": [{
@@ -860,7 +883,6 @@ def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
         "tools": [{"googleSearch": {}}],
         "tool_config": {"function_calling_config": {"mode": "any", "allowed_function_names": "lookup"}},
     })
-
     assert response.status_code == 200
     assert response.json()["candidates"][0]["content"]["parts"][0]["text"] == "hello"
     assert response.json()["candidates"][0]["index"] == 0
@@ -885,6 +907,13 @@ def test_gemini_generate_content_passes_through_and_normalizes(monkeypatch):
         "mode": "ANY",
         "allowedFunctionNames": ["lookup"],
     }
+
+    vertex_response = client.post(
+        "/v1beta/projects/proj/locations/global/publishers/google/models/gemini-3-flash-agent:generateContent",
+        json={"contents": "hello vertex"},
+    )
+    assert vertex_response.status_code == 200
+    assert vertex_response.json()["candidates"][0]["content"]["parts"][0]["text"] == "hello"
 
 
 def test_gemini_generate_content_normalizes_response_usage_and_content(monkeypatch):
@@ -2139,10 +2168,19 @@ def test_gemini_stream_generate_content_sse(monkeypatch):
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
     }) as response:
         body = response.read().decode()
+    with client.stream(
+        "POST",
+        "/v1beta/projects/proj/locations/global/publishers/google/models/gemini-3-flash-agent:streamGenerateContent",
+        json={"contents": "hi"},
+    ) as vertex_response:
+        vertex_body = vertex_response.read().decode()
 
     assert response.status_code == 200
     assert 'data: {"candidates":' in body
     assert "data: [DONE]" not in body
+    assert vertex_response.status_code == 200
+    assert 'data: {"candidates":' in vertex_body
+    assert "data: [DONE]" not in vertex_body
 
 
 class _FastApiTransport(httpx.BaseTransport):
@@ -2167,7 +2205,9 @@ class _FastApiTransport(httpx.BaseTransport):
         )
 
 
-def test_google_genai_sdk_vertex_collection_base_url(monkeypatch):
+def test_google_genai_sdk_vertex_collection_base_url(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR", str(tmp_path / "generated"))
+
     class FakeClient:
         def generate_raw(self, *, request, model=""):
             assert model == "gemini-3-flash-agent"
@@ -2180,6 +2220,11 @@ def test_google_genai_sdk_vertex_collection_base_url(monkeypatch):
                     "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 2, "totalTokenCount": 3},
                 }
             }
+
+        def generate_image(self, *, prompt, output_dir, aspect_ratio="", image_size=""):
+            output = output_dir / "sdk-image.png"
+            output.write_bytes(b"sdk-image")
+            return output
 
         async def generate_raw_stream_async(self, *, request, model=""):
             assert model == "gemini-3-flash-agent"
@@ -2210,12 +2255,24 @@ def test_google_genai_sdk_vertex_collection_base_url(monkeypatch):
     generated = sdk.models.generate_content(model="gemini-3-flash-agent", contents="hello")
     counted = sdk.models.count_tokens(model="gemini-3-flash-agent", contents="hello")
     streamed = list(sdk.models.generate_content_stream(model="gemini-3-flash-agent", contents="hello"))
+    embedded = app_client.post(
+        "/v1beta/publishers/google/models/gemini-3-flash-agent:embedContent",
+        json={"content": {"parts": [{"text": "embed me"}]}},
+    )
+    predicted = app_client.post(
+        "/v1beta/publishers/google/models/gemini-image-latest:predict",
+        json={"instances": [{"prompt": "draw"}]},
+    )
 
     assert models
     assert models[0].name.startswith("models/")
     assert generated.text == "sdk ok"
     assert counted.total_tokens > 0
     assert "".join(chunk.text or "" for chunk in streamed) == "sdk stream"
+    assert embedded.status_code == 200
+    assert embedded.json()["embedding"]["values"]
+    assert predicted.status_code == 200
+    assert predicted.json()["predictions"][0]["bytesBase64Encoded"]
 
 
 def test_gemini_batch_generate_content_operation(tmp_path, monkeypatch):
