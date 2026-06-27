@@ -2548,7 +2548,7 @@ async def _gemini_generate_image_payload(model_name: str, body: dict[str, Any]) 
         display_name=Path(str(output_path)).name,
     )
     operation = {
-        "name": "operations/generateImage-" + uuid.uuid4().hex,
+        "name": f"{generated_file['name']}/operations/generateImage-" + uuid.uuid4().hex,
         "metadata": {
             "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.GenerateImageMetadata",
             "model": _gemini_model_name(model),
@@ -3078,6 +3078,10 @@ def _gemini_resolve_operation_key(index: dict[str, dict[str, Any]], name: str) -
         for op_name in index:
             if op_name == f"operations/{suffix}" or op_name.endswith("/" + suffix):
                 return op_name
+    if "/" not in key:
+        for op_name in index:
+            if op_name == f"operations/{key}" or op_name.endswith(f"/operations/{key}") or op_name.endswith("/" + key):
+                return op_name
     return None
 
 
@@ -3356,6 +3360,9 @@ def _gemini_batch_requests(body: dict[str, Any]) -> list[Any] | None:
     if isinstance(requests, list):
         return requests
     input_config = body.get("inputConfig") if isinstance(body.get("inputConfig"), dict) else {}
+    file_name = input_config.get("fileName")
+    if isinstance(file_name, str) and file_name.strip():
+        return _gemini_batch_requests_from_file(file_name)
     nested = input_config.get("requests")
     if isinstance(nested, list):
         return nested
@@ -3367,6 +3374,44 @@ def _gemini_batch_requests(body: dict[str, Any]) -> list[Any] | None:
     if isinstance(inline, dict) and isinstance(inline.get("requests"), list):
         return inline["requests"]
     return None
+
+
+def _gemini_batch_requests_from_file(file_name: str) -> list[Any]:
+    meta = _gemini_get_file_meta(file_name)
+    if not meta:
+        raise HTTPException(status_code=404, detail=f"Batch input file '{file_name}' not found.")
+    path = Path(str(meta.get("path") or ""))
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"Batch input file '{file_name}' has no local media blob.")
+    text = path.read_text(encoding="utf-8")
+    stripped = text.strip()
+    if not stripped:
+        raise HTTPException(status_code=400, detail="Batch input file is empty.")
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        parsed_items: list[Any] = []
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed_items.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise HTTPException(status_code=400, detail=f"Batch input file line {line_no} is not valid JSON.") from exc
+        parsed = parsed_items
+    if isinstance(parsed, dict):
+        for key in ("requests", "inlinedRequests", "inlined_requests"):
+            if isinstance(parsed.get(key), list):
+                return parsed[key]
+        if isinstance(parsed.get("batch"), dict):
+            nested = _gemini_batch_requests(_gemini_batch_body(parsed))
+            if isinstance(nested, list):
+                return nested
+        return [parsed]
+    if isinstance(parsed, list):
+        return parsed
+    raise HTTPException(status_code=400, detail="Batch input file must contain a JSON object, JSON array, or JSONL objects.")
 
 
 def _gemini_batch_stats(request_count: int, *, successful: int | None = None, failed: int = 0, pending: int = 0) -> dict[str, str]:
@@ -4126,6 +4171,10 @@ def _gemini_generated_file_resource(meta: dict[str, Any]) -> dict[str, Any]:
             sha256_hash = base64.b64encode(bytes.fromhex(sha256_hash)).decode("ascii")
         except ValueError:
             pass
+    raw_state = str(meta.get("state") or "GENERATED").strip().upper()
+    state = "GENERATED" if raw_state == "ACTIVE" else raw_state
+    if state not in {"STATE_UNSPECIFIED", "GENERATING", "GENERATED", "FAILED"}:
+        state = "GENERATED"
     return {
         "name": meta["name"],
         "displayName": meta.get("displayName") or meta["name"].split("/", 1)[-1],
@@ -4137,7 +4186,7 @@ def _gemini_generated_file_resource(meta: dict[str, Any]) -> dict[str, Any]:
         "sha256Hash": sha256_hash,
         "uri": meta.get("uri") or meta["name"],
         "downloadUri": meta.get("downloadUri") or f"{meta.get('uri') or meta['name']}:download",
-        "state": _gemini_file_state(meta.get("state")),
+        "state": state,
         "source": _gemini_file_source(meta.get("source") or "GENERATED", registered=False),
     }
 
@@ -4169,7 +4218,7 @@ def _gemini_store_generated_file(
         "sha256Hash": hashlib.sha256(data).hexdigest(),
         "uri": f"generatedFiles/{file_id}",
         "downloadUri": f"generatedFiles/{file_id}:download",
-        "state": "ACTIVE",
+        "state": "GENERATED",
         "source": "GENERATED",
         "path": str(blob_path),
         "sourceOperation": source_operation,
@@ -4782,6 +4831,7 @@ def _gemini_cached_name(name: str) -> str:
         if key.startswith(prefix):
             key = key[len(prefix):]
             break
+    key = re.sub(r"^projects/[^/]+/locations/[^/]+/", "", key)
     if key.startswith("cachedContents/"):
         return key
     return "cachedContents/" + key
@@ -8216,7 +8266,9 @@ async def gemini_resumable_upload(session_id: str, request: Request):
 
 @app.post("/v1/cachedContents")
 @app.post("/v1beta/cachedContents")
-async def gemini_create_cached_content(request: Request):
+@app.post("/v1/projects/{project}/locations/{location}/cachedContents")
+@app.post("/v1beta/projects/{project}/locations/{location}/cachedContents")
+async def gemini_create_cached_content(request: Request, project: str | None = None, location: str | None = None):
     try:
         body = await request.json()
         if not isinstance(body, dict):
@@ -8231,7 +8283,9 @@ async def gemini_create_cached_content(request: Request):
 
 @app.get("/v1/cachedContents")
 @app.get("/v1beta/cachedContents")
-async def gemini_list_cached_contents(request: Request):
+@app.get("/v1/projects/{project}/locations/{location}/cachedContents")
+@app.get("/v1beta/projects/{project}/locations/{location}/cachedContents")
+async def gemini_list_cached_contents(request: Request, project: str | None = None, location: str | None = None):
     pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000, clamp_page_size=True)
     index = _gemini_load_cached_index()
     items = [_gemini_cached_resource(meta) for meta in index.values()]
@@ -8243,7 +8297,9 @@ async def gemini_list_cached_contents(request: Request):
 
 @app.get("/v1/cachedContents/{cache_id:path}")
 @app.get("/v1beta/cachedContents/{cache_id:path}")
-async def gemini_get_cached_content(cache_id: str):
+@app.get("/v1/projects/{project}/locations/{location}/cachedContents/{cache_id:path}")
+@app.get("/v1beta/projects/{project}/locations/{location}/cachedContents/{cache_id:path}")
+async def gemini_get_cached_content(cache_id: str, project: str | None = None, location: str | None = None):
     meta = _gemini_get_cached_meta(cache_id)
     if not meta:
         return _gemini_error_response(f"Cached content '{cache_id}' not found.", status_code=404, status="NOT_FOUND")
@@ -8252,7 +8308,9 @@ async def gemini_get_cached_content(cache_id: str):
 
 @app.patch("/v1/cachedContents/{cache_id:path}")
 @app.patch("/v1beta/cachedContents/{cache_id:path}")
-async def gemini_patch_cached_content(cache_id: str, request: Request, updateMask: str | None = None):
+@app.patch("/v1/projects/{project}/locations/{location}/cachedContents/{cache_id:path}")
+@app.patch("/v1beta/projects/{project}/locations/{location}/cachedContents/{cache_id:path}")
+async def gemini_patch_cached_content(cache_id: str, request: Request, updateMask: str | None = None, project: str | None = None, location: str | None = None):
     try:
         meta = _gemini_get_cached_meta(cache_id)
         if not meta:
@@ -8269,7 +8327,9 @@ async def gemini_patch_cached_content(cache_id: str, request: Request, updateMas
 
 @app.delete("/v1/cachedContents/{cache_id:path}")
 @app.delete("/v1beta/cachedContents/{cache_id:path}")
-async def gemini_delete_cached_content(cache_id: str):
+@app.delete("/v1/projects/{project}/locations/{location}/cachedContents/{cache_id:path}")
+@app.delete("/v1beta/projects/{project}/locations/{location}/cachedContents/{cache_id:path}")
+async def gemini_delete_cached_content(cache_id: str, project: str | None = None, location: str | None = None):
     meta = _gemini_get_cached_meta(cache_id)
     if not meta:
         return _gemini_error_response(f"Cached content '{cache_id}' not found.", status_code=404, status="NOT_FOUND")
@@ -8938,11 +8998,12 @@ async def gemini_import_file_to_file_search_store(store_id: str, request: Reques
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
         document = _gemini_import_file_to_fss(store_id, body)
+        store_name = _gemini_fss_name(store_id)
         operation = {
-            "name": "operations/importFile-" + uuid.uuid4().hex,
+            "name": f"{store_name}/operations/importFile-" + uuid.uuid4().hex,
             "metadata": {
                 "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.ImportFileMetadata",
-                "fileSearchStore": _gemini_fss_name(store_id),
+                "fileSearchStore": store_name,
             },
             "done": True,
             "response": {
@@ -9017,11 +9078,12 @@ async def gemini_upload_to_file_search_store(store_id: str, request: Request):
             custom_metadata=custom_metadata,
             chunking_config=chunking_config,
         )
+        store_name = _gemini_fss_name(store_id)
         operation = {
-            "name": "operations/uploadToFileSearchStore-" + uuid.uuid4().hex,
+            "name": f"{store_name}/upload/operations/uploadToFileSearchStore-" + uuid.uuid4().hex,
             "metadata": {
                 "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.UploadToFileSearchStoreMetadata",
-                "fileSearchStore": _gemini_fss_name(store_id),
+                "fileSearchStore": store_name,
             },
             "done": True,
             "response": {
@@ -10727,6 +10789,61 @@ def _gemini_create_vertex_tuning_job_resource(
     return _gemini_store_tuning_job(job)
 
 
+def _gemini_validate_reinforcement_reward(body: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(body.get("sampleResponse"), dict):
+        raise HTTPException(status_code=400, detail="validateReinforcementTuningReward requires sampleResponse.")
+    if not isinstance(body.get("example"), dict):
+        raise HTTPException(status_code=400, detail="validateReinforcementTuningReward requires example.")
+    single = body.get("singleRewardConfig")
+    composite = body.get("compositeRewardConfig")
+    has_single = isinstance(single, dict)
+    has_composite = isinstance(composite, dict)
+    if has_single and has_composite:
+        raise HTTPException(
+            status_code=400,
+            detail="singleRewardConfig and compositeRewardConfig are mutually exclusive.",
+        )
+    if not has_single and not has_composite:
+        raise HTTPException(
+            status_code=400,
+            detail="validateReinforcementTuningReward requires singleRewardConfig or compositeRewardConfig.",
+        )
+    reward_info: dict[str, Any] = {}
+    if has_single:
+        reward_name = str(single.get("rewardName") or single.get("reward_name") or "reward")
+        reward_info[reward_name] = {
+            "reward": 1.0,
+            "userRequestedAuxInfo": "Validated locally by antigravity-proxy.",
+        }
+    else:
+        weighted = composite.get("weightedRewardConfigs")
+        if not isinstance(weighted, list):
+            weighted = composite.get("weighted_reward_configs")
+        if not isinstance(weighted, list) or not weighted:
+            raise HTTPException(
+                status_code=400,
+                detail="compositeRewardConfig requires weightedRewardConfigs.",
+            )
+        total_weight = 0.0
+        for i, item in enumerate(weighted):
+            config = item if isinstance(item, dict) else {}
+            weight = config.get("weight", 1.0)
+            try:
+                numeric_weight = float(weight)
+            except (TypeError, ValueError):
+                numeric_weight = 1.0
+            total_weight += max(0.0, numeric_weight)
+            reward_info[f"reward_{i + 1}"] = {
+                "reward": 1.0,
+                "userRequestedAuxInfo": f"Validated locally with weight {numeric_weight}.",
+            }
+        reward_info["composite"] = {
+            "reward": 1.0,
+            "userRequestedAuxInfo": f"Validated locally with total weight {total_weight}.",
+        }
+    return {"overallReward": 1.0, "rewardInfoDetails": reward_info}
+
+
 @app.post("/v1/tuningJobs")
 @app.post("/v1beta/tuningJobs")
 @app.post("/v1/projects/{project}/locations/{location}/tuningJobs")
@@ -10831,6 +10948,26 @@ async def gemini_vertex_delete_tuning_job(
     index.pop(str(job["name"]), None)
     _gemini_save_tuning_jobs_index(index)
     return JSONResponse({"name": job["name"], "done": True})
+
+
+@app.post("/v1/projects/{project}/locations/{location}/tuningJobs:validateReinforcementTuningReward")
+@app.post("/v1beta/projects/{project}/locations/{location}/tuningJobs:validateReinforcementTuningReward")
+async def gemini_vertex_validate_reinforcement_tuning_reward(
+    request: Request,
+    project: str,
+    location: str,
+):
+    """Vertex-compatible local validation for reinforcement tuning reward config."""
+    try:
+        body = _gemini_normalize_request(await request.json())
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        return _gemini_validate_reinforcement_reward(body)
+    except HTTPException as exc:
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT")
+    except Exception as exc:
+        log.exception("Vertex tuningJobs reward validation failed")
+        return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
 
 
 @app.post("/v1/batchPredictionJobs")
@@ -11736,6 +11873,7 @@ async def gemini_delete_interaction(interaction_id: str):
 
 
 @app.websocket("/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent")
+@app.websocket("/v1alpha/live")
 @app.websocket("/v1beta/live")
 @app.websocket("/v1/live")
 async def gemini_live_websocket(websocket: WebSocket):
@@ -12579,7 +12717,7 @@ async def create_image(req: ImageGenerationRequest):
                 display_name=output_path.name,
             )
             operation = {
-                "name": "operations/generateImage-" + uuid.uuid4().hex,
+                "name": f"{generated_file['name']}/operations/generateImage-" + uuid.uuid4().hex,
                 "metadata": {
                     "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.GenerateImageMetadata",
                     "generatedFile": generated_file["name"],

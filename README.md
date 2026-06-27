@@ -663,6 +663,7 @@ Implemented Gemini-compatible routes:
 - `DELETE /v1/tuningJobs/{tuning_job}`
 - `POST /v1/projects/{project}/locations/{location}/tuningJobs`
 - `GET /v1/projects/{project}/locations/{location}/tuningJobs`
+- `POST /v1/projects/{project}/locations/{location}/tuningJobs:validateReinforcementTuningReward`
 - `GET /v1/projects/{project}/locations/{location}/tuningJobs/{tuning_job}`
 - `POST /v1/projects/{project}/locations/{location}/tuningJobs/{tuning_job}:cancel`
 - `DELETE /v1/projects/{project}/locations/{location}/tuningJobs/{tuning_job}`
@@ -673,6 +674,7 @@ Implemented Gemini-compatible routes:
 - `DELETE /v1beta/tuningJobs/{tuning_job}`
 - `POST /v1beta/projects/{project}/locations/{location}/tuningJobs`
 - `GET /v1beta/projects/{project}/locations/{location}/tuningJobs`
+- `POST /v1beta/projects/{project}/locations/{location}/tuningJobs:validateReinforcementTuningReward`
 - `GET /v1beta/projects/{project}/locations/{location}/tuningJobs/{tuning_job}`
 - `POST /v1beta/projects/{project}/locations/{location}/tuningJobs/{tuning_job}:cancel`
 - `DELETE /v1beta/projects/{project}/locations/{location}/tuningJobs/{tuning_job}`
@@ -968,15 +970,16 @@ Embeddings and batch operations:
   `requests` plus SDK wrappers such as `embedContentBatch` /
   `embed_content_batch`, including shared `config` embedding options.
 - `batchGenerateContent` runs requests synchronously through Antigravity and
-  stores immediately completed `operations/*` and `batches/*` results with
-  Gemini `BATCH_STATE_*` status values and `stats` counters. Inline batch
-  items may be plain request objects or SDK/REST wrapper items such as
-  `{"request": {...}}` / `{"generateContentRequest": {...}}`. Python SDK inline
-  source wrappers such as `batch.inputConfig.requests.requests[]` are also
-  accepted.
+  stores immediately completed operation and `batches/*` results with Gemini
+  status values and `stats` counters. Inline batch items may be plain request
+  objects or SDK/REST wrapper items such as `{"request": {...}}` /
+  `{"generateContentRequest": {...}}`. Python SDK inline source wrappers such
+  as `batch.inputConfig.requests.requests[]` are also accepted, and Developer
+  SDK file sources such as `batch.inputConfig.fileName: "files/..."` are read
+  from the local Files API as JSON or JSONL batch input.
 - `batches.create` accepts inline `requests` plus `model` and returns a
-  completed Gemini operation named `batches/*`; the local batch resource is
-  preserved under `metadata.batchResource`. It also accepts common SDK wrapper bodies
+  completed Gemini batch operation; the local `batches/*` resource is preserved
+  under `metadata.batchResource`. It also accepts common SDK wrapper bodies
   such as `{"batch": {...}}`, `{"generateContentBatch": {...}}`,
   `{"generate_content_batch": {...}}`, `{"embedContentBatch": {...}}`, and
   `{"embed_content_batch": {...}}`. Top-level `inputConfig` / `input_config`,
@@ -1040,11 +1043,13 @@ File search stores:
 - `importFile` imports files previously uploaded through the local Files API and
   preserves document display names, custom metadata, and document
   `chunkingConfig` when supplied. It accepts `fileMetadata` /
-  `file_metadata` wrappers in addition to direct fields.
+  `file_metadata` wrappers in addition to direct fields, and returns scoped
+  operation names such as `fileSearchStores/{store}/operations/{operation}`.
 - `uploadToFileSearchStore` accepts raw, multipart, or JSON direct uploads and
   stores documents locally while preserving custom metadata and
   `chunkingConfig`. JSON uploads may provide document metadata through
-  `file`, `fileMetadata`, or `file_metadata` wrappers.
+  `file`, `fileMetadata`, or `file_metadata` wrappers. Upload operation names
+  use `fileSearchStores/{store}/upload/operations/{operation}`.
 - `fileSearchStores.documents.list` accepts `pageSize` / `pageToken` and
   snake_case `page_size` / `page_token`, defaulting to 10 items with the
   Gemini REST page size capped at 20.
@@ -1111,10 +1116,13 @@ Vertex tuning jobs:
   `POST /v1beta/tuningJobs` and
   `POST /v1beta/projects/{project}/locations/{location}/tuningJobs`.
 - `google-genai` Vertex/Enterprise `client.tunings.tune`, `get`, `list`,
-  `cancel`, and direct REST delete are accepted. Create requests preserve
-  `baseModel`, `preTunedModel`, tuning specs, labels, description,
-  `tunedModelDisplayName`, output URI, encryption, evaluation, and service
-  account metadata, then return an immediately completed local `TuningJob`.
+  `cancel`, `validate_reward`, and direct REST delete are accepted. Create
+  requests preserve `baseModel`, `preTunedModel`, tuning specs, labels,
+  description, `tunedModelDisplayName`, output URI, encryption, evaluation,
+  and service account metadata, then return an immediately completed local
+  `TuningJob`. Reinforcement reward validation checks the request shape and
+  returns deterministic local `overallReward` / `rewardInfoDetails` values for
+  SDK compatibility.
 - This is a compatibility shim, not a managed training service: it does not run
   real Gemini/Vertex tuning or produce a newly trained upstream model. Use
   `tunedModels` aliases when you need a locally named model that forwards to an
@@ -1134,9 +1142,11 @@ Generated files:
 - Generated files are stored locally under `data/gemini_generated_files`;
   override with `ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR`. Generated file
   resources expose Gemini File-like metadata including `downloadUri`,
-  base64-encoded `sha256Hash`, `state: ACTIVE`, and `source: GENERATED`.
+  base64-encoded `sha256Hash`, `state: GENERATED`, and `source: GENERATED`.
   Generated file get, download, list, scoped operation, wait, cancel, and
   delete routes are tested against files produced by image generation calls.
+  Generated-file operations are stored under scoped names such as
+  `generatedFiles/{generated_file}/operations/{operation}`.
 
 Video generation:
 
@@ -1160,7 +1170,8 @@ Live API:
   `UNIMPLEMENTED` because the current Antigravity backend is request/response
   oriented and does not expose native bidirectional media streaming.
 - Live protocol errors use the same Gemini `error` payload and `google.rpc`
-  details as the REST and SSE compatibility routes.
+  details as the REST and SSE compatibility routes. WebSocket aliases are
+  available at `/v1/live`, `/v1beta/live`, and `/v1alpha/live`.
 
 Notes:
 
@@ -1205,7 +1216,10 @@ Notes:
   default; override with `ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR`.
   `cachedContents` is available under both `/v1` and `/v1beta`;
   `cachedContents.list` supports Gemini `pageSize` / `pageToken` pagination and
-  coerces page sizes above 1000 down to 1000.
+  coerces page sizes above 1000 down to 1000. Vertex-style project-scoped cache
+  paths such as
+  `/v1beta/projects/{project}/locations/{location}/cachedContents/{cache}` are
+  accepted for `google-genai` Vertex cache lifecycle compatibility.
 - Corpora are stored locally under `data/gemini_corpora` by default; override
   with `ANTIGRAVITY_GEMINI_CORPORA_DIR`.
 - Batch operations are stored locally under `data/gemini_operations` by default;

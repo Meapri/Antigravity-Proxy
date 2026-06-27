@@ -2418,6 +2418,80 @@ def test_google_genai_sdk_developer_files_upload_and_models_filter(tmp_path, mon
     assert downloaded_by_download_uri == b"sdk file upload"
 
 
+def test_google_genai_sdk_vertex_caches_lifecycle(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_CACHED_CONTENTS_DIR", str(tmp_path / "cached"))
+    app_client = TestClient(proxy.app)
+    sdk_http = httpx.Client(transport=_FastApiTransport(app_client))
+    sdk = genai.Client(
+        vertexai=True,
+        http_options=types.HttpOptions(
+            base_url="http://testserver/v1beta",
+            api_version=None,
+            base_url_resource_scope=types.ResourceScope.COLLECTION,
+            httpx_client=sdk_http,
+        ),
+    )
+
+    cache = sdk.caches.create(
+        model="gemini-3-flash-agent",
+        config={"contents": "cached sdk context", "ttl": "60s"},
+    )
+    fetched = sdk.caches.get(name=cache.name)
+    listed = list(sdk.caches.list(config={"page_size": 10}))
+    updated = sdk.caches.update(name=cache.name, config={"ttl": "120s"})
+    deleted = sdk.caches.delete(name=cache.name)
+
+    assert cache.name.startswith("cachedContents/")
+    assert fetched.name == cache.name
+    assert {item.name for item in listed} == {cache.name}
+    assert updated.expire_time
+    assert deleted.sdk_http_response.headers["content-type"].startswith("application/json")
+    assert app_client.get(f"/v1beta/projects/None/locations/None/{cache.name}").status_code == 404
+
+
+def test_google_genai_sdk_developer_batch_create_from_uploaded_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "files"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            return {
+                "response": {
+                    "candidates": [{
+                        "content": {"role": "model", "parts": [{"text": request["contents"][0]["parts"][0]["text"]}]},
+                        "finishReason": "STOP",
+                    }],
+                    "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+                }
+            }
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    app_client = TestClient(proxy.app)
+    sdk_http = httpx.Client(transport=_FastApiTransport(app_client))
+    sdk = genai.Client(
+        api_key="test-key",
+        http_options=types.HttpOptions(
+            base_url="http://testserver/v1beta",
+            api_version="",
+            httpx_client=sdk_http,
+        ),
+    )
+    upload_source = io.BytesIO(
+        b'{"request":{"contents":[{"role":"user","parts":[{"text":"file batch ok"}]}]}}\n'
+    )
+
+    uploaded = sdk.files.upload(
+        file=upload_source,
+        config={"mime_type": "application/jsonl", "display_name": "batch.jsonl"},
+    )
+    job = sdk.batches.create(model="gemini-3-flash-agent", src=uploaded.name)
+
+    assert job.name.startswith("operations/batchGenerateContent-")
+    assert job.state == types.JobState.JOB_STATE_SUCCEEDED
+    assert job.model == "models/gemini-3-flash-agent"
+
+
 def test_google_genai_sdk_vertex_batch_prediction_jobs(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
     app_client = TestClient(proxy.app)
@@ -2491,6 +2565,37 @@ def test_google_genai_sdk_vertex_tuning_jobs(tmp_path, monkeypatch):
     assert fetched.name == job.name
     assert {item.name for item in listed} == {job.name}
     assert cancelled.sdk_http_response.headers["content-type"].startswith("application/json")
+
+
+def test_google_genai_sdk_vertex_validate_reward():
+    app_client = TestClient(proxy.app)
+    sdk_http = httpx.Client(transport=_FastApiTransport(app_client))
+    sdk = genai.Client(
+        vertexai=True,
+        http_options=types.HttpOptions(
+            base_url="http://testserver/v1beta",
+            api_version=None,
+            base_url_resource_scope=types.ResourceScope.COLLECTION,
+            httpx_client=sdk_http,
+        ),
+    )
+
+    response = sdk.tunings.validate_reward(
+        parent="projects/demo/locations/us-central1",
+        sample_response={"role": "model", "parts": [{"text": "answer"}]},
+        example={
+            "contents": [{"role": "user", "parts": [{"text": "question"}]}],
+            "references": {"target": "answer"},
+        },
+        single_reward_config={
+            "reward_name": "local_reward",
+            "string_match_reward_scorer": {},
+        },
+    )
+
+    assert response.overall_reward == 1.0
+    assert response.reward_info_details["local_reward"].reward == 1.0
+    assert "antigravity-proxy" in response.reward_info_details["local_reward"].user_requested_aux_info
 
 
 def test_vertex_batch_prediction_jobs_project_scoped_rest(tmp_path, monkeypatch):
@@ -2595,6 +2700,39 @@ def test_vertex_tuning_jobs_project_scoped_rest(tmp_path, monkeypatch):
     assert deleted.status_code == 200
     assert deleted.json()["done"] is True
     assert missing.status_code == 404
+
+
+def test_vertex_validate_reward_rest_errors():
+    client = TestClient(proxy.app)
+
+    ok = client.post(
+        "/v1beta/projects/demo/locations/us-central1/tuningJobs:validateReinforcementTuningReward",
+        json={
+            "sampleResponse": {"role": "model", "parts": [{"text": "answer"}]},
+            "example": {
+                "contents": [{"role": "user", "parts": [{"text": "question"}]}],
+                "references": {"target": "answer"},
+            },
+            "compositeRewardConfig": {
+                "weightedRewardConfigs": [
+                    {"rewardConfig": {"rewardName": "one", "stringMatchRewardScorer": {}}, "weight": 0.75}
+                ]
+            },
+        },
+    )
+    missing_config = client.post(
+        "/v1beta/projects/demo/locations/us-central1/tuningJobs:validateReinforcementTuningReward",
+        json={
+            "sampleResponse": {"role": "model", "parts": [{"text": "answer"}]},
+            "example": {"contents": [{"role": "user", "parts": [{"text": "question"}]}]},
+        },
+    )
+
+    assert ok.status_code == 200
+    assert ok.json()["overallReward"] == 1.0
+    assert ok.json()["rewardInfoDetails"]["composite"]["reward"] == 1.0
+    assert missing_config.status_code == 400
+    assert missing_config.json()["error"]["status"] == "INVALID_ARGUMENT"
 
 
 def test_gemini_batch_generate_content_operation(tmp_path, monkeypatch):
@@ -3660,6 +3798,14 @@ def test_gemini_live_websocket_accepts_query_api_key(monkeypatch):
         response = ws.receive_json()
 
     assert response["serverContent"]["modelTurn"]["parts"][0]["text"] == "auth live"
+
+
+def test_gemini_live_websocket_v1alpha_alias(monkeypatch):
+    client = TestClient(proxy.app)
+
+    with client.websocket_connect("/v1alpha/live") as ws:
+        ws.send_json({"setup": {"model": "models/gemini-3-flash-agent"}})
+        assert ws.receive_json() == {"setupComplete": {}}
 
 
 def test_gemini_live_websocket_rejects_realtime_media(monkeypatch):
@@ -4765,12 +4911,14 @@ def test_gemini_file_search_store_lifecycle(tmp_path, monkeypatch):
     operation = client.get(f"/v1/{imported.json()['name']}")
     assert operation.status_code == 200
     assert operation.json()["done"] is True
+    assert imported.json()["name"].startswith(f"{store_name}/operations/")
+    assert uploaded_doc.json()["name"].startswith(f"{store_name}/upload/operations/")
 
-    uploaded_op_id = uploaded_doc.json()["name"].split("/", 1)[1]
-    nested_operation = client.get(f"/v1/fileSearchStores/{store_id}/{imported.json()['name']}")
+    uploaded_op_id = uploaded_doc.json()["name"].rsplit("/", 1)[-1]
+    nested_operation = client.get(f"/v1/{imported.json()['name']}")
     nested_operations = client.get(f"/v1/fileSearchStores/{store_id}/operations")
-    waited_operation = client.post(f"/v1/fileSearchStores/{store_id}/{imported.json()['name']}:wait")
-    cancelled_operation = client.post(f"/v1/fileSearchStores/{store_id}/{imported.json()['name']}:cancel")
+    waited_operation = client.post(f"/v1/{imported.json()['name']}:wait")
+    cancelled_operation = client.post(f"/v1/{imported.json()['name']}:cancel")
     upload_operation = client.get(f"/v1/fileSearchStores/{store_id}/upload/operations/{uploaded_op_id}")
     waited_upload_operation = client.post(f"/v1/fileSearchStores/{store_id}/upload/operations/{uploaded_op_id}:wait")
     cancelled_upload_operation = client.post(f"/v1/fileSearchStores/{store_id}/upload/operations/{uploaded_op_id}:cancel")
@@ -5305,16 +5453,18 @@ def test_gemini_image_model_generate_content_predict_and_generate_images(tmp_pat
     assert fetched_file.status_code == 200
     assert fetched_file.json()["name"] == generated_file_name
     assert fetched_file.json()["downloadUri"].endswith(":download")
+    assert fetched_file.json()["state"] == "GENERATED"
     assert downloaded_file.status_code == 200
     assert downloaded_file.content == b"gemini-image"
     assert downloaded_file.headers["content-type"].startswith("image/png")
     assert listed_operations.status_code == 200
     operations = listed_operations.json()["operations"]
     operation = next(item for item in operations if item["metadata"]["generatedFile"] == generated_file_name)
-    operation_id = operation["name"].split("/", 1)[1]
+    assert operation["name"].startswith(f"{generated_file_name}/operations/")
+    operation_id = operation["name"].rsplit("/", 1)[-1]
 
     fetched_operation = client.get(f"/v1beta/generatedFiles/operations/{operation_id}")
-    fetched_scoped_operation = client.get(f"/v1beta/{generated_file_name}/operations/{operation_id}")
+    fetched_scoped_operation = client.get(f"/v1beta/{operation['name']}")
     waited_operation = client.post(f"/v1beta/generatedFiles/operations/{operation_id}:wait")
     cancelled_operation = client.post(f"/v1beta/generatedFiles/operations/{operation_id}:cancel")
     deleted_operation = client.delete(f"/v1beta/generatedFiles/operations/{operation_id}")
