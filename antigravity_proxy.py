@@ -390,6 +390,29 @@ def _resolve_gemini_model(model_name: str) -> dict[str, Any]:
     return model
 
 
+_GEMINI_EMBEDDING_MODEL_IDS = {
+    "text-embedding-004",
+    "embedding-001",
+    "gemini-embedding-001",
+}
+
+
+def _resolve_gemini_embedding_model(model_name: str) -> dict[str, Any]:
+    decoded = _gemini_resource_model_id(model_name)
+    model = _MODEL_MAP.get(decoded) or _MODEL_MAP.get(decoded.lower())
+    if model:
+        return model
+    if decoded.lower() in _GEMINI_EMBEDDING_MODEL_IDS:
+        return {
+            "id": decoded,
+            "object": "model",
+            "created": 1737500000,
+            "owned_by": "google",
+            "antigravity_model": decoded,
+        }
+    raise HTTPException(status_code=404, detail=f"Gemini model '{model_name}' not found.")
+
+
 _GEMINI_KEY_ALIASES = {
     "system_instruction": "systemInstruction",
     "generation_config": "generationConfig",
@@ -4856,6 +4879,48 @@ async def _gemini_start_resumable_upload(request: Request, upload_version: str |
     )
 
 
+async def _gemini_start_resumable_fss_upload(request: Request, store_id: str, upload_version: str | None = None) -> JSONResponse:
+    body = await request.body()
+    metadata: dict[str, Any] = {}
+    if body:
+        try:
+            decoded = json.loads(body.decode("utf-8"))
+            metadata = decoded if isinstance(decoded, dict) else {}
+        except Exception:
+            metadata = {}
+    file_meta = _gemini_fss_document_body(metadata) if isinstance(metadata, dict) else {}
+    session_id = "upload_" + uuid.uuid4().hex
+    sessions = _gemini_load_upload_sessions()
+    sessions[session_id] = {
+        "kind": "fileSearchStore",
+        "storeName": _gemini_fss_name(store_id),
+        "displayName": file_meta.get("displayName") or request.query_params.get("displayName"),
+        "mimeType": (
+            request.headers.get("x-goog-upload-header-content-type")
+            or file_meta.get("mimeType")
+            or "application/octet-stream"
+        ),
+        "customMetadata": file_meta.get("customMetadata") or file_meta.get("metadata"),
+        "chunkingConfig": file_meta.get("chunkingConfig"),
+        "created": int(time.time()),
+        "offset": 0,
+        "data": "",
+    }
+    _gemini_save_upload_sessions(sessions)
+    if upload_version is None:
+        raw_path = request.scope.get("raw_path")
+        upload_path = (raw_path.decode("ascii", "ignore") if isinstance(raw_path, bytes) else request.url.path).rstrip("/")
+        upload_version = "v1" if "/upload/v1/fileSearchStores" in upload_path else "v1beta"
+    upload_url = str(request.base_url).rstrip("/") + f"/upload/{upload_version}/fileSearchStores/{_gemini_fss_name(store_id).split('/', 1)[1]}:uploadToFileSearchStore/{session_id}"
+    return JSONResponse(
+        {},
+        headers={
+            "X-Goog-Upload-URL": upload_url,
+            "X-Goog-Upload-Status": "active",
+        },
+    )
+
+
 async def _gemini_finish_resumable_upload(session_id: str, request: Request) -> dict[str, Any]:
     sessions = _gemini_load_upload_sessions()
     session = sessions.get(session_id)
@@ -5254,29 +5319,23 @@ def _gemini_permission_update_fields(update_mask: str | None, body: dict[str, An
     aliases = {
         "role": "role",
         "permission.role": "role",
-        "grantee_type": "granteeType",
-        "granteeType": "granteeType",
-        "permission.grantee_type": "granteeType",
-        "permission.granteeType": "granteeType",
-        "email_address": "emailAddress",
-        "emailAddress": "emailAddress",
-        "permission.email_address": "emailAddress",
-        "permission.emailAddress": "emailAddress",
     }
     if not update_mask:
-        return {key for key in ("role", "granteeType", "emailAddress") if key in body}
+        raise HTTPException(status_code=400, detail="permissions.patch requires updateMask=role.")
     fields: set[str] = set()
     for raw in update_mask.split(","):
         key = raw.strip()
         if not key:
             continue
         fields.add(aliases.get(key, aliases.get(key.rsplit(".", 1)[-1], key)))
-    unsupported = fields - {"role", "granteeType", "emailAddress"}
+    unsupported = fields - {"role"}
     if unsupported:
         raise HTTPException(
             status_code=400,
-            detail="permissions.patch supports updateMask fields: role, granteeType, emailAddress.",
+            detail="permissions.patch supports updateMask fields: role.",
         )
+    if "role" in fields and "role" not in body:
+        raise HTTPException(status_code=400, detail="role is required by updateMask.")
     return fields
 
 
@@ -5576,6 +5635,62 @@ def _gemini_import_file_to_fss(store_name: str, body: dict[str, Any]) -> dict[st
         chunking_config=body.get("chunkingConfig") if isinstance(body.get("chunkingConfig"), dict) else None,
     )
     return document
+
+
+def _gemini_fss_upload_operation(store_id: str, document: dict[str, Any]) -> dict[str, Any]:
+    store_name = _gemini_fss_name(store_id)
+    operation = {
+        "name": f"{store_name}/upload/operations/uploadToFileSearchStore-" + uuid.uuid4().hex,
+        "metadata": {
+            "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.UploadToFileSearchStoreMetadata",
+            "fileSearchStore": store_name,
+        },
+        "done": True,
+        "response": {
+            "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.UploadToFileSearchStoreResponse",
+            "parent": store_name,
+            "documentName": document.get("name"),
+            "document": document,
+        },
+    }
+    return _gemini_store_operation(operation)
+
+
+async def _gemini_fss_resumable_upload_command(session_id: str, request: Request) -> Response | dict[str, Any]:
+    sessions = _gemini_load_upload_sessions()
+    session = sessions.get(session_id)
+    if not session or session.get("kind") != "fileSearchStore":
+        raise HTTPException(status_code=404, detail=f"Upload session '{session_id}' not found.")
+    data = await request.body()
+    existing = base64.b64decode(str(session.get("data") or ""), validate=False) if session.get("data") else b""
+    data = existing + data
+    command = request.headers.get("x-goog-upload-command", "").lower()
+    if "finalize" not in {part.strip() for part in command.split(",") if part.strip()}:
+        session["data"] = base64.b64encode(data).decode("ascii")
+        session["offset"] = len(data)
+        sessions[session_id] = session
+        _gemini_save_upload_sessions(sessions)
+        return Response(
+            status_code=200,
+            headers={
+                "X-Goog-Upload-Status": "active",
+                "X-Goog-Upload-Size-Received": str(len(data)),
+            },
+        )
+    document = _gemini_store_document(
+        str(session.get("storeName") or ""),
+        display_name=session.get("displayName"),
+        mime_type=session.get("mimeType") or request.headers.get("content-type"),
+        content=data,
+        custom_metadata=session.get("customMetadata"),
+        chunking_config=session.get("chunkingConfig") if isinstance(session.get("chunkingConfig"), dict) else None,
+    )
+    sessions.pop(session_id, None)
+    _gemini_save_upload_sessions(sessions)
+    return JSONResponse(
+        _gemini_fss_upload_operation(str(session.get("storeName") or ""), document),
+        headers={"X-Goog-Upload-Status": "final"},
+    )
 
 
 def _gemini_extract_search_query(body: dict[str, Any]) -> str:
@@ -8090,7 +8205,7 @@ def _gemini_models_list_response(page_size: int, page_token: str | None, filter_
 async def list_models(request: Request, project: str | None = None, location: str | None = None):
     """Return the list of supported models (Gemini stable-compatible)."""
     try:
-        page_size, page_token = _gemini_list_query_params(request, default_page_size=50, max_page_size=1000)
+        page_size, page_token = _gemini_list_query_params(request, default_page_size=50, max_page_size=1000, clamp_page_size=True)
     except HTTPException as exc:
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status="INVALID_ARGUMENT", field="pageSize")
     return _gemini_models_list_response(page_size, page_token, request.query_params.get("filter"))
@@ -8101,7 +8216,7 @@ async def list_models(request: Request, project: str | None = None, location: st
 @app.get("/v1beta/projects/{project}/locations/{location}/publishers/google/models")
 async def gemini_list_models(request: Request, project: str | None = None, location: str | None = None):
     """Gemini-compatible model listing."""
-    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=50, max_page_size=1000)
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=50, max_page_size=1000, clamp_page_size=True)
     return _gemini_models_list_response(pageSize, pageToken, request.query_params.get("filter"))
 
 
@@ -8301,7 +8416,7 @@ async def gemini_upload_file(request: Request):
 @app.get("/v1/generatedFiles")
 @app.get("/v1beta/generatedFiles")
 async def gemini_list_generated_files(request: Request):
-    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=10, max_page_size=50, clamp_page_size=True)
     files = [_gemini_generated_file_resource(meta) for meta in _gemini_load_generated_files_index().values()]
     files.sort(key=lambda item: item.get("createTime") or "")
     start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
@@ -8536,7 +8651,7 @@ async def gemini_create_corpus(request: Request):
 @app.get("/v1/corpora")
 @app.get("/v1beta/corpora")
 async def gemini_list_corpora(request: Request):
-    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=100, max_page_size=1000)
+    pageSize, pageToken = _gemini_list_query_params(request, default_page_size=10, max_page_size=20, clamp_page_size=True)
     corpora = [_gemini_corpus_resource(meta) for meta in _gemini_load_corpora_index().values()]
     corpora.sort(key=lambda item: item.get("createTime") or "")
     start = int(pageToken or 0) if pageToken and pageToken.isdigit() else 0
@@ -8640,9 +8755,12 @@ async def gemini_create_corpus_document(corpus_id: str, request: Request):
         doc_id = doc_id.rsplit("/documents/", 1)[-1]
     if not doc_id:
         doc_id = "doc_" + uuid.uuid4().hex
+    doc_name = f"{corpus_name}/documents/{doc_id}"
+    if doc_name in (meta.get("documents") or {}):
+        return _gemini_error_response(f"Document '{doc_id}' already exists.", status_code=409, status="ALREADY_EXISTS")
     now = _gemini_now_iso()
     doc = {
-        "name": f"{corpus_name}/documents/{doc_id}",
+        "name": doc_name,
         "displayName": body.get("displayName") or body.get("display_name") or doc_id,
         "customMetadata": body.get("customMetadata") or body.get("custom_metadata") or [],
         "createTime": now,
@@ -8741,6 +8859,7 @@ def _gemini_upsert_corpus_chunk(
     body: dict[str, Any],
     *,
     update_mask: str | None = None,
+    allow_existing: bool = True,
 ) -> dict[str, Any]:
     body = _gemini_normalize_request(body)
     chunk_id = str(body.get("chunkId") or body.get("chunk_id") or body.get("name") or "").strip().strip("/")
@@ -8757,6 +8876,8 @@ def _gemini_upsert_corpus_chunk(
     now = _gemini_now_iso()
     chunk_name = f"{doc_name}/chunks/{chunk_id}"
     existing = dict((doc.get("chunks") or {}).get(chunk_name) or {})
+    if not update_mask and existing and not allow_existing:
+        raise HTTPException(status_code=409, detail=f"Chunk '{chunk_id}' already exists.")
     if update_mask:
         if not existing:
             raise HTTPException(status_code=404, detail=f"Chunk '{chunk_id}' not found.")
@@ -8805,12 +8926,17 @@ async def gemini_batch_create_corpus_chunks(corpus_id: str, document_id: str, re
         for item in raw_requests if isinstance(raw_requests, list) else []:
             chunk_body = _gemini_chunk_body(item)
             if isinstance(chunk_body, dict):
-                chunks.append(_gemini_chunk_resource(_gemini_upsert_corpus_chunk(doc, doc_name, chunk_body)))
+                chunks.append(_gemini_chunk_resource(_gemini_upsert_corpus_chunk(
+                    doc,
+                    doc_name,
+                    chunk_body,
+                    allow_existing=False,
+                )))
         index[corpus_name]["documents"][doc_name] = doc
         _gemini_save_corpora_index(index)
         return {"chunks": chunks}
     except HTTPException as exc:
-        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        status = "NOT_FOUND" if exc.status_code == 404 else "ALREADY_EXISTS" if exc.status_code == 409 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
 
 
@@ -8865,12 +8991,12 @@ async def gemini_create_corpus_chunk(corpus_id: str, document_id: str, request: 
     try:
         index, corpus_name, doc, doc_name = _gemini_get_corpus_doc_for_chunks(corpus_id, document_id)
         body = _gemini_chunk_body(await request.json(), request)
-        chunk = _gemini_upsert_corpus_chunk(doc, doc_name, body)
+        chunk = _gemini_upsert_corpus_chunk(doc, doc_name, body, allow_existing=False)
         index[corpus_name]["documents"][doc_name] = doc
         _gemini_save_corpora_index(index)
         return _gemini_chunk_resource(chunk)
     except HTTPException as exc:
-        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        status = "NOT_FOUND" if exc.status_code == 404 else "ALREADY_EXISTS" if exc.status_code == 409 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
 
 
@@ -9202,10 +9328,17 @@ async def gemini_import_file_to_file_search_store(store_id: str, request: Reques
 
 @app.post("/upload/v1/fileSearchStores/{store_id}:uploadToFileSearchStore")
 @app.post("/upload/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore")
+@app.post("/v1/upload/v1/fileSearchStores/{store_id}:uploadToFileSearchStore")
+@app.post("/v1beta/upload/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore")
 @app.post("/v1/fileSearchStores/{store_id}:uploadToFileSearchStore")
 @app.post("/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore")
 async def gemini_upload_to_file_search_store(store_id: str, request: Request):
     try:
+        if _is_gemini_resumable_upload_start(request):
+            raw_path = request.scope.get("raw_path")
+            upload_path = (raw_path.decode("ascii", "ignore") if isinstance(raw_path, bytes) else request.url.path).rstrip("/")
+            upload_version = "v1" if "/upload/v1/fileSearchStores" in upload_path else "v1beta"
+            return await _gemini_start_resumable_fss_upload(request, store_id, upload_version=upload_version)
         content_type = request.headers.get("content-type", "")
         body = await request.body()
         metadata: dict[str, Any] = {}
@@ -9258,25 +9391,31 @@ async def gemini_upload_to_file_search_store(store_id: str, request: Request):
             custom_metadata=custom_metadata,
             chunking_config=chunking_config,
         )
-        store_name = _gemini_fss_name(store_id)
-        operation = {
-            "name": f"{store_name}/upload/operations/uploadToFileSearchStore-" + uuid.uuid4().hex,
-            "metadata": {
-                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.UploadToFileSearchStoreMetadata",
-                "fileSearchStore": store_name,
-            },
-            "done": True,
-            "response": {
-                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.UploadToFileSearchStoreResponse",
-                "document": document,
-            },
-        }
-        return _gemini_store_operation(operation)
+        return _gemini_fss_upload_operation(store_id, document)
     except HTTPException as exc:
         status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
         return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
     except Exception as exc:
         log.exception("Gemini uploadToFileSearchStore failed")
+        return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
+
+
+@app.post("/upload/v1/fileSearchStores/{store_id}:uploadToFileSearchStore/{session_id}")
+@app.post("/upload/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore/{session_id}")
+@app.put("/upload/v1/fileSearchStores/{store_id}:uploadToFileSearchStore/{session_id}")
+@app.put("/upload/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore/{session_id}")
+@app.post("/v1/upload/v1/fileSearchStores/{store_id}:uploadToFileSearchStore/{session_id}")
+@app.post("/v1beta/upload/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore/{session_id}")
+@app.put("/v1/upload/v1/fileSearchStores/{store_id}:uploadToFileSearchStore/{session_id}")
+@app.put("/v1beta/upload/v1beta/fileSearchStores/{store_id}:uploadToFileSearchStore/{session_id}")
+async def gemini_resumable_upload_to_file_search_store(store_id: str, session_id: str, request: Request):
+    try:
+        return await _gemini_fss_resumable_upload_command(session_id, request)
+    except HTTPException as exc:
+        status = "NOT_FOUND" if exc.status_code == 404 else "INVALID_ARGUMENT"
+        return _gemini_error_response(exc.detail, status_code=exc.status_code, status=status)
+    except Exception as exc:
+        log.exception("Gemini fileSearchStores resumable upload failed")
         return _gemini_error_response(str(exc), status_code=400, status="INVALID_ARGUMENT")
 
 
@@ -9600,6 +9739,17 @@ async def gemini_delete_tuned_model(tuned_model_id: str):
         return _gemini_error_response(f"Tuned model '{tuned_model_id}' not found.", status_code=404, status="NOT_FOUND")
     index.pop(name, None)
     _gemini_save_tuned_index(index)
+    return JSONResponse({})
+
+
+@app.post("/v1/tunedModels/tunedModels/{tuned_model_id}:cancel")
+@app.post("/v1beta/tunedModels/tunedModels/{tuned_model_id}:cancel")
+@app.post("/v1/tunedModels/{tuned_model_id}:cancel")
+@app.post("/v1beta/tunedModels/{tuned_model_id}:cancel")
+async def gemini_cancel_tuned_model(tuned_model_id: str):
+    meta = _gemini_get_tuned_meta(tuned_model_id)
+    if not meta:
+        return _gemini_error_response(f"Tuned model '{tuned_model_id}' not found.", status_code=404, status="NOT_FOUND")
     return JSONResponse({})
 
 
@@ -10135,7 +10285,7 @@ async def gemini_batch_embed_text(model_name: str, request: Request, project: st
 async def gemini_async_batch_embed_content(model_name: str, request: Request, project: str | None = None, location: str | None = None):
     """Gemini-compatible asyncBatchEmbedContent as an immediately completed operation."""
     try:
-        model = _resolve_gemini_model(model_name)
+        model = _resolve_gemini_embedding_model(model_name)
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
@@ -10151,6 +10301,9 @@ async def gemini_async_batch_embed_content(model_name: str, request: Request, pr
 
 def _gemini_create_completed_embed_batch(model: dict[str, Any], body: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     body = _gemini_batch_body(_gemini_normalize_request(body))
+    requests = _gemini_batch_requests(body)
+    if requests is not None:
+        body["requests"] = requests
     embedding_response = _gemini_batch_embedding_from_request(body)
     now = _gemini_now_iso()
     batch_name = "batches/batch_" + uuid.uuid4().hex

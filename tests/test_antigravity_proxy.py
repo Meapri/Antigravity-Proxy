@@ -301,10 +301,8 @@ def test_gemini_models_and_count_tokens():
     assert paged_snake.json()["nextPageToken"] == "1"
     assert stable_snake.status_code == 200
     assert len(stable_snake.json()["models"]) == 1
-    assert too_many.status_code == 400
-    assert too_many.json()["error"]["status"] == "INVALID_ARGUMENT"
-    assert too_many.json()["error"]["details"][0]["@type"] == "type.googleapis.com/google.rpc.BadRequest"
-    assert too_many.json()["error"]["details"][0]["fieldViolations"][0]["field"] == "pageSize"
+    assert too_many.status_code == 200
+    assert len(too_many.json()["models"]) <= 1000
 
     one = client.get("/v1beta/models/gemini-3-flash-agent")
     assert one.status_code == 200
@@ -2550,6 +2548,36 @@ def test_google_genai_sdk_developer_batch_create_from_uploaded_file(tmp_path, mo
     assert job.model == "models/gemini-3-flash-agent"
 
 
+def test_google_genai_sdk_developer_embeddings_batch_with_standard_model(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "files"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    app_client = TestClient(proxy.app)
+    sdk_http = httpx.Client(transport=_FastApiTransport(app_client))
+    sdk = genai.Client(
+        api_key="test-key",
+        http_options=types.HttpOptions(
+            base_url="http://testserver/v1beta",
+            api_version="",
+            httpx_client=sdk_http,
+        ),
+    )
+    upload_source = io.BytesIO(b'{"content":{"parts":[{"text":"embed me"}]}}\n')
+
+    uploaded = sdk.files.upload(
+        file=upload_source,
+        config={"mime_type": "application/jsonl", "display_name": "embed.jsonl"},
+    )
+    job = sdk.batches.create_embeddings(
+        model="text-embedding-004",
+        src={"file_name": uploaded.name},
+    )
+
+    assert job.name.startswith("operations/asyncBatchEmbedContent-")
+    assert job.state == types.JobState.JOB_STATE_SUCCEEDED
+    assert job.model == "models/text-embedding-004"
+
+
 def test_google_genai_sdk_vertex_batch_prediction_jobs(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_BATCHES_DIR", str(tmp_path / "batches"))
     app_client = TestClient(proxy.app)
@@ -2585,6 +2613,39 @@ def test_google_genai_sdk_vertex_batch_prediction_jobs(tmp_path, monkeypatch):
     assert deleted.name == job.name
     assert deleted.done is True
     assert app_client.get(f"/v1beta/batchPredictionJobs/{job.name.rsplit('/', 1)[-1]}").status_code == 404
+
+
+def test_google_genai_sdk_file_search_store_resumable_upload(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILE_SEARCH_STORES_DIR", str(tmp_path / "fss"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "files"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    app_client = TestClient(proxy.app)
+    sdk_http = httpx.Client(transport=_FastApiTransport(app_client))
+    sdk = genai.Client(
+        api_key="test-key",
+        http_options=types.HttpOptions(
+            base_url="http://testserver/v1beta",
+            api_version="",
+            httpx_client=sdk_http,
+        ),
+    )
+
+    store = sdk.file_search_stores.create(config={"display_name": "SDK store"})
+    upload_source = io.BytesIO(b"sdk file search upload")
+    operation = sdk.file_search_stores.upload_to_file_search_store(
+        file_search_store_name=store.name,
+        file=upload_source,
+        config={"display_name": "sdk-fss.txt", "mime_type": "text/plain"},
+    )
+
+    assert store.name.startswith("fileSearchStores/")
+    assert operation.name.startswith(f"{store.name}/upload/operations/")
+    assert operation.done is True
+    assert operation.response.parent == store.name
+    assert operation.response.document_name.startswith(f"{store.name}/documents/")
+    docs = app_client.get(f"/v1beta/{store.name}/documents")
+    assert docs.status_code == 200
+    assert docs.json()["documents"][0]["displayName"] == "sdk-fss.txt"
 
 
 def test_google_genai_sdk_vertex_tuning_jobs(tmp_path, monkeypatch):
@@ -2656,6 +2717,30 @@ def test_google_genai_sdk_models_update_delete_tuned_model(tmp_path, monkeypatch
     assert updated.display_name == "Updated by SDK"
     assert deleted.sdk_http_response.headers["content-type"].startswith("application/json")
     assert app_client.get("/v1beta/tunedModels/sdk_model_update").status_code == 404
+
+
+def test_google_genai_sdk_developer_tuning_cancel_tuned_model_name(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_TUNED_MODELS_DIR", str(tmp_path / "tuned_models"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+    app_client = TestClient(proxy.app)
+    sdk_http = httpx.Client(transport=_FastApiTransport(app_client))
+    sdk = genai.Client(
+        api_key="test-key",
+        http_options=types.HttpOptions(
+            base_url="http://testserver/v1beta",
+            api_version="",
+            httpx_client=sdk_http,
+        ),
+    )
+
+    job = sdk.tunings.tune(
+        base_model="gemini-3-flash-agent",
+        training_dataset={"examples": [{"text_input": "a", "output": "b"}]},
+    )
+    cancelled = sdk.tunings.cancel(name=job.name)
+
+    assert job.name.startswith("tunedModels/")
+    assert cancelled.sdk_http_response.headers["content-type"].startswith("application/json")
 
 
 def test_google_genai_sdk_vertex_validate_reward():
@@ -4655,6 +4740,17 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     assert fetched_corpus.json()["displayName"] == "Knowledge"
     assert patched_corpus.status_code == 200
     assert patched_corpus.json()["displayName"] == "Knowledge updated"
+    for index in range(25):
+        created_extra = client.post("/v1beta/corpora", json={"displayName": f"Corpus {index:02d}"})
+        assert created_extra.status_code == 200
+    default_corpora = client.get("/v1beta/corpora")
+    clamped_corpora = client.get("/v1beta/corpora?pageSize=21")
+    assert default_corpora.status_code == 200
+    assert len(default_corpora.json()["corpora"]) == 10
+    assert default_corpora.json()["nextPageToken"] == "10"
+    assert clamped_corpora.status_code == 200
+    assert len(clamped_corpora.json()["corpora"]) == 20
+    assert clamped_corpora.json()["nextPageToken"] == "20"
     proxy._gemini_store_operation({
         "name": "operations/corpus-op",
         "metadata": {"corpus": corpus_name},
@@ -4702,6 +4798,11 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     assert wrapped_doc.json()["name"].endswith("/documents/wrapped_doc")
     assert wrapped_doc.json()["displayName"] == "Wrapped document"
     assert wrapped_doc.json()["customMetadata"][0]["stringValue"] == "wrapped"
+    duplicate_doc = client.post(f"/v1/corpora/{corpus_id}/documents?document_id=wrapped_doc", json={
+        "document": {"display_name": "Duplicate document"},
+    })
+    assert duplicate_doc.status_code == 409
+    assert duplicate_doc.json()["error"]["status"] == "ALREADY_EXISTS"
 
     chunk = client.post(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks", json={
         "data": {"stringValue": "Project Atlas launch window is October."},
@@ -4720,6 +4821,11 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     assert wrapped_chunk.json()["name"].endswith("/chunks/wrapped_chunk")
     assert wrapped_chunk.json()["data"]["stringValue"] == "Wrapped chunk text"
     assert wrapped_chunk.json()["customMetadata"][0]["stringValue"] == "wrapped"
+    duplicate_chunk = client.post(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks?chunk_id=wrapped_chunk", json={
+        "chunk": {"data": {"stringValue": "Duplicate chunk text"}},
+    })
+    assert duplicate_chunk.status_code == 409
+    assert duplicate_chunk.json()["error"]["status"] == "ALREADY_EXISTS"
 
     batch_created = client.post(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks:batchCreate", json={
         "requests": [{
@@ -4753,6 +4859,11 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     assert batch_created.status_code == 200
     assert batch_created.json()["chunks"][0]["name"].endswith("/chunks/batch_one")
     assert batch_created.json()["chunks"][0]["customMetadata"][0]["stringValue"] == "keep"
+    duplicate_batch_created = client.post(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks:batchCreate", json={
+        "requests": [{"chunk_id": "batch_one", "chunk": {"data": {"stringValue": "Duplicate batch chunk"}}}],
+    })
+    assert duplicate_batch_created.status_code == 409
+    assert duplicate_batch_created.json()["error"]["status"] == "ALREADY_EXISTS"
     assert batch_updated.status_code == 200
     assert batch_updated.json()["chunks"][0]["data"]["stringValue"] == "Batch chunk updated"
     assert batch_updated.json()["chunks"][0]["customMetadata"][0]["stringValue"] == "keep"
@@ -4801,6 +4912,12 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
             "email_address": "ignored@example.com",
         }
     })
+    missing_mask_perm = client.patch(f"/v1/corpora/{corpus_id}/permissions/{perm_id}", json={
+        "permission": {"role": "writer"}
+    })
+    unsupported_mask_perm = client.patch(f"/v1/corpora/{corpus_id}/permissions/{perm_id}?updateMask=permission.emailAddress", json={
+        "permission": {"email_address": "new@example.com"}
+    })
 
     assert perm.status_code == 200
     assert second_perm.status_code == 200
@@ -4818,6 +4935,8 @@ def test_gemini_corpora_documents_chunks_permissions_and_query(tmp_path, monkeyp
     assert snake_query_perm.status_code == 200
     assert snake_query_perm.json()["role"] == "READER"
     assert snake_query_perm.json()["emailAddress"] == "reader@example.com"
+    assert missing_mask_perm.status_code == 400
+    assert unsupported_mask_perm.status_code == 400
 
     assert client.delete(f"/v1/corpora/{corpus_id}/documents/{doc_id}/chunks/{chunk_id}").status_code == 200
     assert client.delete(f"/v1/corpora/{corpus_id}/permissions/{perm_id}").status_code == 200
@@ -5557,8 +5676,11 @@ def test_gemini_image_model_generate_content_predict_and_generate_images(tmp_pat
     ]
 
     listed = client.get("/v1beta/generatedFiles")
+    listed_clamped = client.get("/v1beta/generatedFiles?pageSize=51")
     assert listed.status_code == 200
     assert len(listed.json()["generatedFiles"]) == 5
+    assert listed_clamped.status_code == 200
+    assert len(listed_clamped.json()["generatedFiles"]) == 5
 
     generated_file_name = generated_image["generatedFile"]["name"]
     fetched_file = client.get(f"/v1beta/{generated_file_name}")

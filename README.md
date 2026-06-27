@@ -1205,6 +1205,9 @@ Notes:
   SDK-style `page_size` / `page_token` query aliases. Batch and operation list
   routes also accept `filter`, `return_partial_success`, and
   `returnPartialSuccess`.
+- List routes clamp oversized `pageSize` values where the Gemini schema defines
+  a hard maximum, including `models` at 1000, `generatedFiles` at 50, and
+  `corpora` at 20.
 - Agents preserve caller-supplied `id` values, return `object: "agent"`, and
   expose list results with the SDK-style `object/data/next_page_token` shape
   while keeping `agents/nextPageToken` aliases for older clients.
@@ -1220,6 +1223,14 @@ Notes:
 - File Search Store int64 counters, including `activeDocumentsCount`,
   `pendingDocumentsCount`, `failedDocumentsCount`, and `sizeBytes`, are returned
   as strings per the Gemini REST schema.
+- `file_search_stores.upload_to_file_search_store()` from `google-genai` is
+  supported with the resumable upload start/finalize flow, including collection
+  base URL aliases such as `/v1beta/upload/v1beta/fileSearchStores/...`.
+- Local `corpora` document and chunk creation follows create semantics:
+  duplicate caller-supplied document or chunk IDs return Gemini-style
+  `ALREADY_EXISTS` instead of silently overwriting. Permission patch operations
+  require `updateMask=role`; grantee and email fields remain immutable after
+  creation.
 - `countTokens` and `computeTokens` are approximate because Antigravity's internal endpoint does not
   expose a separate Gemini token-count RPC. Responses include `totalTokens`,
   `promptTokensDetails`, `cachedContentTokenCount`, and `cacheTokensDetails`
