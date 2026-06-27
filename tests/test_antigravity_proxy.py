@@ -3926,8 +3926,13 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
             "displayName": "My tuned",
             "base_model": "models/gemini-3-flash-agent",
             "tuning_task": {
-                "hyperparameters": {"epochCount": 2, "batchSize": 4},
-                "training_data": {"examples": {"examples": [{"textInput": "hi", "output": "hello"}]}},
+                "hyperparameters": {
+                    "epochCount": 2,
+                    "batchSize": 4,
+                    "learning_rate": "0.001",
+                    "learning_rate_multiplier": "1.5",
+                },
+                "training_data": {"examples": {"examples": [{"text_input": "hi", "output": "hello"}]}},
             },
         },
     })
@@ -3939,6 +3944,9 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert tuned["topK"] == 32
     assert tuned["readerProjectNumbers"] == ["123"]
     assert tuned["tuningTask"]["hyperparameters"]["epochCount"] == 2
+    assert tuned["tuningTask"]["hyperparameters"]["learningRate"] == "0.001"
+    assert tuned["tuningTask"]["hyperparameters"]["learningRateMultiplier"] == "1.5"
+    assert tuned["tuningTask"]["trainingData"]["examples"]["examples"][0]["textInput"] == "hi"
     assert tuned["tuningTask"]["trainingData"]["examples"]["examples"][0]["output"] == "hello"
     created_op_id = created.json()["name"].split("/", 1)[1]
     query_created = client.post("/v1beta/tunedModels?tunedModelId=query_tuned", json={

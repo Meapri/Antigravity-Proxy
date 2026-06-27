@@ -762,7 +762,9 @@ objects and Gemini's `_responseJsonSchema` alias. Official
 `customMetadata.string_list_value` entries are normalized to
 `customMetadata.stringListValue`. Resource body aliases such as `base_model`,
 `create_time`, `update_time`, and `expire_time` are normalized to their Gemini
-REST casing.
+REST casing. Tuning and batch aliases such as `text_input`, `learning_rate`,
+`learning_rate_multiplier`, `batch_stats`, `request_count`, `responses_file`,
+and `inlined_responses` are also normalized.
 `responseFormat.text`, `.image`, and `.audio` configs are preserved, with
 snake_case fields such as `mime_type`, `image_size`, `sample_rate`, and
 `bit_rate` normalized to Gemini REST casing.
