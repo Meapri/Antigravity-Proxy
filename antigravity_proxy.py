@@ -9613,6 +9613,7 @@ async def gemini_tuned_generate_content(tuned_model_id: str, request: Request):
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body = _gemini_generate_request_payload(body)
         body = _gemini_apply_generate_config(body)
         body = _gemini_apply_response_format(body)
         body = _gemini_normalize_generate_body(body)
@@ -9667,6 +9668,7 @@ async def gemini_tuned_stream_generate_content(tuned_model_id: str, request: Req
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body = _gemini_generate_request_payload(body)
         body = _gemini_apply_generate_config(body)
         body = _gemini_apply_response_format(body)
         body = _gemini_normalize_generate_body(body)
@@ -10517,6 +10519,7 @@ async def gemini_generate_content(model_name: str, request: Request, project: st
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body = _gemini_generate_request_payload(body)
         body = _gemini_apply_generate_config(body)
         body = _gemini_apply_response_format(body)
         body = _gemini_normalize_generate_body(body)
@@ -12186,6 +12189,7 @@ async def gemini_stream_generate_content(model_name: str, request: Request, proj
         body = _gemini_normalize_request(await request.json())
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        body = _gemini_generate_request_payload(body)
         body = _gemini_apply_generate_config(body)
         body = _gemini_apply_response_format(body)
         body = _gemini_normalize_generate_body(body)

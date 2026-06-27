@@ -1228,6 +1228,10 @@ Notes:
   `generateContentRequest` wrappers, string `contents`, and local
   `cachedContent` / `file_search` context are expanded before counting. Tool
   declarations and `toolConfig` are also included in the local prompt estimate.
+- `generateContent`, `streamGenerateContent`, and token-count routes accept
+  SDK/AIP wrappers such as `generateContentRequest` and `request`, then unwrap
+  them before applying normal content, config, tool, cache, URL, and file-search
+  normalization.
 - Upstream Gemini usage metadata aliases such as `prompt_token_count`,
   `candidates_token_count`, `total_token_count`, and `service_tier` are
   normalized to `promptTokenCount`, `candidatesTokenCount`,

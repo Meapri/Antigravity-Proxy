@@ -1523,6 +1523,42 @@ def test_gemini_dynamic_generate_and_stream_routes(monkeypatch):
     assert seen["requests"][0]["contents"][0]["parts"][0]["text"] == "hello dynamic"
 
 
+def test_gemini_generate_content_unwraps_request_wrappers(monkeypatch):
+    seen = {}
+
+    class FakeClient:
+        def generate_raw(self, *, request, model=""):
+            seen.setdefault("requests", []).append(request)
+            return {"response": {"candidates": [{"content": {"parts": [{"text": "wrapped ok"}]}}]}}
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    generated = client.post("/v1beta/models/gemini-3-flash-agent:generateContent", json={
+        "generateContentRequest": {
+            "contents": "wrapped",
+            "generation_config": {"max_output_tokens": "7"},
+        }
+    })
+    with client.stream("POST", "/v1beta/models/gemini-3-flash-agent:streamGenerateContent", json={
+        "request": {
+            "contents": "wrapped stream",
+            "generation_config": {"max_output_tokens": "8"},
+        }
+    }) as streamed:
+        stream_body = streamed.read().decode()
+
+    assert generated.status_code == 200
+    assert streamed.status_code == 200
+    assert "data:" in stream_body
+    assert "generateContentRequest" not in seen["requests"][0]
+    assert "request" not in seen["requests"][1]
+    assert seen["requests"][0]["contents"][0]["parts"][0]["text"] == "wrapped"
+    assert seen["requests"][0]["generationConfig"]["maxOutputTokens"] == 7
+    assert seen["requests"][1]["contents"][0]["parts"][0]["text"] == "wrapped stream"
+    assert seen["requests"][1]["generationConfig"]["maxOutputTokens"] == 8
+
+
 def test_gemini_function_calling_config_accepts_required_alias(monkeypatch):
     seen = {}
 
