@@ -957,7 +957,9 @@ Embeddings and batch operations:
   mapped onto the newer local `generateContent`, embedding, and token-count
   compatibility paths. Legacy text/message generation also accepts SDK
   `config`, `providerOptions.google`, `response_format`, and
-  `processingOptions` wrappers before forwarding to the generate path.
+  `processingOptions` wrappers before forwarding to the generate path. Legacy
+  message prompts accept both `prompt.messages[]` and single `prompt.message`
+  shapes.
 
 File search stores:
 

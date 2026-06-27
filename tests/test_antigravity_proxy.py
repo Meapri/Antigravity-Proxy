@@ -1857,10 +1857,10 @@ def test_gemini_legacy_text_message_answer_and_token_methods(monkeypatch):
         "response_format": "text/plain",
         "processing_options": {"media_resolution": "MEDIA_RESOLUTION_LOW"},
     })
-    message = client.post("/v1beta/models/gemini-3-flash-agent:generateMessage", json={"prompt": {"messages": [{"content": "hello msg"}]}})
+    message = client.post("/v1beta/models/gemini-3-flash-agent:generateMessage", json={"prompt": {"message": {"content": "hello msg"}}})
     answer = client.post("/v1/models/gemini-3-flash-agent:generateAnswer", json={"text": "hello answer"})
     counted_text = client.post("/v1beta/models/gemini-3-flash-agent:countTextTokens", json={"prompt": {"text": "count these"}})
-    counted_message = client.post("/v1beta/models/gemini-3-flash-agent:countMessageTokens", json={"message": {"content": "count msg"}})
+    counted_message = client.post("/v1beta/models/gemini-3-flash-agent:countMessageTokens", json={"prompt": {"message": {"content": "count msg"}}})
 
     assert text.status_code == 200
     assert text.json()["candidates"][0]["output"] == "legacy:hello text"

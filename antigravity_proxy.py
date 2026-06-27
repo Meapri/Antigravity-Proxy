@@ -2266,6 +2266,14 @@ def _gemini_legacy_prompt_text(body: dict[str, Any]) -> str:
         messages = prompt.get("messages")
         if isinstance(messages, list):
             return "\n".join(_msg_text(item.get("content") if isinstance(item, dict) else item) for item in messages)
+        message = prompt.get("message")
+        if isinstance(message, dict):
+            if message.get("content") is not None:
+                return _msg_text(message["content"])
+            if message.get("text") is not None:
+                return str(message["text"])
+        if message is not None:
+            return _msg_text(message)
     if isinstance(prompt, str):
         return prompt
     if body.get("text") is not None:
