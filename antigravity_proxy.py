@@ -6436,6 +6436,40 @@ def _gemini_apply_url_context(body: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
+def _gemini_youtube_filedata_uri(body: dict[str, Any]) -> str | None:
+    """Return the first YouTube fileData fileUri found in the request contents,
+    or None. Detection is intentionally narrow: only youtube.com / youtu.be
+    hosts in contents[].parts[].fileData so that every non-YouTube request keeps
+    its existing code path byte-for-byte unchanged."""
+    if not isinstance(body, dict):
+        return None
+    contents = body.get("contents")
+    if not isinstance(contents, list):
+        return None
+    for content in contents:
+        if not isinstance(content, dict):
+            continue
+        parts = content.get("parts")
+        if not isinstance(parts, list):
+            continue
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            file_data = part.get("fileData") or part.get("file_data")
+            if not isinstance(file_data, dict):
+                continue
+            uri, _mime = _gemini_file_data_reference(file_data)
+            if not uri:
+                continue
+            try:
+                host = (urlparse(uri).hostname or "").lower()
+            except Exception:
+                continue
+            if host.endswith("youtube.com") or host == "youtu.be" or host.endswith(".youtu.be"):
+                return uri
+    return None
+
+
 def _gemini_strip_internal_request_metadata(body: dict[str, Any]) -> dict[str, Any]:
     proxy_only = {"agent", "agentConfig", "environment", "webhookConfig"}
     return {
@@ -11327,6 +11361,18 @@ async def gemini_generate_content(model_name: str, request: Request, project: st
 
                 return StreamingResponse(_computer_use_gen(), media_type="text/event-stream")
             return JSONResponse(computer_use_response)
+        youtube_uri = _gemini_youtube_filedata_uri(body)
+        if youtube_uri:
+            return await _gemini_youtube_generate_response(
+                body=body,
+                model_name=model_name,
+                antigravity_model=str(model["antigravity_model"]),
+                api_version=api_version,
+                stream=(
+                    request.query_params.get("alt") == "sse"
+                    or request.query_params.get("stream", "").lower() == "true"
+                ),
+            )
         body = _gemini_inline_local_files(body)
         body.pop("model", None)
         if request.query_params.get("alt") == "sse" or request.query_params.get("stream", "").lower() == "true":
@@ -11361,6 +11407,43 @@ async def gemini_generate_content(model_name: str, request: Request, project: st
         log.error("Gemini generateContent failed: %s | UPSTREAM BODY: %s", exc, _upstream)
         log.exception("Gemini generateContent exception traceback:")
         return _gemini_error_response(f"Antigravity upstream error: {exc}", status_code=502, status="UNAVAILABLE")
+
+
+async def _gemini_youtube_generate_response(
+    *,
+    body: dict[str, Any],
+    model_name: str,
+    antigravity_model: str,
+    api_version: str = "v1beta",
+    stream: bool = False,
+):
+    """Handle a generateContent request carrying a YouTube fileData part.
+
+    cloudcode-pa only accepts YouTube fileData URIs through the v1internal
+    "agent" wrapper (see AntigravityClient.generate_youtube_raw). We skip the
+    normal _gemini_inline_local_files step (which would try to download the URL
+    and reject it as text/html) and send the already-built request straight
+    through that wrapper. The streaming path emits the full result as a single
+    SSE chunk so alt=sse callers do not break."""
+    request_body = dict(body)
+    request_body.pop("model", None)
+    data = await asyncio.to_thread(
+        _get_client().generate_youtube_raw,
+        request=_gemini_strip_internal_request_metadata(request_body),
+        model=antigravity_model,
+    )
+    payload = _gemini_finalize_generate_response(
+        _gemini_unwrap_response(data),
+        model_name=model_name,
+        request_body=request_body,
+        api_version=api_version,
+    )
+    if stream:
+        async def _yt_gen():
+            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(_yt_gen(), media_type="text/event-stream")
+    return JSONResponse(payload)
 
 
 def _gemini_streaming_response(*, body: dict[str, Any], model_name: str, antigravity_model: str, api_version: str = "v1beta") -> StreamingResponse:

@@ -553,6 +553,37 @@ class AntigravityClient:
         data = _retry_http(_do_yt)
         return self._extract_text(data).strip()
 
+    def generate_youtube_raw(self, *, request: dict[str, Any], model: str = "") -> dict[str, Any]:
+        """Post a fully-formed Gemini `request` containing a YouTube fileData part
+        through the same v1internal special wrapper that `analyze_youtube_url`
+        uses (requestType="agent", userAgent="antigravity"), returning the raw
+        response dict. This is the only path cloudcode-pa accepts for YouTube
+        fileData URIs; the standard generate_raw path rejects them. The caller
+        is responsible for building `request` (contents / generationConfig)."""
+        creds = self._valid_credentials()
+        project_id = self._project_id or creds.project_id or self._discover_project(creds.access_token)
+        if not project_id:
+            raise RuntimeError("Could not resolve Antigravity project id.")
+        requested_model = (model or "").strip() or self.settings.model
+        wrapped = {
+            "project": project_id,
+            "model": MODEL_ALIASES.get(requested_model, requested_model),
+            "request": request,
+            "requestType": "agent",
+            "userAgent": "antigravity",
+            "requestId": "youtube-" + str(uuid.uuid4()),
+        }
+        headers = self._antigravity_headers(creds.access_token)
+        _yt_timeout = httpx.Timeout(connect=15.0, read=240.0, write=30.0, pool=30.0)
+        _url = f"{ENDPOINT}/v1internal:generateContent"
+
+        def _do_yt():
+            r = self._http.post(_url, json=wrapped, headers=headers, timeout=_yt_timeout)
+            r.raise_for_status()
+            return r.json()
+
+        return _retry_http(_do_yt)
+
     def analyze_web_url(self, *, url: str, prompt: str) -> str:
         url = url.strip()
         if not url:
