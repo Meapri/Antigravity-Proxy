@@ -462,6 +462,219 @@ class CuaExecutor:
         raise BridgeError(f"unsupported native computer-use action: {name}")
 
 
+class BrowserExecutor:
+    """Browser-first executor backed by Playwright.
+
+    This avoids cua-driver for normal browser navigation, typing, clicking, and
+    scrolling. It intentionally keeps the same small executor surface used by
+    the hybrid bridge so AutoExecutor can fall back to CuaExecutor when needed.
+    """
+
+    def __init__(self, log_dir: Path, browser: str = DEFAULT_BROWSER) -> None:
+        self.log_dir = log_dir
+        self.browser = browser
+        self.state_dir = log_dir.parent / "browser"
+        helper_candidates = [
+            Path(__file__).resolve().with_name("playwright-browser-executor.js"),
+            Path.home() / ".local" / "lib" / "gemini-native-cua" / "playwright-browser-executor.js",
+        ]
+        self.helper = next((candidate for candidate in helper_candidates if candidate.exists()), helper_candidates[0])
+        self.last_url: str | None = None
+        self.last_viewport: tuple[float, float] | None = None
+
+    def _call_helper(self, action: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
+        if not self.helper.exists():
+            raise BridgeError(f"Playwright browser executor helper not found: {self.helper}")
+        payload = {
+            "action": action,
+            "args": args or {},
+            "stateDir": str(self.state_dir),
+        }
+        env = os.environ.copy()
+        display = find_display()
+        if display:
+            env["DISPLAY"] = display
+        xauthority = find_xauthority()
+        if xauthority:
+            env["XAUTHORITY"] = xauthority
+        env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+        env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{os.getuid()}/bus")
+        result = subprocess.run(
+            ["node", str(self.helper)],
+            input=json.dumps(payload),
+            text=True,
+            capture_output=True,
+            timeout=60,
+            env=env,
+        )
+        if result.returncode != 0:
+            raise BridgeError(f"browser executor {action} failed: {truncate(result.stderr or result.stdout, 1600)}")
+        try:
+            data = json.loads(result.stdout.strip() or "{}")
+        except json.JSONDecodeError as exc:
+            raise BridgeError(f"browser executor returned invalid JSON: {truncate(result.stdout, 800)}") from exc
+        if isinstance(data.get("url"), str):
+            self.last_url = data["url"]
+        viewport = data.get("viewport")
+        if isinstance(viewport, dict) and viewport.get("width") and viewport.get("height"):
+            self.last_viewport = (float(viewport["width"]), float(viewport["height"]))
+        return data
+
+    def doctor(self) -> tuple[bool, str]:
+        try:
+            data = self._call_helper("capture", {})
+            return True, json.dumps({"executor": "browser", "url": data.get("url"), "title": data.get("title")}, ensure_ascii=False)
+        except Exception as exc:
+            return False, str(exc)
+
+    def ensure_browser(self) -> dict[str, Any]:
+        data = self._call_helper("open", {})
+        return {"pid": None, "window_id": None, "browser": "playwright-chromium", "url": data.get("url")}
+
+    def get_screen_size(self) -> tuple[float, float]:
+        if self.last_viewport:
+            return self.last_viewport
+        data = self._call_helper("capture", {})
+        viewport = data.get("viewport") if isinstance(data, dict) else None
+        if isinstance(viewport, dict) and viewport.get("width") and viewport.get("height"):
+            self.last_viewport = (float(viewport["width"]), float(viewport["height"]))
+            return self.last_viewport
+        return (1280.0, 900.0)
+
+    def normalized_xy(self, args: dict[str, Any]) -> tuple[float, float]:
+        x = args.get("x")
+        y = args.get("y")
+        coordinate = args.get("coordinate") or args.get("coordinates")
+        if (x is None or y is None) and isinstance(coordinate, list) and len(coordinate) >= 2:
+            x, y = coordinate[0], coordinate[1]
+        if x is None or y is None:
+            raise BridgeError(f"action missing coordinates: {args}")
+        x_f = float(x)
+        y_f = float(y)
+        if 0 <= x_f <= 1000 and 0 <= y_f <= 1000:
+            width, height = self.get_screen_size()
+            return round(x_f / 1000 * width), round(y_f / 1000 * height)
+        return x_f, y_f
+
+    def locate_browser(self) -> tuple[int | None, int | None]:
+        return None, None
+
+    def capture(self) -> dict[str, Any]:
+        data = self._call_helper("capture", {})
+        state = {
+            "elements": data.get("elements") or [],
+            "url": data.get("url"),
+            "title": data.get("title"),
+            "text": data.get("text"),
+        }
+        summary = {
+            "window": {"title": data.get("title"), "width": (data.get("viewport") or {}).get("width"), "height": (data.get("viewport") or {}).get("height")},
+            "state": state,
+        }
+        result: dict[str, Any] = {
+            "pid": None,
+            "window_id": None,
+            "summary": truncate(json.dumps(summary, ensure_ascii=False), 10000),
+        }
+        if data.get("screenshot_path"):
+            result["screenshot_path"] = data["screenshot_path"]
+            result["screenshot_mime"] = data.get("screenshot_mime") or "image/png"
+        return result
+
+    def best_effort_capture(self) -> dict[str, Any]:
+        try:
+            return self.capture()
+        except Exception as exc:
+            return {"capture_error": str(exc)}
+
+    def navigate(self, url: str) -> dict[str, Any]:
+        safety_check_text(url)
+        data = self._call_helper("navigate", {"url": url})
+        return {"url": data.get("url") or url, "capture": self.capture()}
+
+    def send_key_no_capture(self, key: str) -> None:
+        self._call_helper("press", {"key": key})
+
+    def type_text_no_capture(self, text: str) -> None:
+        safety_check_text(text)
+        self._call_helper("type", {"text": text})
+
+    def execute(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        if name == "open_web_browser":
+            result = self.ensure_browser()
+            result["capture"] = self.best_effort_capture()
+            return result
+        if name in {"wait"}:
+            data = self._call_helper("wait", {"seconds": float(args.get("seconds") or args.get("duration") or 1.0)})
+            return {"capture": self.capture(), "url": data.get("url")}
+        if name in {"click", "double_click"}:
+            payload: dict[str, Any] = {}
+            element_index = args.get("element_index", args.get("element"))
+            if element_index is not None:
+                payload["element_index"] = int(element_index)
+            else:
+                x, y = self.normalized_xy(args)
+                payload.update({"x": x, "y": y})
+            data = self._call_helper("double_click" if name == "double_click" else "click", payload)
+            return {**payload, "url": data.get("url"), "capture": self.capture()}
+        if name in {"type", "type_text"}:
+            text = str(args.get("text") or "")
+            safety_check_text(text)
+            data = self._call_helper("type", {"text": text})
+            return {"typed_chars": len(text), "url": data.get("url"), "capture": self.capture()}
+        if name == "scroll":
+            direction = str(args.get("direction") or "down").lower()
+            amount = int(args.get("amount") or 3)
+            data = self._call_helper("scroll", {"direction": direction, "amount": max(1, min(amount, 50))})
+            return {"direction": direction, "amount": amount, "url": data.get("url"), "capture": self.capture()}
+        if name in {"key", "press_key"}:
+            key = str(args.get("key") or args.get("keys") or "")
+            data = self._call_helper("press", {"key": key})
+            return {"key": key, "url": data.get("url"), "capture": self.capture()}
+        raise BridgeError(f"unsupported browser executor action: {name}")
+
+
+class AutoExecutor:
+    def __init__(self, log_dir: Path, browser: str = DEFAULT_BROWSER) -> None:
+        self.primary = BrowserExecutor(log_dir, browser)
+        self.fallback = CuaExecutor(log_dir, browser)
+        self.browser = browser
+
+    def _try(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return getattr(self.primary, method)(*args, **kwargs)
+        except Exception as primary_exc:
+            try:
+                return getattr(self.fallback, method)(*args, **kwargs)
+            except Exception as fallback_exc:
+                raise BridgeError(f"browser executor failed: {primary_exc}; cua fallback failed: {fallback_exc}") from fallback_exc
+
+    def doctor(self) -> tuple[bool, str]:
+        browser_ok, browser_report = self.primary.doctor()
+        cua_ok, cua_report = self.fallback.doctor()
+        return browser_ok or cua_ok, json.dumps({
+            "executor": "auto",
+            "browser_executor": {"ok": browser_ok, "report": browser_report},
+            "cua_executor": {"ok": cua_ok, "report": cua_report},
+        }, ensure_ascii=False)
+
+    def __getattr__(self, name: str) -> Any:
+        if name in {"ensure_browser", "capture", "best_effort_capture", "navigate", "send_key_no_capture", "type_text_no_capture", "execute", "get_screen_size", "normalized_xy"}:
+            return lambda *args, **kwargs: self._try(name, *args, **kwargs)
+        raise AttributeError(name)
+
+
+def create_executor(kind: str, log_dir: Path, browser: str = DEFAULT_BROWSER) -> Any:
+    normalized = (kind or "auto").strip().lower()
+    if normalized == "cua":
+        return CuaExecutor(log_dir, browser)
+    if normalized == "browser":
+        return BrowserExecutor(log_dir, browser)
+    if normalized == "auto":
+        return AutoExecutor(log_dir, browser)
+    raise BridgeError(f"unsupported executor: {kind}")
+
+
 SECRET_PATTERNS = [
     re.compile(r"sk-[A-Za-z0-9_-]{16,}"),
     re.compile(r"(?i)(api[_-]?key|password|passwd|token|secret)\s*[:=]"),
@@ -618,8 +831,11 @@ def choose_link(links: list[dict[str, str]], requested_text: str) -> dict[str, s
     return best[1] if best else None
 
 
-def navigate_to_url(executor: CuaExecutor, url: str) -> dict[str, Any]:
+def navigate_to_url(executor: Any, url: str) -> dict[str, Any]:
     safety_check_text(url)
+    navigate = getattr(executor, "navigate", None)
+    if callable(navigate):
+        return navigate(url)
     executor.send_key_no_capture("ctrl+l")
     executor.type_text_no_capture(url)
     executor.send_key_no_capture("return")
@@ -1119,6 +1335,7 @@ def resolve_config(args: argparse.Namespace) -> dict[str, Any]:
         "model": args.model or DEFAULT_MODEL,
         "environment": args.environment or DEFAULT_ENVIRONMENT,
         "browser": args.browser or DEFAULT_BROWSER,
+        "executor": args.executor or "auto",
         "max_actions": args.max_actions or DEFAULT_MAX_ACTIONS,
         "log_dir": Path(args.log_dir).expanduser() if args.log_dir else DEFAULT_STATE_DIR / "logs",
     }
@@ -1129,12 +1346,13 @@ def command_doctor(args: argparse.Namespace) -> int:
     log_dir = config["log_dir"]
     log_dir.mkdir(parents=True, exist_ok=True)
     client = InteractionClient(config["base_url"], config["api_key"], config["model"])
-    executor = CuaExecutor(log_dir, config["browser"])
+    executor = create_executor(config.get("executor", "auto"), log_dir, config["browser"])
     print("base_url:", config["base_url"])
     print("model:", config["model"])
-    print("display:", executor.env.get("DISPLAY") or "(not set)")
+    print("executor:", config.get("executor", "auto"))
+    print("display:", os.environ.get("DISPLAY") or find_display() or "(not set)")
     ok, report = executor.doctor()
-    print("cua_driver:", "PASS" if ok else "FAIL")
+    print("executor_health:", "PASS" if ok else "FAIL")
     print(truncate(report, 1200))
     try:
         interaction = client.create("Return one harmless computer use action only.", config["environment"])
@@ -1145,14 +1363,17 @@ def command_doctor(args: argparse.Namespace) -> int:
     except Exception as exc:
         print("native_interactions: FAIL", exc)
         return 1
-    try:
-        pid, window_id = executor.locate_browser()
-        if pid is None:
-            print(f"browser_target: WARN no visible X11/Xwayland window matching {config['browser']!r}")
-        else:
-            print(f"browser_target: PASS pid={pid} window_id={window_id}")
-    except Exception as exc:
-        print("browser_target: WARN", exc)
+    if config.get("executor") == "browser":
+        print("browser_target: N/A for browser executor")
+    else:
+        try:
+            pid, window_id = executor.locate_browser()
+            if pid is None:
+                print(f"browser_target: WARN no visible X11/Xwayland window matching {config['browser']!r}")
+            else:
+                print(f"browser_target: PASS pid={pid} window_id={window_id}")
+        except Exception as exc:
+            print("browser_target: WARN", exc)
     return 0 if ok else 1
 
 
@@ -1174,7 +1395,7 @@ def command_run(args: argparse.Namespace) -> int:
     log_dir = config["log_dir"]
     log_dir.mkdir(parents=True, exist_ok=True)
     client = InteractionClient(config["base_url"], config["api_key"], config["model"])
-    executor = CuaExecutor(log_dir, config["browser"])
+    executor = create_executor(config.get("executor", "auto"), log_dir, config["browser"])
     session = HybridSession(log_dir, args.prompt) if args.hybrid_trace else None
     if session:
         session.event("user", "prompt", {"text": args.prompt})
@@ -1236,12 +1457,13 @@ def command_run(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Bridge Gemini native Computer Use to cua-driver.")
+    parser = argparse.ArgumentParser(description="Bridge Gemini native Computer Use to browser or cua-driver executors.")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--base-url")
     parser.add_argument("--api-key")
     parser.add_argument("--environment", default=DEFAULT_ENVIRONMENT)
     parser.add_argument("--browser", default=DEFAULT_BROWSER)
+    parser.add_argument("--executor", choices=["auto", "browser", "cua"], default="auto")
     parser.add_argument("--max-actions", type=int, default=DEFAULT_MAX_ACTIONS)
     parser.add_argument("--log-dir")
     sub = parser.add_subparsers(dest="command", required=True)

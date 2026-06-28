@@ -66,6 +66,24 @@ The upstream Antigravity proxy should remain available on:
 http://127.0.0.1:8765
 ```
 
+## Executors
+
+The CLI supports three execution modes:
+
+- `--executor browser`: uses the bundled Playwright Chromium helper for browser
+  navigation, typing, clicking, scrolling, screenshots, and DOM-backed element
+  capture. This path does not require `cua-driver` for normal browser tasks and
+  defaults to headless mode for service reliability. Set
+  `GEMINI_NATIVE_CUA_HEADLESS=0` when a visible browser is required.
+- `--executor cua`: uses the original `cua-driver`/`xdotool` desktop executor.
+- `--executor auto`: tries the browser executor first and falls back to
+  `cua-driver` when the browser executor cannot perform an action. This is the
+  default used by the Hermes `native_computer_use` plugin.
+
+The Playwright helper and its npm dependencies live inside this tool directory,
+so Hermes and Antigravity updates do not need source patches for the browser
+executor path.
+
 ## Verify
 
 ```bash

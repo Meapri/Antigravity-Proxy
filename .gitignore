@@ -31,3 +31,5 @@ google_antigravity*.json
 dist/
 build/
 *.egg-info/
+
+node_modules/

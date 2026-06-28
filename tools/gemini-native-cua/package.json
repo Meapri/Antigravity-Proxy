@@ -1,0 +1,15 @@
+{
+  "name": "gemini-native-cua",
+  "version": "1.0.0",
+  "description": "Gemini native Computer Use bridge with browser and cua-driver executors.",
+  "main": "bin/playwright-browser-executor.js",
+  "scripts": {
+    "test": "node --check bin/playwright-browser-executor.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "playwright": "^1.61.1"
+  }
+}
