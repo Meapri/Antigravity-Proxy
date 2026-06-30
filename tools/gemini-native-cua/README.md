@@ -1,21 +1,33 @@
 # Gemini Native Computer Use Bridge
 
-This tool lets Hermes use Gemini/Antigravity native Computer Use without
-patching `antigravity_proxy.py`.
+This tool lets Hermes use Gemini/Antigravity native Computer Use through the
+main Antigravity proxy on `:8765`.
 
 ## Architecture
 
 ```text
-Hermes / gemini-native-cua
-  -> gemini-native-cua compatibility proxy :8766
+Hermes native_computer_use
+  -> gemini-native-cua CLI
     -> Antigravity Gemini proxy :8765
-      -> Antigravity / Gemini backend
+      -> local Computer Use Interactions loop
+      -> Antigravity / Gemini backend for normal generation
 ```
 
-The compatibility proxy forwards normal Gemini REST traffic to the existing
-Antigravity proxy. It only handles the `/interactions` result-submission turn
-for native Computer Use by converting submitted `functionResponse` parts into a
-completed interaction.
+The main Antigravity proxy now handles both halves of the Computer Use
+Interactions loop:
+
+1. initial `tools: [{"type":"computer_use", ...}]` requests return a local
+   Computer Use `functionCall` such as `open_web_browser`; and
+2. follow-up `/interactions` requests containing submitted `functionResponse`
+   parts are completed locally by the same `:8765` service.
+
+The older `proxy/gemini_native_cua_proxy.py` sidecar on `:8766` is retained only
+as a backwards-compatible shim for existing deployments. New Hermes
+configuration should point directly at the `:8765` prefixed Gemini URL:
+
+```text
+http://127.0.0.1:8765/generativelanguage.googleapis.com/v1beta
+```
 
 ## Functional Integration
 
@@ -40,10 +52,11 @@ workflow rather than two isolated tools.
 ## Files
 
 - `bin/gemini-native-cua`: CLI bridge from Gemini native Computer Use actions to
-  `cua-driver`.
-- `proxy/gemini_native_cua_proxy.py`: dependency-free compatibility proxy.
-- `systemd/gemini-native-cua-proxy.service`: user service for the compatibility
-  proxy on port `8766`.
+  `cua-driver` or the bundled browser executor.
+- `proxy/gemini_native_cua_proxy.py`: legacy dependency-free compatibility
+  proxy for deployments that still need a `:8766` sidecar.
+- `systemd/gemini-native-cua-proxy.service`: legacy user service for the
+  compatibility proxy on port `8766`.
 - `scripts/install.sh`: installs the CLI, proxy, and systemd service.
 
 ## Install
@@ -57,13 +70,13 @@ tools/gemini-native-cua/scripts/install.sh
 Then point Hermes/Gemini configuration at:
 
 ```text
-http://<host>:8766/generativelanguage.googleapis.com/v1beta
+http://<host>:8765/generativelanguage.googleapis.com/v1beta
 ```
 
-The upstream Antigravity proxy should remain available on:
+The legacy sidecar, when used, still listens on:
 
 ```text
-http://127.0.0.1:8765
+http://127.0.0.1:8766/generativelanguage.googleapis.com/v1beta
 ```
 
 ## Executors
@@ -88,8 +101,10 @@ executor path.
 
 ```bash
 gemini-native-cua doctor
-gemini-native-cua --max-actions 6 run "Open https://example.com"
-gemini-native-cua --max-actions 6 run --planner-steps 3 \
+gemini-native-cua --base-url http://127.0.0.1:8765/generativelanguage.googleapis.com/v1beta \
+  --max-actions 6 run "Open https://example.com"
+gemini-native-cua --base-url http://127.0.0.1:8765/generativelanguage.googleapis.com/v1beta \
+  --max-actions 6 run --planner-steps 3 \
   "Open https://example.com and open the More information link"
 ```
 
@@ -97,8 +112,8 @@ Use `--no-hybrid-trace` if you do not want a session trace for a run.
 
 ## Notes
 
-- The bridge intentionally lives outside the Antigravity proxy implementation.
-  Updating the proxy should not require reapplying source patches.
+- Native Computer Use result submission is integrated into `antigravity_proxy.py`
+  itself; the `:8766` sidecar is no longer required for new installs.
 - Browser navigation uses `xdotool` when available because Epiphany/AT-SPI can
   hang on text input and accessibility captures.
 - DOM link fallback can follow normal HTML links when the browser accessibility

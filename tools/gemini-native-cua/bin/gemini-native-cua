@@ -995,26 +995,42 @@ class InteractionClient:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["x-goog-api-key"] = self.api_key
-        payload = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "maxOutputTokens": max_output_tokens,
-                "temperature": 0,
-                "responseMimeType": "application/json",
-            },
+        gen_config = {
+            "maxOutputTokens": max_output_tokens,
+            "temperature": 0,
+            "responseMimeType": "application/json",
+            "thinkingConfig": {"thinkingBudget": 0},
         }
-        req = urllib.request.Request(
-            f"{self.base_url}/models/{self.model}:generateContent",
-            data=json.dumps(payload).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-        try:
+
+        def _post(cfg: dict[str, Any]) -> dict[str, Any]:
+            payload = {
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": cfg,
+            }
+            req = urllib.request.Request(
+                f"{self.base_url}/models/{self.model}:generateContent",
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
             with urllib.request.urlopen(req, timeout=60) as response:
-                data = json.loads(response.read().decode("utf-8", "replace"))
+                return json.loads(response.read().decode("utf-8", "replace"))
+
+        try:
+            data = _post(gen_config)
         except urllib.error.HTTPError as error:
             body = error.read().decode("utf-8", "replace")
-            raise BridgeError(f"generateContent HTTP {error.code}: {truncate(body, 2000)}") from error
+            # Some upstreams reject thinkingConfig for a given model; retry once
+            # without it rather than failing the whole planner step.
+            if error.code in (400, 422) and "thinking" in body.lower():
+                fallback = {k: v for k, v in gen_config.items() if k != "thinkingConfig"}
+                try:
+                    data = _post(fallback)
+                except urllib.error.HTTPError as error2:
+                    body2 = error2.read().decode("utf-8", "replace")
+                    raise BridgeError(f"generateContent HTTP {error2.code}: {truncate(body2, 2000)}") from error2
+            else:
+                raise BridgeError(f"generateContent HTTP {error.code}: {truncate(body, 2000)}") from error
         pieces: list[str] = []
         for candidate in data.get("candidates") or []:
             content = candidate.get("content") if isinstance(candidate, dict) else None
@@ -1144,31 +1160,107 @@ def compact_capture_for_planner(capture: dict[str, Any]) -> str:
     return truncate("\n".join(lines), 10000)
 
 
+def _iter_balanced_json_objects(s: str):
+    """Yield each top-level {...} substring using balanced-brace scanning.
+
+    This is string/escape aware so braces inside JSON string values do not
+    confuse the matcher. It avoids the previous greedy ``{.*}`` regex which
+    swallowed interleaved reasoning text and produced unparseable blobs.
+    """
+    depth = 0
+    start = -1
+    in_str = False
+    escape = False
+    for i, ch in enumerate(s):
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start != -1:
+                    yield s[start : i + 1]
+                    start = -1
+
+
+def _reconstruct_action_from_text(text: str) -> dict[str, Any] | None:
+    """Best-effort: pull a real action out of a malformed/reasoning-laced reply.
+
+    Reads the action verb plus any field the supported actions need, so a
+    model that wraps its JSON in chatter still produces a usable step instead
+    of being forced into a premature ``done``.
+    """
+    action_match = re.search(r'"action"\s*:\s*"([^"]+)"', text)
+    if not action_match:
+        return None
+    action = action_match.group(1).strip()
+    out: dict[str, Any] = {"action": action}
+    reason_match = re.search(r'"reason"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
+    if reason_match:
+        out["reason"] = reason_match.group(1)
+    if action == "click":
+        el = re.search(r'"element"\s*:\s*(\d+)', text)
+        if not el:
+            return None
+        out["element"] = int(el.group(1))
+    elif action == "type_text":
+        tx = re.search(r'"text"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
+        if tx is None:
+            return None
+        out["text"] = json.loads('"' + tx.group(1) + '"')
+    elif action == "key":
+        ky = re.search(r'"key"\s*:\s*"([^"]+)"', text)
+        if not ky:
+            return None
+        out["key"] = ky.group(1)
+    elif action == "scroll":
+        dr = re.search(r'"direction"\s*:\s*"([^"]+)"', text)
+        out["direction"] = dr.group(1) if dr else "down"
+        am = re.search(r'"amount"\s*:\s*(\d+)', text)
+        out["amount"] = int(am.group(1)) if am else 3
+    elif action != "done":
+        # Unknown action verb -- let caller decide.
+        return None
+    return out
+
+
 def parse_planner_json(text: str) -> dict[str, Any]:
     cleaned = text.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
         cleaned = re.sub(r"\s*```$", "", cleaned)
-    match = re.search(r"\{.*\}", cleaned, flags=re.S)
-    if match:
-        cleaned = match.group(0)
+    # 1) Try parsing the whole thing first (strict JSON / responseMimeType path).
     try:
         data = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        action_match = re.search(r'"action"\s*:\s*"([^"]+)"', cleaned)
-        reason_match = re.search(r'"reason"\s*:\s*"([^"]*)', cleaned)
-        if action_match:
-            return {
-                "action": "done",
-                "reason": (
-                    "planner returned malformed JSON after choosing "
-                    f"{action_match.group(1)!r}: {reason_match.group(1) if reason_match else truncate(cleaned, 160)}"
-                ),
-            }
-        raise BridgeError(f"planner returned malformed JSON: {truncate(text, 500)}") from exc
-    if not isinstance(data, dict):
-        raise BridgeError(f"planner returned non-object JSON: {text}")
-    return data
+        if isinstance(data, dict):
+            return data
+    except json.JSONDecodeError:
+        pass
+    # 2) Scan for the FIRST valid balanced {...} object (skips reasoning text
+    #    and ignores later malformed candidates).
+    for candidate in _iter_balanced_json_objects(cleaned):
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict) and data.get("action"):
+            return data
+    # 3) Salvage a real action from chatter-laced output instead of giving up.
+    salvaged = _reconstruct_action_from_text(cleaned)
+    if salvaged is not None:
+        return salvaged
+    raise BridgeError(f"planner returned malformed JSON: {truncate(text, 500)}")
 
 
 def planner_prompt(user_prompt: str, capture: dict[str, Any]) -> str:
@@ -1201,8 +1293,9 @@ def run_planner_steps(
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     previous_actions: list[str] = []
+    dom_link_consumed = False
     for step_num in range(1, max(0, steps) + 1):
-        if step_num == 1:
+        if step_num == 1 and not dom_link_consumed:
             requested_link = extract_requested_link_text(prompt)
             dom_result = None
             if requested_link and current_url:
@@ -1230,18 +1323,30 @@ def run_planner_steps(
                             "action": "navigate_link",
                             "text": matched_link.get("text") if isinstance(matched_link, dict) else requested_link,
                             "href": internal_result.get("url") if isinstance(internal_result, dict) else None,
-                            "reason": "used hybrid DOM action because browser accessibility did not expose page content",
+                            "reason": "used hybrid DOM action to reach the requested link, continuing planner",
                         },
                         "execution": internal_result,
                     }
             if dom_result:
                 results.append(dom_result)
-                break
+                dom_link_consumed = True
+                # Only stop if the DOM link step actually failed. On success we
+                # keep going so the planner can read prices / take further steps
+                # on the page we just navigated to.
+                if dom_result["decision"].get("action") == "done":
+                    break
+                # Give the navigated page a moment to render before the next
+                # capture, then fall through to the normal planner loop.
+                try:
+                    executor.execute("wait", {"seconds": 1.5})
+                except Exception:
+                    time.sleep(1.5)
+                continue
         capture = executor.capture()
         step_prompt = prompt
         if previous_actions:
             step_prompt += "\n\nPrevious bridge actions in this planner pass: " + ", ".join(previous_actions[-5:])
-        decision_text = client.generate_text(planner_prompt(step_prompt, capture), max_output_tokens=512)
+        decision_text = client.generate_text(planner_prompt(step_prompt, capture), max_output_tokens=2048)
         decision = parse_planner_json(decision_text)
         action = str(decision.get("action") or "").strip()
         if not action:

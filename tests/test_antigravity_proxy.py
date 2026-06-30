@@ -440,18 +440,97 @@ def test_gemini_error_status_mapping_for_quota_and_server_errors():
     assert internal["details"][0]["reason"] == "INTERNAL"
 
 
-def test_openai_compat_endpoints_are_removed():
+def test_openai_chat_completions_non_streaming(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "files"))
+
+    class FakeClient:
+        def complete(self, *, system="", prompt="", memories=None, model=""):
+            return "hello from fake"
+
+        def _build_gemini_request(self, **kwargs):
+            return {"contents": [], "generationConfig": {}}
+
+        def _extract_text(self, data):
+            return None
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
     client = TestClient(proxy.app)
 
-    chat = client.post("/v1/chat/completions", json={"model": "x", "messages": []})
-    responses = client.post("/v1/responses", json={"model": "x", "input": "hi"})
-    image = client.post("/v1/images/generations", json={"prompt": "draw"})
+    resp = client.post("/v1/chat/completions", json={
+        "model": "gemini-3-flash",
+        "messages": [{"role": "user", "content": "hi"}],
+    })
 
-    for response in (chat, responses, image):
-        assert response.status_code == 404
-        body = response.json()
-        assert body["error"]["status"] == "NOT_FOUND"
-        assert "OpenAI-compatible endpoints have been removed" in body["error"]["message"]
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["object"] == "chat.completion"
+    assert body["choices"][0]["message"]["content"] == "hello from fake"
+    assert "usage" in body
+
+
+def test_openai_chat_completions_streaming(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_FILES_DIR", str(tmp_path / "files"))
+
+    class FakeClient:
+        def _build_gemini_request(self, **kwargs):
+            return {"contents": [], "generationConfig": {}}
+
+        async def generate_raw_stream_async(self, *, request, model=""):
+            yield {"candidates": [{"content": {"parts": [{"text": "hello "}]}}]}
+            yield {"candidates": [{"content": {"parts": [{"text": "stream"}]}}]}
+
+        def complete(self, **kwargs):
+            raise AssertionError("streaming path should not fall back when chunks are returned")
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    client = TestClient(proxy.app)
+
+    with client.stream("POST", "/v1/chat/completions", json={
+        "model": "gemini-3-flash",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": True,
+    }) as resp:
+        body = resp.read().decode()
+
+    assert resp.status_code == 200
+    assert "data:" in body
+    assert "hello " in body
+    assert "stream" in body
+    assert "data: [DONE]" in body
+
+
+def test_openai_models_list_includes_openai_data_alias():
+    client = TestClient(proxy.app)
+
+    resp = client.get("/v1/models")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "models" in body  # Gemini stable compatibility stays intact.
+    assert body["object"] == "list"
+    assert body["data"]
+    assert body["data"][0]["object"] == "model"
+    assert body["data"][0]["id"]
+
+
+def test_openai_embeddings_endpoint_returns_openai_shape():
+    client = TestClient(proxy.app)
+
+    resp = client.post("/v1/embeddings", json={
+        "model": "gemini-3-flash",
+        "input": ["first", "second"],
+        "dimensions": 12,
+    })
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["object"] == "list"
+    assert body["model"] == "gemini-3-flash"
+    assert len(body["data"]) == 2
+    assert body["data"][0]["object"] == "embedding"
+    assert body["data"][0]["index"] == 0
+    assert len(body["data"][0]["embedding"]) == 12
+    assert body["usage"]["prompt_tokens"] > 0
 
 
 def test_gemini_models_and_count_tokens():
@@ -973,13 +1052,10 @@ def test_gemini_unmatched_routes_use_gemini_error_shape():
     client = TestClient(proxy.app)
 
     gemini_missing = client.get("/v1beta/not-a-route")
-    removed_openai = client.post("/v1/chat/completions", json={"model": "x", "messages": []})
 
     assert gemini_missing.status_code == 404
     assert gemini_missing.json()["error"]["status"] == "NOT_FOUND"
     assert gemini_missing.json()["error"]["code"] == 404
-    assert removed_openai.status_code == 404
-    assert removed_openai.json()["error"]["status"] == "NOT_FOUND"
 
 
 def test_gemini_v1_model_routes_do_not_break_openai_models(monkeypatch, tmp_path):
@@ -1019,7 +1095,8 @@ def test_gemini_v1_model_routes_do_not_break_openai_models(monkeypatch, tmp_path
 
     assert openai_models.status_code == 200
     assert "models" in openai_models.json()
-    assert "data" not in openai_models.json()
+    assert openai_models.json()["object"] == "list"
+    assert openai_models.json()["data"][0]["object"] == "model"
     assert gemini_models.status_code == 200
     assert len(gemini_models.json()["models"]) == 1
     assert gemini_models.json()["models"][0]["name"].startswith("models/")
@@ -4284,6 +4361,60 @@ def test_gemini_interactions_native_computer_use_requires_action(tmp_path, monke
     assert missing.status_code == 404
 
 
+def test_gemini_interactions_native_computer_use_result_submission_is_local(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", str(tmp_path / "interactions"))
+
+    class FailingClient:
+        def generate_raw(self, *, request, model=""):
+            raise AssertionError("native computer_use result submissions must not be forwarded upstream")
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FailingClient())
+    client = TestClient(proxy.app)
+
+    created = client.post("/v1beta/interactions", json={
+        "model": "gemini-3.5-flash",
+        "input": "Open example.com.",
+        "tools": [{"type": "computer_use", "environment": "browser"}],
+    })
+    assert created.status_code == 200
+    first = created.json()
+    call = first["requiredAction"]["toolCalls"][0]
+
+    continued = client.post("/v1beta/interactions", json={
+        "model": "gemini-3.5-flash",
+        "previousInteractionId": first["name"],
+        "contents": first["history"] + [{
+            "role": "user",
+            "parts": [{
+                "functionResponse": {
+                    "id": call["id"],
+                    "name": call["name"],
+                    "response": {
+                        "ok": True,
+                        "action": call["name"],
+                        "result": {
+                            "url": "https://example.com/",
+                            "capture": {"summary": "{\"window\":{\"title\":\"Example Domain\"}}"},
+                        },
+                    },
+                }
+            }],
+        }],
+        "tools": [{"type": "computer_use", "environment": "browser"}],
+    })
+
+    assert continued.status_code == 200
+    body = continued.json()
+    assert body["status"] == "completed"
+    assert body["previousInteractionId"] == first["name"]
+    assert body["outputText"] == "Done. The computer use action completed and the browser state was observed."
+    assert body["steps"][0]["type"] == "computer_use_result"
+    assert body["steps"][0]["status"] == "completed"
+    assert body["steps"][0]["results"][0]["name"] == "open_web_browser"
+    assert body["output"]["candidates"][0]["content"]["parts"][0]["text"] == body["outputText"]
+
+
+
 def test_gemini_interactions_cancel_accepts_rest_and_colon_paths(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTIGRAVITY_GEMINI_INTERACTIONS_DIR", str(tmp_path / "interactions"))
     client = TestClient(proxy.app)
@@ -6513,14 +6644,31 @@ def test_gemini_tuned_models_permissions_and_generate(tmp_path, monkeypatch):
     assert deleted_model.status_code == 200
 
 
-def test_openai_image_generation_endpoint_is_removed():
+def test_openai_image_generation_endpoint_works(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_GENERATED_FILES_DIR", str(tmp_path / "generated"))
+    monkeypatch.setenv("ANTIGRAVITY_GEMINI_OPERATIONS_DIR", str(tmp_path / "ops"))
+
+    fake_png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+
+    class FakeClient:
+        def generate_image(self, *, prompt, output_dir, aspect_ratio="square", image_size="1K"):
+            from pathlib import Path
+            p = output_dir / "out.png"
+            p.write_bytes(fake_png)
+            return p
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
     client = TestClient(proxy.app)
 
-    created = client.post("/v1/images/generations", json={"prompt": "draw a square"})
+    resp = client.post("/v1/images/generations", json={"prompt": "draw a square"})
 
-    assert created.status_code == 404
-    assert created.json()["error"]["status"] == "NOT_FOUND"
-    assert "OpenAI-compatible endpoints have been removed" in created.json()["error"]["message"]
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "created" in body
+    assert "data" in body
+    assert body["data"][0]["revised_prompt"] == "draw a square"
+    import base64
+    assert base64.b64decode(body["data"][0]["b64_json"]) == fake_png
 
 
 def test_searxng_search_is_public_and_accepts_get_form_and_json(monkeypatch):

@@ -6885,6 +6885,16 @@ class ResponseInputTokensRequest(BaseModel):
     model_config = {"extra": "allow"}
 
 
+class EmbeddingRequest(BaseModel):
+    model: str = "gemini-3-flash"
+    input: Any
+    encoding_format: str = "float"
+    dimensions: int | None = Field(default=None, ge=1, le=3072)
+    user: str | None = None
+
+    model_config = {"extra": "allow"}
+
+
 # ---------------------------------------------------------------------------
 # Global state
 # ---------------------------------------------------------------------------
@@ -7655,12 +7665,6 @@ async def _optional_api_key_auth(request: Request, call_next):
     if aliased_path != request.scope.get("path"):
         request.scope["path"] = aliased_path
         request.scope["raw_path"] = aliased_path.encode("ascii", errors="ignore")
-    if _is_openai_compat_path(str(request.scope.get("path") or request.url.path)):
-        return _gemini_error_response(
-            "OpenAI-compatible endpoints have been removed. Use the Gemini REST API under /v1beta.",
-            status_code=404,
-            status="NOT_FOUND",
-        )
     aliased_query = _gemini_alias_query_string(request.scope.get("query_string", b""))
     if aliased_query != request.scope.get("query_string", b""):
         request.scope["query_string"] = aliased_query
@@ -8761,10 +8765,27 @@ def _gemini_models_list_response(
     ]
     start = int(page_token or 0) if page_token and page_token.isdigit() else 0
     end = start + page_size
-    return {
-        "models": models[start:end],
+    page_models = models[start:end]
+    response = {
+        "models": page_models,
         "nextPageToken": str(end) if end < len(models) else "",
     }
+    if api_version == "v1":
+        # Dual-shape response: Gemini SDKs consume `models`, while OpenAI clients
+        # expect `object: list` + `data`. Extra fields are ignored by Gemini
+        # clients, so this preserves stable Gemini compatibility and restores
+        # OpenAI model-list compatibility on the same /v1/models URL.
+        response["object"] = "list"
+        response["data"] = [
+            {
+                "id": str(model.get("baseModelId") or _gemini_resource_model_id(str(model.get("name") or ""))),
+                "object": "model",
+                "created": 0,
+                "owned_by": "antigravity",
+            }
+            for model in page_models
+        ]
+    return response
 
 
 @app.get("/v1/models")
@@ -12608,6 +12629,132 @@ def _gemini_interaction_function_call_steps(response: dict[str, Any]) -> list[di
     return steps
 
 
+def _gemini_interaction_function_responses(contents: Any) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    if not isinstance(contents, list):
+        return results
+    for content in contents:
+        if not isinstance(content, dict):
+            continue
+        for part in content.get("parts") or []:
+            if not isinstance(part, dict):
+                continue
+            response = part.get("functionResponse") or part.get("function_response")
+            if isinstance(response, dict):
+                results.append(response)
+    return results
+
+
+def _gemini_interaction_is_computer_use_continuation(previous: dict[str, Any] | None, contents: Any) -> bool:
+    results = _gemini_interaction_function_responses(contents)
+    if not results:
+        return False
+    if isinstance(previous, dict):
+        for action_key in ("requiredAction", "required_action"):
+            action = previous.get(action_key)
+            if isinstance(action, dict) and str(action.get("type") or "") == "submit_computer_use_result":
+                return True
+        for step in previous.get("steps") or []:
+            if isinstance(step, dict) and step.get("type") == "computer_use":
+                return True
+    native_names = {
+        "open_web_browser",
+        "click",
+        "click_at",
+        "type_text",
+        "key",
+        "scroll",
+        "navigate",
+        "navigate_link",
+    }
+    return any(str(result.get("name") or "") in native_names for result in results)
+
+
+def _gemini_computer_use_completion_text(results: list[dict[str, Any]]) -> str:
+    if not results:
+        return ""
+    latest = results[-1]
+    response = latest.get("response")
+    if isinstance(response, dict):
+        if response.get("ok") is False:
+            return "Computer use action failed: " + str(response.get("error") or response)
+        result = response.get("result")
+        if isinstance(result, dict):
+            capture = result.get("capture")
+            if isinstance(capture, dict) and capture.get("summary"):
+                return "Done. The computer use action completed and the browser state was observed."
+        if response.get("url"):
+            return "Done. The browser is open."
+    return "Done. The computer use action completed."
+
+
+def _gemini_completed_computer_use_interaction(
+    *,
+    interaction_name: str,
+    model_name: str,
+    model: dict[str, Any],
+    body: dict[str, Any],
+    request_body: dict[str, Any],
+    previous_id: str | None,
+    contents: list[dict[str, Any]],
+    previous: dict[str, Any] | None,
+) -> dict[str, Any]:
+    results = _gemini_interaction_function_responses(contents)
+    text = _gemini_computer_use_completion_text(results)
+    now = _gemini_now_iso()
+    output = _gemini_finalize_generate_response(
+        {
+            "candidates": [{
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": text}] if text else [],
+                },
+                "finishReason": "STOP",
+            }],
+            "modelVersion": _gemini_resource_model_id(str(model_name)),
+            "usageMetadata": {
+                "promptTokenCount": _estimate_tokens(request_body),
+                "candidatesTokenCount": _estimate_tokens(text),
+            },
+        },
+        model_name=str(model_name),
+        request_body=request_body,
+    )
+    usage = _gemini_interaction_usage(output.get("usageMetadata") or {})
+    model_content = output["candidates"][0]["content"]
+    failed = text.startswith("Computer use action failed:")
+    steps = [
+        {
+            "type": "computer_use_result",
+            "status": "failed" if failed else "completed",
+            "results": results,
+        },
+        _gemini_interaction_model_output_step(text, output),
+    ]
+    return {
+        "name": interaction_name,
+        "id": interaction_name.rsplit("/", 1)[-1],
+        "model": _gemini_public_model_resource_name(str(model_name), model),
+        "agent": body.get("agent"),
+        "status": "failed" if failed else "completed",
+        "created": now,
+        "updated": now,
+        "createTime": now,
+        "updateTime": now,
+        "previousInteractionId": previous_id or None,
+        "input": body.get("input", body.get("messages", body.get("contents"))),
+        "request": request_body,
+        "output": output,
+        "outputText": text,
+        "output_text": text,
+        "history": contents + [model_content],
+        "steps": steps,
+        "usage": usage,
+        "usageMetadata": output.get("usageMetadata") or usage,
+        "previousInteraction": previous.get("name") if isinstance(previous, dict) else None,
+    }
+
+
 def _gemini_interaction_text_from_contents(contents: list[dict[str, Any]]) -> str:
     texts: list[str] = []
     for content in contents:
@@ -12779,6 +12926,22 @@ async def _gemini_create_interaction(body: dict[str, Any]) -> dict[str, Any]:
         }
         if body.get("store", True) is not False:
             _gemini_store_interaction(interaction)
+        return _gemini_interaction_resource(interaction)
+
+    if _gemini_interaction_is_computer_use_continuation(previous_interaction, request_body["contents"]):
+        interaction = _gemini_completed_computer_use_interaction(
+            interaction_name=interaction_name,
+            model_name=str(model_name),
+            model=model,
+            body=body,
+            request_body=request_body,
+            previous_id=str(previous_id) if previous_id else None,
+            contents=request_body["contents"],
+            previous=previous_interaction,
+        )
+        if body.get("store", True) is not False:
+            _gemini_store_interaction(interaction)
+            await _gemini_emit_webhook_event("interaction.completed", interaction)
         return _gemini_interaction_resource(interaction)
 
     if _model_capabilities(model)["image_generation"]:
@@ -13310,6 +13473,7 @@ async def gemini_delete_operation(operation_id: str):
     return JSONResponse({})
 
 
+@app.post("/v1/chat/completions")
 async def chat_completions(req: ChatCompletionRequest):
     """OpenAI-compatible chat completions endpoint.
 
@@ -13584,6 +13748,7 @@ async def chat_completions(req: ChatCompletionRequest):
     )
 
 
+@app.post("/v1/responses")
 async def create_response(req: ResponseCreateRequest):
     if req.background:
         response = {
@@ -13629,6 +13794,7 @@ async def create_response(req: ResponseCreateRequest):
     return JSONResponse(response)
 
 
+@app.post("/v1/responses/input_tokens")
 async def count_response_input_tokens(req: ResponseInputTokensRequest):
     messages, _items = _normalize_responses_input(req.input, instructions=req.instructions)
     return {
@@ -13637,6 +13803,52 @@ async def count_response_input_tokens(req: ResponseInputTokensRequest):
     }
 
 
+def _openai_embedding_inputs(input_value: Any) -> list[str]:
+    if isinstance(input_value, str):
+        return [input_value]
+    if isinstance(input_value, list):
+        if not input_value:
+            raise HTTPException(status_code=400, detail="Embeddings input must not be empty.")
+        texts: list[str] = []
+        for item in input_value:
+            if isinstance(item, str):
+                texts.append(item)
+            elif isinstance(item, list) and all(isinstance(token, int) for token in item):
+                texts.append(" ".join(str(token) for token in item))
+            else:
+                texts.append(_msg_text(item))
+        return texts
+    raise HTTPException(status_code=400, detail="Embeddings input must be a string or array.")
+
+
+@app.post("/v1/embeddings")
+async def create_embeddings(req: EmbeddingRequest):
+    # The Gemini compatibility layer already exposes deterministic local
+    # embedding-like vectors for SDK tests. Reuse the same stable vectorizer here
+    # so OpenAI-compatible clients can exercise embeddings without network calls.
+    texts = _openai_embedding_inputs(req.input)
+    dimensions = int(req.dimensions or 768)
+    data = [
+        {
+            "object": "embedding",
+            "index": index,
+            "embedding": _gemini_embedding_values(text, dimensions=dimensions),
+        }
+        for index, text in enumerate(texts)
+    ]
+    prompt_tokens = sum(_estimate_tokens(text) for text in texts)
+    return {
+        "object": "list",
+        "data": data,
+        "model": req.model,
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "total_tokens": prompt_tokens,
+        },
+    }
+
+
+@app.get("/v1/responses/{response_id}")
 async def retrieve_response(response_id: str):
     response = _responses_store_get(response_id)
     if not response:
@@ -13644,12 +13856,14 @@ async def retrieve_response(response_id: str):
     return JSONResponse(response)
 
 
+@app.delete("/v1/responses/{response_id}")
 async def delete_response(response_id: str):
     if not _responses_store_delete(response_id):
         raise HTTPException(status_code=404, detail=f"Response '{response_id}' not found.")
     return {"id": response_id, "object": "response.deleted", "deleted": True}
 
 
+@app.post("/v1/responses/{response_id}/cancel")
 async def cancel_response(response_id: str):
     response = _responses_store_get(response_id)
     if not response:
@@ -13659,6 +13873,7 @@ async def cancel_response(response_id: str):
     return JSONResponse(response)
 
 
+@app.get("/v1/responses/{response_id}/input_items")
 async def list_response_input_items(response_id: str):
     items = _responses_store_get_input_items(response_id)
     if items is None:
@@ -13672,6 +13887,7 @@ async def list_response_input_items(response_id: str):
     }
 
 
+@app.post("/v1/responses/{response_id}/compact")
 async def compact_response(response_id: str):
     response = _responses_store_get(response_id)
     if not response:
@@ -13949,7 +14165,7 @@ async def searxng_search(
 
 
 # ---------------------------------------------------------------------------
-# Legacy OpenAI image-generation helper retained unregistered for easy rollback.
+# OpenAI-compatible image-generation helper.
 # ---------------------------------------------------------------------------
 class ImageGenerationRequest(BaseModel):
     prompt: str
@@ -13962,6 +14178,7 @@ class ImageGenerationRequest(BaseModel):
     model_config = {"extra": "allow"}
 
 
+@app.post("/v1/images/generations")
 async def create_image(req: ImageGenerationRequest):
     """Generate an image via Antigravity (Gemini native image output).
 

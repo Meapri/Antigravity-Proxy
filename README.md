@@ -279,9 +279,12 @@ Gemini stable-version aliases are also accepted for Gemini-specific routes,
 such as `/v1/models/{model}:generateContent`, `/v1/files:register`,
 `/v1/cachedContents`, `/v1/batches`, and `/v1/live`. Preview `/v1alpha`
 gateway paths are normalized to the same `/v1beta` handlers for Gemini REST
-and upload routes. OpenAI-compatible routes under `/v1`, including
-`/v1/chat/completions`, `/v1/responses`, and `/v1/images/generations`, are
-intentionally removed.
+and upload routes.
+
+OpenAI-compatible routes are also available under `/v1`: `/v1/chat/completions`,
+`/v1/responses`, `/v1/images/generations`, `/v1/embeddings`, and a dual-shape
+`/v1/models` response that keeps Gemini's `models` key while adding OpenAI's
+`object: "list"` + `data` fields.
 
 Common SDK spelling variants are accepted for query parameters: `page_size`,
 `page_token`, `update_mask`, `upload_type`, `display_name`, and
@@ -721,9 +724,11 @@ blocked by default, and `urlContextMetadata` is attached to candidates.
 `codeExecution`, `googleMaps`, and `mcpServers` are recognized but return
 `UNIMPLEMENTED` because the current Antigravity backend does not expose those
 hosted tools. `computerUse` on `generateContent`, `streamGenerateContent`,
-tuned-model generate routes, and `interactions.create` is mapped locally to a
-predefined Computer Use `functionCall` for the client or Hermes/cua-driver loop
-to execute.
+tuned-model generate routes, and `interactions.create` is handled locally: the
+proxy returns a predefined Computer Use `functionCall` for the client or
+Hermes/cua-driver loop to execute, and follow-up `/interactions` submissions
+containing the matching `functionResponse` are completed locally on the same
+`:8765` service without the old `:8766` sidecar.
 `toolConfig.functionCallingConfig.mode` and `allowedFunctionNames` are
 normalized from common SDK spellings. Function
 calling mode aliases such as `required`, `forced`, and `force` are treated as
@@ -1366,7 +1371,10 @@ Notes:
   back to Gemini `functionResponse` parts using the prior call id.
 - Interactions with `tools: [{"type":"computer_use","environment":"browser"}]`
   return `status: "requires_action"` with a Computer Use `functionCall` instead
-  of forwarding the hosted tool to the Antigravity upstream.
+  of forwarding the hosted tool to the Antigravity upstream. Follow-up
+  Interactions requests containing the submitted Computer Use `functionResponse`
+  are completed locally by the main `:8765` proxy; no separate native-CUA
+  compatibility proxy is required for the result-submission turn.
 - Interaction create accepts SDK-style `config` / `interaction` wrappers,
   exposes `object: "interaction"`, `created` / `updated`,
   `created_at` / `updated_at`, `outputText` / `output_text`, legacy
@@ -1409,11 +1417,11 @@ Notes:
   and semantic/vector `tools.file_search` retrieval are not fully implemented
   yet.
 
-## Removed OpenAI Compatibility
+## OpenAI Compatibility
 
-The previous OpenAI-compatible surface has been removed from the public
-runtime:
+The public runtime also exposes the restored OpenAI-compatible surface:
 
+- `GET /v1/models` (dual Gemini/OpenAI shape)
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
 - `GET /v1/responses/{response_id}`
@@ -1422,11 +1430,12 @@ runtime:
 - `GET /v1/responses/{response_id}/input_items`
 - `POST /v1/responses/input_tokens`
 - `POST /v1/responses/{response_id}/compact`
+- `POST /v1/embeddings`
 - `POST /v1/images/generations`
 
-Use Gemini-native equivalents under `/v1beta`, such as `generateContent`,
-`streamGenerateContent`, `countTokens`, `generateImages`, files, cached
-contents, batches, and interactions.
+Use Gemini-native equivalents under `/v1beta` when a client supports Gemini
+REST directly. Use the OpenAI-compatible paths for OpenAI-style clients and
+adapters.
 
 ## Hermes Gemini Provider Example
 
